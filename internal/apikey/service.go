@@ -28,6 +28,28 @@ type Service struct {
 	store Store
 }
 
+// CreateParams 表示创建 API Key 需要的业务参数。
+type CreateParams struct {
+	ProjectID int64
+	Name      string
+	ExpiresAt *time.Time
+}
+
+// CreatedKey 表示创建成功后返回给调用方的一次性结果。
+type CreatedKey struct {
+	ID        int64
+	ProjectID int64
+	Name      string
+	Plaintext string
+	Prefix    string
+	ExpiresAt *time.Time
+}
+
+// NewService 创建 API Key service。
+func NewService(store Store) *Service {
+	return &Service{store: store}
+}
+
 // Create 创建新的 API Key。Plaintext 只能返回给调用方一次，不能保存到数据库。
 func (s *Service) Create(ctx context.Context, params CreateParams) (*CreatedKey, error) {
 	if params.ProjectID <= 0 {
@@ -56,45 +78,23 @@ func (s *Service) Create(ctx context.Context, params CreateParams) (*CreatedKey,
 		KeyHash:   generatedKey.Hash,
 		ExpiresAt: expiresAt,
 	}
-	apiKey, err := s.store.CreateAPIKey(ctx, storeParams)
+	storedKey, err := s.store.CreateAPIKey(ctx, storeParams)
 	if err != nil {
 		return nil, err
 	}
 
 	var createdExpiresAt *time.Time
-	if apiKey.ExpiresAt.Valid {
-		t := apiKey.ExpiresAt.Time
+	if storedKey.ExpiresAt.Valid {
+		t := storedKey.ExpiresAt.Time
 		createdExpiresAt = &t
 	}
 
 	return &CreatedKey{
-		ID:        apiKey.ID,
-		ProjectID: apiKey.ProjectID,
-		Name:      apiKey.Name,
+		ID:        storedKey.ID,
+		ProjectID: storedKey.ProjectID,
+		Name:      storedKey.Name,
 		Plaintext: generatedKey.Plaintext,
-		Prefix:    apiKey.KeyPrefix,
+		Prefix:    storedKey.KeyPrefix,
 		ExpiresAt: createdExpiresAt,
 	}, nil
-}
-
-// CreateParams 表示创建 API Key 需要的业务参数。
-type CreateParams struct {
-	ProjectID int64
-	Name      string
-	ExpiresAt *time.Time
-}
-
-// CreatedKey 表示创建成功后返回给调用方的一次性结果。
-type CreatedKey struct {
-	ID        int64
-	ProjectID int64
-	Name      string
-	Plaintext string
-	Prefix    string
-	ExpiresAt *time.Time
-}
-
-// NewService 创建 API Key service。
-func NewService(store Store) *Service {
-	return &Service{store: store}
 }
