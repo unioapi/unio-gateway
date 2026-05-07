@@ -24,3 +24,8 @@ SELECT id, project_id, name, key_prefix, key_hash, last_used_at, expires_at, dis
 FROM api_keys
 WHERE key_hash = $1
 LIMIT 1;
+
+-- name: UpdateAPIKeyLastUsedAt :exec
+UPDATE api_keys
+SET last_used_at = sqlc.arg(last_used_at), updated_at = now()
+where id = sqlc.arg(id);

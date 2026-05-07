@@ -8,6 +8,7 @@ import (
 	"github.com/ThankCat/unio-api/internal/apikey"
 	"github.com/ThankCat/unio-api/internal/store/sqlc"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 var (
@@ -30,9 +31,10 @@ type APIKeyPrincipal struct {
 	KeyPrefix string
 }
 
-// APIKeyStore 定义 API Key 认证所需的存储查询能力。
+// APIKeyStore 定义 API Key 认证所需的存储查询和更新能力。
 type APIKeyStore interface {
 	GetAPIKeyByHash(ctx context.Context, keyHash string) (sqlc.ApiKey, error)
+	UpdateAPIKeyLastUsedAt(ctx context.Context, arg sqlc.UpdateAPIKeyLastUsedAtParams) error
 }
 
 // APIKeyAuthenticator 负责校验 API Key 并生成认证身份。
@@ -75,6 +77,15 @@ func (a *APIKeyAuthenticator) AuthenticateAPIKey(ctx context.Context, plaintext 
 
 	if key.ExpiresAt.Valid && !key.ExpiresAt.Time.After(a.now()) {
 		return nil, ErrAPIKeyExpired
+	}
+
+	// 更新最后使用时间
+	usedAt := a.now()
+	if err := a.store.UpdateAPIKeyLastUsedAt(ctx, sqlc.UpdateAPIKeyLastUsedAtParams{
+		LastUsedAt: pgtype.Timestamptz{Time: usedAt, Valid: true},
+		ID:         key.ID,
+	}); err != nil {
+		return nil, err
 	}
 
 	return &APIKeyPrincipal{

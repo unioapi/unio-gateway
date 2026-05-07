@@ -13,13 +13,23 @@ import (
 
 // fakeAPIKeyStore 是认证测试使用的存储替身，用来避免连接真实数据库。
 type fakeAPIKeyStore struct {
-	key sqlc.ApiKey
-	err error
+	key        sqlc.ApiKey
+	err        error
+	updatedArg sqlc.UpdateAPIKeyLastUsedAtParams
+	updated    bool
+	updateErr  error
 }
 
 // GetAPIKeyByHash 返回测试预设的 API Key 记录或错误。
-func (s fakeAPIKeyStore) GetAPIKeyByHash(ctx context.Context, keyHash string) (sqlc.ApiKey, error) {
+func (s *fakeAPIKeyStore) GetAPIKeyByHash(ctx context.Context, keyHash string) (sqlc.ApiKey, error) {
 	return s.key, s.err
+}
+
+// UpdateAPIKeyLastUsedAt 记录认证服务传入的 last_used_at 更新参数。
+func (s *fakeAPIKeyStore) UpdateAPIKeyLastUsedAt(ctx context.Context, arg sqlc.UpdateAPIKeyLastUsedAtParams) error {
+	s.updated = true
+	s.updatedArg = arg
+	return s.updateErr
 }
 
 // validAPIKey 返回一条默认有效的测试 API Key 记录。
@@ -32,7 +42,7 @@ func validAPIKey() sqlc.ApiKey {
 }
 
 func TestAuthenticateAPIKeyMissing(t *testing.T) {
-	authenticator := NewAPIKeyAuthenticator(fakeAPIKeyStore{})
+	authenticator := NewAPIKeyAuthenticator(&fakeAPIKeyStore{})
 	_, err := authenticator.AuthenticateAPIKey(context.Background(), "")
 	if !errors.Is(err, ErrMissingAPIKey) {
 		t.Fatalf("expected ErrMissingAPIKey, got %v", err)
@@ -40,7 +50,7 @@ func TestAuthenticateAPIKeyMissing(t *testing.T) {
 }
 
 func TestAuthenticateAPIKeyInvalid(t *testing.T) {
-	authenticator := NewAPIKeyAuthenticator(fakeAPIKeyStore{
+	authenticator := NewAPIKeyAuthenticator(&fakeAPIKeyStore{
 		err: pgx.ErrNoRows,
 	})
 
@@ -54,7 +64,7 @@ func TestAuthenticateAPIKeyRevoked(t *testing.T) {
 	key := validAPIKey()
 	key.RevokedAt = pgtype.Timestamptz{Time: time.Now(), Valid: true}
 
-	authenticator := NewAPIKeyAuthenticator(fakeAPIKeyStore{
+	authenticator := NewAPIKeyAuthenticator(&fakeAPIKeyStore{
 		key: key,
 	})
 
@@ -68,7 +78,7 @@ func TestAuthenticateAPIKeyDisabled(t *testing.T) {
 	key := validAPIKey()
 	key.DisabledAt = pgtype.Timestamptz{Time: time.Now(), Valid: true}
 
-	authenticator := NewAPIKeyAuthenticator(fakeAPIKeyStore{key: key})
+	authenticator := NewAPIKeyAuthenticator(&fakeAPIKeyStore{key: key})
 
 	_, err := authenticator.AuthenticateAPIKey(context.Background(), "test")
 	if !errors.Is(err, ErrAPIKeyDisabled) {
@@ -85,7 +95,7 @@ func TestAuthenticateAPIKeyExpired(t *testing.T) {
 		Valid: true,
 	}
 
-	authenticator := NewAPIKeyAuthenticator(fakeAPIKeyStore{
+	authenticator := NewAPIKeyAuthenticator(&fakeAPIKeyStore{
 		key: key,
 	})
 	authenticator.now = func() time.Time {
@@ -100,7 +110,7 @@ func TestAuthenticateAPIKeyExpired(t *testing.T) {
 
 func TestAuthenticateAPIKeyValid(t *testing.T) {
 	key := validAPIKey()
-	authenticator := NewAPIKeyAuthenticator(fakeAPIKeyStore{
+	authenticator := NewAPIKeyAuthenticator(&fakeAPIKeyStore{
 		key: key,
 	})
 
@@ -116,5 +126,52 @@ func TestAuthenticateAPIKeyValid(t *testing.T) {
 	}
 	if principal.ProjectID != key.ProjectID {
 		t.Fatalf("expected project id %d, got %d", key.ProjectID, principal.ProjectID)
+	}
+}
+
+func TestAuthenticateAPIKeyValidUpdatesLastUsedAt(t *testing.T) {
+	now := time.Date(2026, 5, 7, 10, 30, 0, 0, time.UTC)
+	key := validAPIKey()
+	store := &fakeAPIKeyStore{key: key}
+	authenticator := NewAPIKeyAuthenticator(store)
+	authenticator.now = func() time.Time {
+		return now
+	}
+
+	_, err := authenticator.AuthenticateAPIKey(context.Background(), "valid-key")
+	if err != nil {
+		t.Fatalf("authenticate api key: %v", err)
+	}
+
+	if !store.updated {
+		t.Fatal("expected last_used_at to be updated")
+	}
+
+	if store.updatedArg.ID != key.ID {
+		t.Fatalf("expected updated api key id %d, got %d", key.ID, store.updatedArg.ID)
+	}
+
+	if !store.updatedArg.LastUsedAt.Valid {
+		t.Fatal("expected last_used_at to be valid")
+	}
+
+	if !store.updatedArg.LastUsedAt.Time.Equal(now) {
+		t.Fatalf("expected last_used_at %v, got %v", now, store.updatedArg.LastUsedAt.Time)
+	}
+}
+
+func TestAuthenticateAPIKeyInvalidDoesNotUpdateLastUsedAt(t *testing.T) {
+	store := &fakeAPIKeyStore{
+		err: pgx.ErrNoRows,
+	}
+	authenticator := NewAPIKeyAuthenticator(store)
+
+	_, err := authenticator.AuthenticateAPIKey(context.Background(), "wrong")
+	if !errors.Is(err, ErrInvalidAPIKey) {
+		t.Fatalf("expected ErrInvalidAPIKey, got %v", err)
+	}
+
+	if store.updated {
+		t.Fatal("expected last_used_at not to be updated")
 	}
 }

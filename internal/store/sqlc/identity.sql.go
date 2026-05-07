@@ -146,3 +146,19 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 	)
 	return i, err
 }
+
+const updateAPIKeyLastUsedAt = `-- name: UpdateAPIKeyLastUsedAt :exec
+UPDATE api_keys
+SET last_used_at = $1, updated_at = now()
+where id = $2
+`
+
+type UpdateAPIKeyLastUsedAtParams struct {
+	LastUsedAt pgtype.Timestamptz
+	ID         int64
+}
+
+func (q *Queries) UpdateAPIKeyLastUsedAt(ctx context.Context, arg UpdateAPIKeyLastUsedAtParams) error {
+	_, err := q.db.Exec(ctx, updateAPIKeyLastUsedAt, arg.LastUsedAt, arg.ID)
+	return err
+}
