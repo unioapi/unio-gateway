@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -36,11 +34,7 @@ func TestRouterV1ChatCompletionWithMissingAPIKey(t *testing.T) {
 			KeyPrefix: "unio_sk_test",
 		},
 	}
-	handler := NewRouter(RouterDeps{
-		Logger:                slog.New(slog.NewTextHandler(io.Discard, nil)),
-		APIKeyAuthenticator:   authenticator,
-		ChatCompletionService: NewMockChatCompletionService(),
-	})
+	handler := newTestRouter(authenticator, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	rec := httptest.NewRecorder()
@@ -60,11 +54,7 @@ func TestRouterV1ChatCompletionWithAPIKey(t *testing.T) {
 			KeyPrefix: "unio_sk_test",
 		},
 	}
-	handler := NewRouter(RouterDeps{
-		Logger:                slog.New(slog.NewTextHandler(io.Discard, nil)),
-		APIKeyAuthenticator:   authenticator,
-		ChatCompletionService: NewMockChatCompletionService(),
-	})
+	handler := newTestRouter(authenticator, nil, nil)
 
 	reqBody := ChatCompletionRequest{
 		Model: "openai/gpt-4.1",
@@ -114,11 +104,7 @@ func TestRouterV1ChatCompletionWithInvalidBody(t *testing.T) {
 			KeyPrefix: "unio_sk_test",
 		},
 	}
-	handler := NewRouter(RouterDeps{
-		Logger:                slog.New(slog.NewTextHandler(io.Discard, nil)),
-		APIKeyAuthenticator:   authenticator,
-		ChatCompletionService: NewMockChatCompletionService(),
-	})
+	handler := newTestRouter(authenticator, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("{"))
 	req.Header.Set("Authorization", "Bearer unio_sk_test")
@@ -152,11 +138,7 @@ func TestRouterV1ChatCompletionWithMissingModel(t *testing.T) {
 			KeyPrefix: "unio_sk_test",
 		},
 	}
-	handler := NewRouter(RouterDeps{
-		Logger:                slog.New(slog.NewTextHandler(io.Discard, nil)),
-		APIKeyAuthenticator:   authenticator,
-		ChatCompletionService: NewMockChatCompletionService(),
-	})
+	handler := newTestRouter(authenticator, nil, nil)
 
 	reqBody := ChatCompletionRequest{}
 
@@ -197,11 +179,7 @@ func TestRouterV1ChatCompletionWithMissingMessages(t *testing.T) {
 			KeyPrefix: "unio_sk_test",
 		},
 	}
-	handler := NewRouter(RouterDeps{
-		Logger:                slog.New(slog.NewTextHandler(io.Discard, nil)),
-		APIKeyAuthenticator:   authenticator,
-		ChatCompletionService: NewMockChatCompletionService(),
-	})
+	handler := newTestRouter(authenticator, nil, nil)
 
 	reqBody := ChatCompletionRequest{
 		Model:    "openai/gpt-4.1",
@@ -278,11 +256,7 @@ func TestRouterV1ChatCompletionCallsService(t *testing.T) {
 		},
 	}
 
-	handler := NewRouter(RouterDeps{
-		Logger:                slog.New(slog.NewTextHandler(io.Discard, nil)),
-		APIKeyAuthenticator:   authenticator,
-		ChatCompletionService: service,
-	})
+	handler := newTestRouter(authenticator, service, nil)
 
 	buf := new(bytes.Buffer)
 	reqBody := ChatCompletionRequest{

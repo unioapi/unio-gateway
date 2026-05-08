@@ -8,9 +8,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/ThankCat/unio-api/internal/auth"
 	"github.com/ThankCat/unio-api/internal/httpx"
+	"github.com/ThankCat/unio-api/internal/middleware"
+	"github.com/ThankCat/unio-api/internal/ratelimit"
 )
 
 // routerTestAPIKeyAuthenticator 是 router 通用测试使用的 API Key 认证器。
@@ -26,6 +29,54 @@ func (a *routerTestAPIKeyAuthenticator) AuthenticateAPIKey(ctx context.Context, 
 	return a.principal, a.err
 }
 
+// routerTestRateLimiter 是 router 测试使用的限流器替身。
+type routerTestRateLimiter struct {
+	subject  string
+	limit    int64
+	window   time.Duration
+	decision ratelimit.Decision
+	err      error
+}
+
+// Allow 记录收到的限流参数，并返回测试预设的限流判断结果。
+func (l *routerTestRateLimiter) Allow(ctx context.Context, subject string, limit int64, window time.Duration) (ratelimit.Decision, error) {
+	l.subject = subject
+	l.limit = limit
+	l.window = window
+	return l.decision, l.err
+}
+
+// newTestRouter 创建带默认测试依赖的 router。
+func newTestRouter(authenticator middleware.APIKeyAuthenticator, chatService ChatCompletionService, limiter middleware.RateLimiter) http.Handler {
+	if chatService == nil {
+		chatService = NewMockChatCompletionService()
+	}
+	if limiter == nil {
+		limiter = newAllowingRateLimiter()
+	}
+
+	return NewRouter(RouterDeps{
+		Logger:                slog.New(slog.NewTextHandler(io.Discard, nil)),
+		APIKeyAuthenticator:   authenticator,
+		RateLimiter:           limiter,
+		RateLimitLimit:        60,
+		RateLimitWindow:       time.Minute,
+		ChatCompletionService: chatService,
+	})
+}
+
+// newAllowingRateLimiter 创建默认允许请求通过的测试限流器。
+func newAllowingRateLimiter() *routerTestRateLimiter {
+	return &routerTestRateLimiter{
+		decision: ratelimit.Decision{
+			Allowed:   true,
+			Limit:     60,
+			Remaining: 59,
+			ResetAt:   time.Date(2026, 5, 8, 10, 1, 0, 0, time.UTC),
+		},
+	}
+}
+
 func TestRouterHealthz(t *testing.T) {
 	authenticator := &routerTestAPIKeyAuthenticator{
 		principal: &auth.APIKeyPrincipal{
@@ -34,11 +85,7 @@ func TestRouterHealthz(t *testing.T) {
 			KeyPrefix: "unio_sk_test",
 		},
 	}
-	handle := NewRouter(RouterDeps{
-		Logger:                slog.New(slog.NewTextHandler(io.Discard, nil)),
-		APIKeyAuthenticator:   authenticator,
-		ChatCompletionService: NewMockChatCompletionService(),
-	})
+	handle := newTestRouter(authenticator, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rec := httptest.NewRecorder()
@@ -69,11 +116,7 @@ func TestRouterNotFound(t *testing.T) {
 			KeyPrefix: "unio_sk_test",
 		},
 	}
-	handle := NewRouter(RouterDeps{
-		Logger:                slog.New(slog.NewTextHandler(io.Discard, nil)),
-		APIKeyAuthenticator:   authenticator,
-		ChatCompletionService: NewMockChatCompletionService(),
-	})
+	handle := newTestRouter(authenticator, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/not-found", nil)
 	rec := httptest.NewRecorder()
@@ -112,11 +155,7 @@ func TestRouterMethodNotAllowed(t *testing.T) {
 			KeyPrefix: "unio_sk_test",
 		},
 	}
-	handle := NewRouter(RouterDeps{
-		Logger:                slog.New(slog.NewTextHandler(io.Discard, nil)),
-		APIKeyAuthenticator:   authenticator,
-		ChatCompletionService: NewMockChatCompletionService(),
-	})
+	handle := newTestRouter(authenticator, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/healthz", nil)
 	rec := httptest.NewRecorder()
@@ -155,11 +194,7 @@ func TestRouterRequestID(t *testing.T) {
 			KeyPrefix: "unio_sk_test",
 		},
 	}
-	handle := NewRouter(RouterDeps{
-		Logger:                slog.New(slog.NewTextHandler(io.Discard, nil)),
-		APIKeyAuthenticator:   authenticator,
-		ChatCompletionService: NewMockChatCompletionService(),
-	})
+	handle := newTestRouter(authenticator, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rec := httptest.NewRecorder()

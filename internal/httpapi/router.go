@@ -3,6 +3,7 @@ package httpapi
 import (
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -15,6 +16,9 @@ type RouterDeps struct {
 	Logger                *slog.Logger
 	APIKeyAuthenticator   middleware.APIKeyAuthenticator
 	ChatCompletionService ChatCompletionService
+	RateLimiter           middleware.RateLimiter
+	RateLimitLimit        int64
+	RateLimitWindow       time.Duration
 }
 
 // NewRouter 创建 API server 使用的 HTTP handler。
@@ -50,6 +54,7 @@ func NewRouter(deps RouterDeps) http.Handler {
 
 	r.Route("/v1", func(r chi.Router) {
 		r.Use(middleware.APIKeyAuth(deps.APIKeyAuthenticator))
+		r.Use(middleware.RateLimit(deps.RateLimiter, deps.RateLimitLimit, deps.RateLimitWindow))
 
 		r.Get("/models", handleModels)
 

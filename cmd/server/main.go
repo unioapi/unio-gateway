@@ -13,6 +13,7 @@ import (
 	"github.com/ThankCat/unio-api/internal/auth"
 	"github.com/ThankCat/unio-api/internal/config"
 	"github.com/ThankCat/unio-api/internal/httpapi"
+	"github.com/ThankCat/unio-api/internal/ratelimit"
 	"github.com/ThankCat/unio-api/internal/redis"
 	"github.com/ThankCat/unio-api/internal/store"
 	"github.com/ThankCat/unio-api/internal/store/sqlc"
@@ -53,11 +54,19 @@ func main() {
 
 	queries := sqlc.New(pgPool)
 	apiKeyAuthenticator := auth.NewAPIKeyAuthenticator(queries)
+
+	rateLimitStore := ratelimit.NewRedisStore(redisClient)
+	rateLimiter := ratelimit.NewLimiter(rateLimitStore)
+
 	handler := httpapi.NewRouter(httpapi.RouterDeps{
 		Logger:                logger,
 		APIKeyAuthenticator:   apiKeyAuthenticator,
+		RateLimiter:           rateLimiter,
+		RateLimitLimit:        60,
+		RateLimitWindow:       time.Minute,
 		ChatCompletionService: httpapi.NewMockChatCompletionService(), // TODO: 后续需要真实请求替换
 	})
+
 	server := &http.Server{
 		Addr:         cfg.HTTP.Addr,
 		Handler:      handler,
