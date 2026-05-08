@@ -373,7 +373,7 @@ func TestRouterV1ChatCompletionWithInvalidTemperature(t *testing.T) {
 		Temperature: float64Ptr(2.1),
 	}
 
-	assertChatCompletionInvalidRequest(t, reqBody, "temperature must be between 0 and 2")
+	assertChatCompletionInvalidRequest(t, reqBody, "temperature must be between 0 and 2", "temperature")
 }
 
 func TestRouterV1ChatCompletionWithInvalidTopP(t *testing.T) {
@@ -385,7 +385,7 @@ func TestRouterV1ChatCompletionWithInvalidTopP(t *testing.T) {
 		TopP: float64Ptr(1.1),
 	}
 
-	assertChatCompletionInvalidRequest(t, reqBody, "top_p must be between 0 and 1")
+	assertChatCompletionInvalidRequest(t, reqBody, "top_p must be between 0 and 1", "top_p")
 }
 
 func TestRouterV1ChatCompletionWithInvalidMaxTokens(t *testing.T) {
@@ -397,10 +397,10 @@ func TestRouterV1ChatCompletionWithInvalidMaxTokens(t *testing.T) {
 		MaxTokens: intPtr(0),
 	}
 
-	assertChatCompletionInvalidRequest(t, reqBody, "max_tokens must be greater than 0")
+	assertChatCompletionInvalidRequest(t, reqBody, "max_tokens must be greater than 0", "max_tokens")
 }
 
-func assertChatCompletionInvalidRequest(t *testing.T, reqBody ChatCompletionRequest, wantMessage string) {
+func assertChatCompletionInvalidRequest(t *testing.T, reqBody ChatCompletionRequest, wantMessage string, wantParam string) {
 	t.Helper()
 
 	authenticator := &fakeAPIKeyAuthenticator{
@@ -444,6 +444,18 @@ func assertChatCompletionInvalidRequest(t *testing.T, reqBody ChatCompletionRequ
 	if body.Error.Message != wantMessage {
 		t.Fatalf("expected message %q, got %q", wantMessage, body.Error.Message)
 	}
+
+	if body.Error.Type != "invalid_request_error" {
+		t.Fatalf("expected error type %q, got %q", "invalid_request_error", body.Error.Type)
+	}
+
+	if body.Error.Param == nil {
+		t.Fatal("expected error param to be set")
+	}
+
+	if *body.Error.Param != wantParam {
+		t.Fatalf("expected error param %q, got %q", wantParam, *body.Error.Param)
+	}
 }
 
 func float64Ptr(v float64) *float64 {
@@ -452,4 +464,112 @@ func float64Ptr(v float64) *float64 {
 
 func intPtr(v int) *int {
 	return &v
+}
+
+func TestChatCompletionMissingModelReturnsOpenAIError(t *testing.T) {
+	// TODO: 第1步，构造带认证的 router
+	authenticator := &fakeAPIKeyAuthenticator{principal: &auth.APIKeyPrincipal{
+		APIKeyID:  1,
+		ProjectID: 1,
+		KeyPrefix: "unio_sk_test",
+	}}
+	router := newTestRouter(authenticator, nil, nil)
+
+	// TODO: 第2步，发送缺少 model 的请求
+	reqBody := ChatCompletionRequest{
+		Messages: []ChatMessage{
+			{Role: "user", Content: "Hello"},
+		},
+	}
+	buf := new(bytes.Buffer)
+	if err := json.NewEncoder(buf).Encode(reqBody); err != nil {
+		t.Fatalf("encode request body: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", buf)
+	req.Header.Set("Authorization", "Bearer unio_sk_test")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	// TODO: 第3步，解析错误响应
+	var recBody httpx.ErrorResponse
+	if err := json.NewDecoder(rec.Body).Decode(&recBody); err != nil {
+		t.Fatalf("decode response body: %v", err)
+	}
+
+	// TODO: 断言 HTTP status 是 400
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, rec.Code)
+	}
+
+	// TODO: 断言 error.code 是 invalid_request
+	if recBody.Error.Code != "invalid_request" {
+		t.Fatalf("expected error code %q, got %q", "invalid_request", recBody.Error.Code)
+	}
+
+	// TODO: 断言 error.type 是 invalid_request_error
+	if recBody.Error.Type != "invalid_request_error" {
+		t.Fatalf("expected error type %q, got %q", "invalid_request_error", recBody.Error.Type)
+	}
+
+	// TODO: 断言 error.param 是 model
+	if recBody.Error.Param == nil {
+		t.Fatal("expected error param to be set")
+	}
+
+	if *recBody.Error.Param != "model" {
+		t.Fatalf("expected parameter %q, got %q", "model", *recBody.Error.Param)
+	}
+}
+
+func TestChatCompletionMissingMessagesReturnsOpenAIError(t *testing.T) {
+	// TODO: 第1步，构造带认证的 router
+	authenticator := &fakeAPIKeyAuthenticator{principal: &auth.APIKeyPrincipal{
+		APIKeyID:  1,
+		ProjectID: 1,
+		KeyPrefix: "unio_sk_test",
+	}}
+	router := newTestRouter(authenticator, nil, nil)
+
+	// TODO: 第2步，发送缺少 messages 的请求
+	reqBody := ChatCompletionRequest{
+		Model: "openai/gpt-4.1",
+	}
+	buf := new(bytes.Buffer)
+	if err := json.NewEncoder(buf).Encode(reqBody); err != nil {
+		t.Fatalf("encode request body: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", buf)
+	req.Header.Set("Authorization", "Bearer unio_sk_test")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	// TODO: 第3步，解析错误响应
+	var recBody httpx.ErrorResponse
+	if err := json.NewDecoder(rec.Body).Decode(&recBody); err != nil {
+		t.Fatalf("decode response body: %v", err)
+	}
+
+	// TODO: 断言 HTTP status 是 400
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, rec.Code)
+	}
+
+	// TODO: 断言 error.code 是 invalid_request
+	if recBody.Error.Code != "invalid_request" {
+		t.Fatalf("expected error code %q, got %q", "invalid_request", recBody.Error.Code)
+	}
+
+	// TODO: 断言 error.type 是 invalid_request_error
+	if recBody.Error.Type != "invalid_request_error" {
+		t.Fatalf("expected error type %q, got %q", "invalid_request_error", recBody.Error.Type)
+	}
+
+	// TODO: 断言 error.param 是 messages
+	if recBody.Error.Param == nil {
+		t.Fatal("expected error param to be set")
+	}
+
+	if *recBody.Error.Param != "messages" {
+		t.Fatalf("expected parameter %q, got %q", "messages", *recBody.Error.Param)
+	}
 }

@@ -27,36 +27,83 @@ func (h *chatCompletionsHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 	}
 
 	if req.Model == "" {
-		_ = httpx.WriteError(w, http.StatusBadRequest, "invalid_request", "model is required")
+		_ = httpx.WriteOpenAIError(
+			w,
+			http.StatusBadRequest,
+			"invalid_request",
+			"model is required",
+			"invalid_request_error",
+			stringPtr("model"),
+		)
 		return
 	}
 
 	if len(req.Messages) == 0 {
-		_ = httpx.WriteError(w, http.StatusBadRequest, "invalid_request", "messages is required")
+		_ = httpx.WriteOpenAIError(
+			w,
+			http.StatusBadRequest,
+			"invalid_request",
+			"messages is required",
+			"invalid_request_error",
+			stringPtr("messages"),
+		)
 		return
 	}
 
 	if req.Temperature != nil && (*req.Temperature < 0 || *req.Temperature > 2) {
-		_ = httpx.WriteError(w, http.StatusBadRequest, "invalid_request", "temperature must be between 0 and 2")
+		_ = httpx.WriteOpenAIError(
+			w,
+			http.StatusBadRequest,
+			"invalid_request",
+			"temperature must be between 0 and 2",
+			"invalid_request_error",
+			stringPtr("temperature"),
+		)
 		return
 	}
 
 	if req.TopP != nil && (*req.TopP < 0 || *req.TopP > 1) {
-		_ = httpx.WriteError(w, http.StatusBadRequest, "invalid_request", "top_p must be between 0 and 1")
+		_ = httpx.WriteOpenAIError(
+			w,
+			http.StatusBadRequest,
+			"invalid_request",
+			"top_p must be between 0 and 1",
+			"invalid_request_error",
+			stringPtr("top_p"),
+		)
 		return
 	}
 
 	if req.MaxTokens != nil && *req.MaxTokens <= 0 {
-		_ = httpx.WriteError(w, http.StatusBadRequest, "invalid_request", "max_tokens must be greater than 0")
+		_ = httpx.WriteOpenAIError(
+			w,
+			http.StatusBadRequest,
+			"invalid_request",
+			"max_tokens must be greater than 0",
+			"invalid_request_error",
+			stringPtr("max_tokens"),
+		)
 		return
 	}
 
 	resp, err := h.service.CreateChatCompletion(r.Context(), req)
 	if err != nil {
-		_ = httpx.WriteError(w, http.StatusInternalServerError, "internal_error", "chat completion failed")
+		_ = httpx.WriteOpenAIError(
+			w,
+			http.StatusInternalServerError,
+			"internal_error",
+			"chat completion failed",
+			"api_error",
+			nil,
+		)
 		return
 	}
 
 	_ = httpx.WriteJSON(w, http.StatusOK, resp)
 
+}
+
+// stringPtr 返回字符串指针，用于构造 optional 字段。
+func stringPtr(v string) *string {
+	return &v
 }
