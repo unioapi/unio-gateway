@@ -2,11 +2,34 @@ package httpapi
 
 // ChatCompletionRequest 表示 OpenAI-compatible chat completions 请求体。
 type ChatCompletionRequest struct {
-	Model       string        `json:"model"`
-	Messages    []ChatMessage `json:"messages"`
-	Stream      *bool         `json:"stream,omitempty"`
-	Temperature *float64      `json:"temperature,omitempty"`
-	MaxTokens   *int          `json:"max_tokens,omitempty"`
+	Model string `json:"model"`
+
+	// 聊天消息列表
+	Messages []ChatMessage `json:"messages"`
+
+	// 是否启用流式响应。流式响应指服务端逐段返回内容，而不是一次性返回完整结果。
+	Stream *bool `json:"stream,omitempty"`
+
+	// 采样温度，控制输出随机性。
+	Temperature *float64 `json:"temperature,omitempty"`
+
+	// 核采样参数，控制候选 token 的概率范围。可以理解为另一种控制随机性的参数。
+	TopP *float64 `json:"top_p,omitempty"`
+
+	// 最大输出 token 数。token 是模型处理文本的基本单位，可以粗略理解为词片段。
+	MaxTokens *int `json:"max_tokens,omitempty"`
+
+	// 存在惩罚，用来降低模型重复谈论已经出现过主题的倾向。
+	PresencePenalty *float64 `json:"presence_penalty,omitempty"`
+
+	// 频率惩罚，用来降低模型重复使用已经出现过词语的倾向。
+	FrequencyPenalty *float64 `json:"frequency_penalty,omitempty"`
+
+	// 停止序列。模型生成内容遇到这些字符串时停止。
+	Stop []string `json:"stop,omitempty"`
+
+	//终端用户标识。一般用于审计、风控或上游服务追踪。
+	User *string `json:"user,omitempty"`
 }
 
 // ChatMessage 表示 chat completions 请求或响应中的一条消息。
