@@ -1,6 +1,13 @@
 # AGENT.md — Unio API 项目指南
 
 ## 重要提示
+- 需要后面实现的生产欠账必须加上 TODO，格式为：
+  `// TODO(阶段X/production): 风险；触发时机；未来替换方向。`
+- 开始新章节前必须扫描 TODO：
+  `rg -n "TODO" AGENTS.md cmd internal migrations sql`
+- 开始新章节前必须判断当前阶段相关 TODO 是否需要先实现；不能只根据用户举例局部复盘，必须按生产上线系统全盘检查。
+- TODO 必须区分生产欠账和教学测试步骤；已完成测试不保留 TODO，测试教学模板中的 TODO 只允许出现在文档或用户明确要求的测试思路里。
+- 代码里的 TODO 只标记当前阶段、已完成阶段欠账、下一阶段直接相关的内容；阶段 6 以后这类远期能力先留在路线和自检清单里，进入对应阶段前再落到代码 TODO，避免当前章节被远期噪音淹没。
 - 如果设计专业术语必须在后面添加说明, 例如: 这课目标不是接真实 provider(xxxx)
 - 如果需要编写测试用例你必须遵循以下格式, 代码由用户编写, 你只负责提供思路
 ```go
@@ -19,6 +26,23 @@ func 测试方法名(t *testing.T) {
 - 注释规则:
   - 复杂逻辑添加注释
   - 接口, 结构体, 方法 必须添加注释
+
+## 阶段开始前生产级自检清单
+
+每次进入新章节前，必须先按生产上线系统视角做全盘复盘，而不是只跟随用户举的例子。
+
+必须检查：
+
+- Config：环境变量、超时、连接池、provider 配置、rate limit 配置。
+- HTTP：body limit、JSON decode、错误格式、SSE、middleware 可选接口。
+- Postgres：migration runner、pool 参数、事务、updated_at、schema 健康。
+- Redis：timeout、pool、key namespace、原子性、失败降级。
+- Security：API key 管理、JWT、argon2id、脱敏、审计日志。
+- Gateway / provider：timeout、retry、fallback、stream parser、usage extraction。
+- Billing / ledger：request record、usage record、price snapshot、ledger entry、幂等。
+- Observability / deploy：metrics、logs、OpenTelemetry、Dockerfile、CI、readiness。
+
+如果发现当前阶段必须先处理的 TODO，应先处理；如果不是当前阶段附近要实现的内容，优先记录在路线或自检清单里，等进入对应阶段前再落到代码 TODO。
 
 ## 项目身份
 
@@ -453,6 +477,8 @@ DTO 是 Data Transfer Object。
 - 对商业化、安全、计费、稳定性风险要主动提醒。
 - 优先选择实用、可维护方案，可以抽象但不追求炫技的抽象。
 - 控制范围，不要一次扩太大。
+- 在要求用户编写测试或实现前，必须先只读检查当前仓库已有 helper、依赖装配和同类测试写法；给出的任务步骤必须引用现有 helper 或明确说明需要补齐的依赖，避免让用户因为缺少 Logger、认证 header、RateLimiter、mock service 等测试基础设施而踩无关错误。
+- 如果测试涉及 HTTP router、middleware、stream、事务或外部依赖，必须先说明当前代码中已存在的风险点和验证顺序，例如 ResponseWriter wrapper 是否保留 http.Flusher、测试 router 是否应使用已有 newTestRouter。
 
 每一课应包含：
 

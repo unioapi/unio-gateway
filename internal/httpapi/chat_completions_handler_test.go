@@ -467,7 +467,7 @@ func intPtr(v int) *int {
 }
 
 func TestChatCompletionMissingModelReturnsOpenAIError(t *testing.T) {
-	// TODO: 第1步，构造带认证的 router
+	// 构造带认证的 router。
 	authenticator := &fakeAPIKeyAuthenticator{principal: &auth.APIKeyPrincipal{
 		APIKeyID:  1,
 		ProjectID: 1,
@@ -475,7 +475,7 @@ func TestChatCompletionMissingModelReturnsOpenAIError(t *testing.T) {
 	}}
 	router := newTestRouter(authenticator, nil, nil)
 
-	// TODO: 第2步，发送缺少 model 的请求
+	// 发送缺少 model 的请求。
 	reqBody := ChatCompletionRequest{
 		Messages: []ChatMessage{
 			{Role: "user", Content: "Hello"},
@@ -490,28 +490,28 @@ func TestChatCompletionMissingModelReturnsOpenAIError(t *testing.T) {
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
-	// TODO: 第3步，解析错误响应
+	// 解析错误响应。
 	var recBody httpx.ErrorResponse
 	if err := json.NewDecoder(rec.Body).Decode(&recBody); err != nil {
 		t.Fatalf("decode response body: %v", err)
 	}
 
-	// TODO: 断言 HTTP status 是 400
+	// 断言 HTTP status 是 400。
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, rec.Code)
 	}
 
-	// TODO: 断言 error.code 是 invalid_request
+	// 断言 error.code 是 invalid_request。
 	if recBody.Error.Code != "invalid_request" {
 		t.Fatalf("expected error code %q, got %q", "invalid_request", recBody.Error.Code)
 	}
 
-	// TODO: 断言 error.type 是 invalid_request_error
+	// 断言 error.type 是 invalid_request_error。
 	if recBody.Error.Type != "invalid_request_error" {
 		t.Fatalf("expected error type %q, got %q", "invalid_request_error", recBody.Error.Type)
 	}
 
-	// TODO: 断言 error.param 是 model
+	// 断言 error.param 是 model。
 	if recBody.Error.Param == nil {
 		t.Fatal("expected error param to be set")
 	}
@@ -522,7 +522,7 @@ func TestChatCompletionMissingModelReturnsOpenAIError(t *testing.T) {
 }
 
 func TestChatCompletionMissingMessagesReturnsOpenAIError(t *testing.T) {
-	// TODO: 第1步，构造带认证的 router
+	// 构造带认证的 router。
 	authenticator := &fakeAPIKeyAuthenticator{principal: &auth.APIKeyPrincipal{
 		APIKeyID:  1,
 		ProjectID: 1,
@@ -530,7 +530,7 @@ func TestChatCompletionMissingMessagesReturnsOpenAIError(t *testing.T) {
 	}}
 	router := newTestRouter(authenticator, nil, nil)
 
-	// TODO: 第2步，发送缺少 messages 的请求
+	// 发送缺少 messages 的请求。
 	reqBody := ChatCompletionRequest{
 		Model: "openai/gpt-4.1",
 	}
@@ -543,33 +543,96 @@ func TestChatCompletionMissingMessagesReturnsOpenAIError(t *testing.T) {
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
-	// TODO: 第3步，解析错误响应
+	// 解析错误响应。
 	var recBody httpx.ErrorResponse
 	if err := json.NewDecoder(rec.Body).Decode(&recBody); err != nil {
 		t.Fatalf("decode response body: %v", err)
 	}
 
-	// TODO: 断言 HTTP status 是 400
+	// 断言 HTTP status 是 400。
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, rec.Code)
 	}
 
-	// TODO: 断言 error.code 是 invalid_request
+	// 断言 error.code 是 invalid_request。
 	if recBody.Error.Code != "invalid_request" {
 		t.Fatalf("expected error code %q, got %q", "invalid_request", recBody.Error.Code)
 	}
 
-	// TODO: 断言 error.type 是 invalid_request_error
+	// 断言 error.type 是 invalid_request_error。
 	if recBody.Error.Type != "invalid_request_error" {
 		t.Fatalf("expected error type %q, got %q", "invalid_request_error", recBody.Error.Type)
 	}
 
-	// TODO: 断言 error.param 是 messages
+	// 断言 error.param 是 messages。
 	if recBody.Error.Param == nil {
 		t.Fatal("expected error param to be set")
 	}
 
 	if *recBody.Error.Param != "messages" {
 		t.Fatalf("expected parameter %q, got %q", "messages", *recBody.Error.Param)
+	}
+}
+
+func TestRouterV1ChatCompletionWithStreamTrueWritesSSE(t *testing.T) {
+	// 构造带认证的 router。
+	router := newTestRouter(&fakeAPIKeyAuthenticator{
+		principal: &auth.APIKeyPrincipal{
+			APIKeyID:  1,
+			ProjectID: 1,
+			KeyPrefix: "unio_sk_test",
+		},
+	}, nil, nil)
+
+	// 发送 stream=true 的 chat completions 请求。
+	stream := true
+	reqBody := ChatCompletionRequest{
+		Model: "openai/gpt-4.1",
+		Messages: []ChatMessage{
+			{Role: "user", Content: "Hello"},
+		},
+		Stream: &stream,
+	}
+	reqBuf := new(bytes.Buffer)
+	if err := json.NewEncoder(reqBuf).Encode(reqBody); err != nil {
+		t.Fatalf("encode request body: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", reqBuf)
+	req.Header.Set("Authorization", "Bearer unio_sk_test")
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	// 断言 HTTP status 是 200。
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+
+	// 断言 Content-Type 是 text/event-stream。
+	if rec.Header().Get("Content-Type") != httpx.ContentTypeSSE {
+		t.Fatalf("expected Content-Type %q, got %q", "text/event-stream", rec.Header().Get("Content-Type"))
+	}
+
+	// 读取响应 body。
+	gotBody := rec.Body.String()
+
+	// 断言 body 包含 data: 前缀。
+	if !strings.Contains(gotBody, "data: ") {
+		t.Fatalf("expected body %q, got %q", "data:", gotBody)
+	}
+
+	// 断言 body 包含 chat.completion.chunk。
+	if !strings.Contains(gotBody, "chat.completion.chunk") {
+		t.Fatalf("expected body %q, got %q", "chat.completion.chunk", gotBody)
+	}
+
+	// 断言 body 包含 mock response。
+	if !strings.Contains(gotBody, "mock response") {
+		t.Fatalf("expected body %q, got %q", "mock response", gotBody)
+	}
+
+	// 断言 body 包含 data: [DONE]。
+	if !strings.Contains(gotBody, "data: [DONE]") {
+		t.Fatalf("expected body to contain %q, got %q", "data: [DONE]", gotBody)
 	}
 }

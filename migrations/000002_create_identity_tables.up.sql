@@ -6,6 +6,7 @@ CREATE TABLE users (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- TODO(阶段2/production): 统一 updated_at 更新策略，后续在 trigger 和显式 SQL 更新之间选定一种，避免不同表行为不一致。
 
 CREATE UNIQUE INDEX idx_users_email_lower ON users (lower(email));
 

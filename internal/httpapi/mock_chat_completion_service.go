@@ -5,7 +5,8 @@ import (
 	"time"
 )
 
-// mockChatCompletionService 是临时 chat completion 服务，后续会替换为真实 gateway。
+// mockChatCompletionService 是临时 chat completion 服务。
+// TODO(阶段5/production): 引入 gateway/provider 后移除该服务；真实请求必须经过 provider adapter、usage 统计和 billing 前置流程。
 type mockChatCompletionService struct{}
 
 // NewMockChatCompletionService 创建临时 mock chat completion service。

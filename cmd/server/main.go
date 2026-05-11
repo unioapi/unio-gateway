@@ -34,6 +34,7 @@ func main() {
 	startupCtx, startupCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer startupCancel()
 
+	// TODO(阶段2/production): 启动前接入 migration runner（迁移执行器）或 schema 版本检查，避免服务连接到未迁移数据库。
 	// DB 启动期先检查数据库可用，避免服务带病启动。
 	pgPool, err := store.OpenPostgres(startupCtx, cfg.DB.URL)
 	if err != nil {
@@ -59,17 +60,22 @@ func main() {
 	rateLimiter := ratelimit.NewLimiter(rateLimitStore)
 
 	handler := httpapi.NewRouter(httpapi.RouterDeps{
-		Logger:                logger,
-		APIKeyAuthenticator:   apiKeyAuthenticator,
-		RateLimiter:           rateLimiter,
-		RateLimitLimit:        60,
-		RateLimitWindow:       time.Minute,
-		ChatCompletionService: httpapi.NewMockChatCompletionService(), // TODO: 后续需要真实请求替换
+		Logger:              logger,
+		APIKeyAuthenticator: apiKeyAuthenticator,
+		RateLimiter:         rateLimiter,
+
+		// TODO(阶段3/production): 将 rate limit（限流）阈值和窗口迁入 config，并支持项目级、模型级和全局限流策略。
+		RateLimitLimit:  60,
+		RateLimitWindow: time.Minute,
+
+		// TODO(阶段5/production): 引入 gateway/provider 后移除 mock service，真实请求必须走 provider adapter、usage 统计和 billing 前置流程。
+		ChatCompletionService: httpapi.NewMockChatCompletionService(),
 	})
 
 	server := &http.Server{
-		Addr:         cfg.HTTP.Addr,
-		Handler:      handler,
+		Addr:    cfg.HTTP.Addr,
+		Handler: handler,
+
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  60 * time.Second,

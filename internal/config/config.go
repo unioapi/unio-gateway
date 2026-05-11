@@ -29,6 +29,8 @@ type LogConfig struct {
 // DBConfig 保存 PostgreSQL 连接配置。
 type DBConfig struct {
 	URL string
+
+	// TODO(阶段2/production): 将 PostgreSQL pool 参数纳入配置，包括 max conns、min conns、max lifetime 和健康检查超时。
 }
 
 // RedisConfig 保存 Redis client 连接配置。
@@ -36,7 +38,11 @@ type RedisConfig struct {
 	Addr     string
 	Password string
 	DB       int
+
+	// TODO(阶段2/production): 将 Redis dial/read/write timeout、pool size、namespace 和故障降级策略纳入配置。
 }
+
+// TODO(阶段5/production): provider（上游模型服务适配方）的 base URL、API key、timeout、retry 策略必须进入配置，不能散落在 adapter 里。
 
 // Load 从环境变量加载配置，并对需要解析的字段做启动期校验。
 func Load() (Config, error) {

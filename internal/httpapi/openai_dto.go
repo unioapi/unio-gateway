@@ -28,7 +28,7 @@ type ChatCompletionRequest struct {
 	// 停止序列。模型生成内容遇到这些字符串时停止。
 	Stop []string `json:"stop,omitempty"`
 
-	//终端用户标识。一般用于审计、风控或上游服务追踪。
+	// 终端用户标识。一般用于审计、风控或上游服务追踪。
 	User *string `json:"user,omitempty"`
 }
 
@@ -60,4 +60,26 @@ type ChatCompletionUsage struct {
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
 	TotalTokens      int `json:"total_tokens"`
+}
+
+// ChatCompletionStreamResponse 表示 OpenAI-compatible chat completions 流式响应中的一条 chunk。
+type ChatCompletionStreamResponse struct {
+	ID      string                       `json:"id"`
+	Object  string                       `json:"object"`
+	Created int64                        `json:"created"`
+	Model   string                       `json:"model"`
+	Choices []ChatCompletionStreamChoice `json:"choices"`
+}
+
+// ChatCompletionStreamChoice 表示流式响应中的一个候选增量。
+type ChatCompletionStreamChoice struct {
+	Index        int                       `json:"index"`
+	Delta        ChatCompletionStreamDelta `json:"delta"`
+	FinishReason *string                   `json:"finish_reason"`
+}
+
+// ChatCompletionStreamDelta 表示流式响应里本次增量返回的消息内容。
+type ChatCompletionStreamDelta struct {
+	Role    string `json:"role,omitempty"`
+	Content string `json:"content,omitempty"`
 }

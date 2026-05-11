@@ -2,12 +2,21 @@ package httpx
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 )
 
 const (
 	// ContentTypeJSON 是 JSON 响应使用的 Content-Type。
 	ContentTypeJSON = "application/json"
+
+	// ContentTypeSSE 是 SSE 流式响应使用的 Content-Type。
+	ContentTypeSSE = "text/event-stream"
+)
+
+var (
+	// ErrStreamingUnsupported 表示当前 ResponseWriter 不支持流式 flush。
+	ErrStreamingUnsupported = errors.New("streaming unsupported")
 )
 
 // ErrorResponse 是 API 错误响应的外层结构。
@@ -28,6 +37,35 @@ func WriteJSON(w http.ResponseWriter, status int, v any) error {
 	w.Header().Set("Content-Type", ContentTypeJSON)
 	w.WriteHeader(status)
 	return json.NewEncoder(w).Encode(v)
+}
+
+// WriteSSE 将一条 SSE 数据写入响应，并立即 flush 给客户端。
+func WriteSSE(w http.ResponseWriter, data []byte) error {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		return ErrStreamingUnsupported
+	}
+
+	header := w.Header()
+	header.Set("Content-Type", ContentTypeSSE)
+	header.Set("Cache-Control", "no-cache")
+	header.Set("X-Accel-Buffering", "no")
+
+	// SSE 的一条事件以空行结束；OpenAI-compatible stream 常用 data 行承载 JSON。
+	if _, err := w.Write([]byte("data: ")); err != nil {
+		return err
+	}
+
+	if _, err := w.Write(data); err != nil {
+		return err
+	}
+
+	if _, err := w.Write([]byte("\n\n")); err != nil {
+		return err
+	}
+
+	flusher.Flush()
+	return nil
 }
 
 // WriteError 写入统一格式的 JSON 错误响应。
