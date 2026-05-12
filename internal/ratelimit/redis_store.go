@@ -48,7 +48,7 @@ func (s *RedisStore) Increment(ctx context.Context, key string, window time.Dura
 	}, nil
 }
 
-// TODO(阶段3/production): 将 Redis key namespace 集中到配置或常量包，并为多环境、多租户部署预留隔离前缀。
+// TODO(阶段3/production): 将 Redis key namespace 集中到部署配置或常量包用于环境隔离；项目级、模型级和 channel 级限流策略后续来自数据库。
 func redisKeyForSubject(subject string) string {
 	return "unio:ratelimit:" + subject
 }

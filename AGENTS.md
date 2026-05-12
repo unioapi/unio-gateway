@@ -27,18 +27,48 @@ func 测试方法名(t *testing.T) {
   - 复杂逻辑添加注释
   - 接口, 结构体, 方法 必须添加注释
 
+## 核心产品边界
+
+Unio API 是商业化多 provider / 多 channel / 可后台管理 / 可 fallback / 可计费的 API 网关，不是单 provider SDK 包装器。
+
+设计任何字段、接口或章节任务前，必须先判断它属于哪类：
+
+- 启动配置：HTTP、Postgres、Redis、日志、全局默认超时、KMS/master key、部署开关，允许放在 config/env。
+- 业务数据：provider、channel、model、price、fallback、channel health、rate policy，最终必须进数据库并由后台管理。
+- Adapter 代码能力：请求转换、响应转换、stream parser、usage/error 映射、provider-specific HTTP 调用，只属于代码接口。
+- 请求运行时参数：routing 选出的 channel base URL、credential、timeout、model mapping，只能由 gateway/routing 传给 adapter。
+
+概念边界：
+
+- Gateway：Unio 的请求编排层，对应 new-api relay 的产品职责，但项目命名统一使用 Gateway。
+- Provider：业务服务商，例如 OpenAI、Anthropic、Gemini；未来是数据库和后台管理对象。
+- Channel：某个 provider 下的具体上游渠道，包含凭据、base URL、优先级、健康状态、模型映射和价格策略等业务数据。
+- Adapter：纯代码能力，只做协议转换、请求发送、响应解析、stream parser、usage/error 映射，不表达业务服务商记录。
+- `provider` 不能再用来命名 Go adapter 接口或上游 HTTP 调用实现；这类代码必须放在 `internal/adapter`。
+- `channel.Runtime` 只表示 gateway/routing 选中 channel 后传给 adapter 的运行时参数，不等于数据库里的 channel 业务实体。
+
+硬规则：
+
+- Provider / channel / model / price 这类需要后台增删改查、动态启停、fallback、计费或审计的数据，不能设计成正式 env/config 来源。
+- Adapter 不得读取 provider/channel env，不得直接查询数据库，不得保存业务状态。
+- Gateway / routing 负责选择 model、provider、channel，并把运行时 channel 参数交给 adapter。
+- Billing / ledger 必须记录 request、model、provider、channel、price snapshot 和 usage，不能只记录“请求成功”。
+- 临时 mock、fake、硬编码默认值必须加 production TODO，说明未来替换成数据库、routing、adapter 或 billing 的哪一部分。
+- 不照搬 new-api 的 Gin context 和大而全 adaptor 接口；Unio 按能力拆分 `ChatAdapter`、`StreamChatAdapter`、`EmbeddingAdapter` 等小接口，避免 framework context 泄漏到 adapter。
+
 ## 阶段开始前生产级自检清单
 
 每次进入新章节前，必须先按生产上线系统视角做全盘复盘，而不是只跟随用户举的例子。
 
 必须检查：
 
-- Config：环境变量、超时、连接池、provider 配置、rate limit 配置。
+- Config：环境变量、超时、连接池、KMS/master key、部署开关；不能把 provider/channel 业务数据放进 config。
 - HTTP：body limit、JSON decode、错误格式、SSE、middleware 可选接口。
 - Postgres：migration runner、pool 参数、事务、updated_at、schema 健康。
 - Redis：timeout、pool、key namespace、原子性、失败降级。
 - Security：API key 管理、JWT、argon2id、脱敏、审计日志。
-- Gateway / provider：timeout、retry、fallback、stream parser、usage extraction。
+- Model / channel：provider、channel、model、channel_models、price、health、fallback 是否属于数据库业务数据。
+- Gateway / adapter：routing、运行时 channel 参数、timeout、retry、fallback、stream parser、usage extraction。
 - Billing / ledger：request record、usage record、price snapshot、ledger entry、幂等。
 - Observability / deploy：metrics、logs、OpenTelemetry、Dockerfile、CI、readiness。
 
@@ -115,7 +145,7 @@ new-api
 - 不 fork `new-api` 作为商业项目基础。
 - 只把它作为产品地图和踩坑参考。
 - 注意 `new-api` 使用 AGPL-3.0，商业 SaaS 场景有源码开放风险。
-- 可以概念性研究它的 provider adapter、channel 管理、价格流程、后台功能、relay 行为。
+- 可以概念性研究它的 adapter、channel 管理、价格流程、后台功能、relay 行为。
 - 不直接复制它的架构。
 
 从 `new-api` 得到的关键经验：
@@ -124,7 +154,7 @@ new-api
 - GORM 在计费、事务、行锁、fallback SQL、多数据库兼容等场景下会变复杂。
 - 同时支持多种数据库会显著增加实现成本。
 - 计费必须作为一等业务领域，而不是“请求日志 + 扣余额”。
-- Provider adapter 很有参考价值，但必须隔离在清晰接口后面。
+- Adapter 设计很有参考价值，但必须隔离在清晰接口后面。
 
 ## 技术栈
 
@@ -191,10 +221,12 @@ internal/user
 internal/project
 
 internal/gateway
+internal/adapter
+internal/adapter/openai
+internal/adapter/anthropic
+internal/adapter/gemini
 internal/provider
-internal/provider/openai
-internal/provider/anthropic
-internal/provider/gemini
+internal/channel
 
 internal/routing
 internal/modelcatalog
@@ -219,12 +251,14 @@ HTTP request
 -> middleware
 -> handler
 -> DTO validation
--> service/domain
--> store/sqlc
--> provider adapter
--> billing/ledger
+-> gateway
+-> routing / model catalog
+-> adapter with selected channel runtime params
+-> usage / billing / ledger
 -> response or SSE stream
 ```
+
+HTTP 层只负责协议入口和 DTO 校验；gateway 负责请求编排；routing/model catalog 负责选择模型与渠道；adapter 只负责调用上游和做协议转换；usage/billing/ledger 负责记录和结算。
 
 ## 路由选择
 
@@ -241,7 +275,7 @@ HTTP request
 
 - `chi` 只留在 HTTP 层。
 - 业务逻辑只接收 `context.Context` 和 domain / DTO struct。
-- 不把 router / framework context 传入 service / store / provider 层。
+- 不把 router / framework context 传入 service / store / gateway / adapter 层。
 - 在 `internal/httpx` 下构建少量 HTTP 辅助函数。
 
 建议的 `httpx` 工具：
@@ -311,11 +345,13 @@ anthropic/claude-sonnet
 google/gemini-pro
 ```
 
-## Provider Adapter 设计
+## Adapter 设计
 
-Provider adapter 应该隐藏上游差异。
+Adapter 应该隐藏上游差异。
 
-每个 provider adapter 负责：
+Adapter 不是 provider 或 channel 管理系统。provider、channel、model、price、fallback 和 channel health 是业务数据，后续必须由数据库和后台管理；adapter 只接收调用方传入的运行时 channel 参数。
+
+每个 adapter 负责：
 
 - 请求转换
 - 响应转换
@@ -327,13 +363,17 @@ Provider adapter 应该隐藏上游差异。
 - retryable error classification
 
 业务逻辑不应该知道 provider-specific HTTP 细节。
+Adapter 不得从 env/config 读取上游 base URL、API key，也不得直接查询数据库；这些值由 gateway/routing 根据数据库业务数据选择后传入。
 
 建议接口方向：
 
 ```go
-type Provider interface {
-  ChatCompletions(ctx context.Context, req ChatRequest) (*ChatResponse, error)
-  StreamChatCompletions(ctx context.Context, req ChatRequest) (ChatStream, error)
+type ChatAdapter interface {
+  ChatCompletions(ctx context.Context, ch channel.Runtime, req ChatRequest) (*ChatResponse, error)
+}
+
+type StreamChatAdapter interface {
+  StreamChatCompletions(ctx context.Context, ch channel.Runtime, req ChatRequest) (ChatStream, error)
 }
 ```
 
@@ -408,6 +448,34 @@ DTO 是 Data Transfer Object。
 - Domain struct 不强制等同于数据库 struct。
 - 如果边界更清晰，允许存在多个相似 struct。
 - 对于需要保留显式零值的 optional scalar 字段，应使用指针类型。
+- 讲解或 review DTO 时必须带包名，不允许只说 `ChatCompletionRequest` 这种容易混淆的裸类型名。
+- 每次新增 DTO 前必须回答：这个 DTO 属于哪一层、谁创建它、谁消费它。
+
+当前 chat completions DTO 边界地图：
+
+```text
+httpapi.ChatCompletionRequest / Response
+= 对外 OpenAI-compatible API DTO
+= 由 HTTP JSON decoder 创建
+= 由 handler / gateway 消费
+
+adapter.ChatRequest / Response / Usage
+= 内部 adapter DTO
+= 由 gateway 创建
+= 由 adapter 消费
+= 不等于 HTTP DTO，不等于数据库 row，不等于上游 wire DTO
+
+openai.chatCompletionRequest / Response
+= OpenAI-compatible 上游 wire DTO
+= 由 openai adapter 创建或解析
+= 只在 internal/adapter/openai 包内使用，不导出给其他包
+```
+
+Adapter 层命名原则：
+
+- `provider` 只保留给业务服务商领域；Go adapter 接口和实现放在 `internal/adapter`。
+- Adapter 层类型优先使用 `ChatRequest`、`ChatResponse`、`ChatUsage` 这类内部 DTO 名，避免继续扩大 `ChatCompletionRequest` 与 HTTP/OpenAI wire DTO 的混淆。
+- 不建议使用 `ChatContractRequest` 这类名字；`Contract` 是包职责和文档概念，不应重复塞进每个类型名。
 
 示例语义：
 
@@ -480,7 +548,26 @@ DTO 是 Data Transfer Object。
 - 在要求用户编写测试或实现前，必须先只读检查当前仓库已有 helper、依赖装配和同类测试写法；给出的任务步骤必须引用现有 helper 或明确说明需要补齐的依赖，避免让用户因为缺少 Logger、认证 header、RateLimiter、mock service 等测试基础设施而踩无关错误。
 - 如果测试涉及 HTTP router、middleware、stream、事务或外部依赖，必须先说明当前代码中已存在的风险点和验证顺序，例如 ResponseWriter wrapper 是否保留 http.Flusher、测试 router 是否应使用已有 newTestRouter。
 
-每一课应包含：
+## Playground 学习规则
+
+当课程涉及新外部接口、新第三方库、新 Go 语言特性、新协议细节、复杂并发/事务/流式处理，或用户明确表示不理解某个概念时，应优先安排独立 playground，再进入生产代码。
+
+典型触发场景：
+
+- 第一次对接外部 provider API、Redis Lua、PostgreSQL transaction、JWT、argon2id、OpenTelemetry、Prometheus、SSE parser、HTTP streaming、retry/circuit breaker。
+- 第一次使用新的 Go 特性或标准库能力，例如 interface 组合、context cancellation、errors.As、http.Client timeout、io.Reader、goroutine/channel。
+- 上游接口返回格式、错误格式、stream chunk、usage 字段不确定，需要先观察真实行为。
+- 用户对语法、调用方式、生命周期、错误处理、测试写法不熟，需要先建立最小认知。
+
+规则：
+
+- Playground 只用于学习语法、验证 API 行为、观察边界条件和形成实现判断，不承载生产业务逻辑。
+- Playground 与生产代码必须分离；默认优先使用临时目录或明确标记的 playground 目录，不允许生产包 import playground。
+- Playground 不保存真实密钥，不写入生产数据库，不依赖生产计费或真实余额；如需调用外部服务，必须说明费用、速率限制和安全风险。
+- Playground 完成后必须总结学到的事实、踩坑、生产实现取舍，再开始正式项目代码。
+- 如果用户明确要求跳过 playground，可以继续正式实现，但必须先说明跳过后可能增加的理解或返工风险。
+
+每一节课应包含：
 
 - 目标
 - 涉及概念
@@ -503,6 +590,8 @@ DTO 是 Data Transfer Object。
 - `/healthz`
 - slog
 - graceful shutdown
+- HTTP skeleton 不能泄漏 framework context 到业务层。
+- server timeout、shutdown、readiness 后续必须配置化并纳入可观测性。
 
 阶段 2：基础设施
 
@@ -512,6 +601,8 @@ DTO 是 Data Transfer Object。
 - Docker Compose
 - migrations
 - sqlc 初始化
+- config/env 只放基础设施和进程启动配置。
+- Postgres / Redis / migration 是平台能力，不承载 provider/channel/model/price 业务数据。
 
 阶段 3：用户与 API Key
 
@@ -521,6 +612,8 @@ DTO 是 Data Transfer Object。
 - API key middleware
 - request auth context
 - 基础 rate limit
+- API key 是 customer/project 身份入口，后续所有 request、usage、billing 都必须能关联 project。
+- rate limit 初期可硬编码过渡，后续应支持全局默认配置 + 数据库策略，并可按 project/model/channel 扩展。
 
 阶段 4：OpenAI-compatible API
 
@@ -531,16 +624,21 @@ DTO 是 Data Transfer Object。
 - OpenAI error format
 - stream 参数
 - SSE writer
+- OpenAI-compatible API 只做协议入口，不负责选择 provider/channel。
+- `/v1/models` 不能长期返回空列表，后续必须来自 model catalog 和 channel availability。
 
-阶段 5：Provider Adapter
+阶段 5：Adapter 边界
 
-- provider interface
-- OpenAI-compatible provider
+- adapter interface
+- 运行时 channel 参数边界
+- OpenAI-compatible adapter
 - upstream HTTP client
 - timeout / cancellation
 - streaming parser
 - usage extraction
 - error mapping
+- adapter 不得读取 `UNIO_PROVIDER_*` 这类正式 provider env，也不得查询数据库。
+- gateway/routing 选出的 channel 参数必须由调用方传给 adapter。
 
 阶段 6：模型与渠道
 
@@ -551,6 +649,8 @@ DTO 是 Data Transfer Object。
 - model availability
 - channel health
 - same-model fallback
+- provider/channel/model/price/fallback 是数据库业务数据，必须支持后台管理。
+- routing 根据 project、model、channel health、priority 和策略选择同模型 channel。
 
 阶段 7：计费与账本
 
@@ -565,6 +665,8 @@ DTO 是 Data Transfer Object。
 - refund
 - idempotency
 - transaction and row lock
+- request record 必须关联 project、model、provider、channel 和上游请求结果。
+- usage / price snapshot / ledger entry 必须能支撑历史账单复算和审计。
 
 阶段 8：可观测性与稳定性
 
@@ -576,6 +678,8 @@ DTO 是 Data Transfer Object。
 - circuit breaker
 - provider error classification
 - audit logs
+- logs / metrics / traces 必须能按 project、model、provider、channel 聚合，同时脱敏 API key 和上游凭据。
+- retry、circuit breaker、fallback 必须围绕 channel health 和 provider error classification 设计。
 
 阶段 9：后台管理
 
@@ -588,6 +692,8 @@ DTO 是 Data Transfer Object。
 - request logs
 - billing logs
 - dashboard metrics
+- 后台管理必须围绕 user/project/key/provider/channel/model/price/billing 展开。
+- 后台对 provider/channel 的修改必须影响 routing 和 `/v1/models`，不能要求修改 env 后重启服务。
 
 ## 用户当前水平
 

@@ -89,7 +89,7 @@ func (h *chatCompletionsHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 	}
 
 	if req.Stream != nil && *req.Stream {
-		// TODO(阶段5/production): stream=true 必须走 provider（上游模型服务适配方）流式接口，不能由 handler 伪造响应。
+		// TODO(阶段5/production): stream=true 必须走 gateway -> adapter 流式接口，不能由 handler 伪造响应。
 		h.writeMockStream(w, req)
 		return
 	}
@@ -117,7 +117,7 @@ func stringPtr(v string) *string {
 }
 
 // writeMockStream 写出 OpenAI-compatible SSE 占位流。
-// TODO(阶段5/production): 接入真实 provider stream 后删除该 mock chunk 逻辑，由 gateway/provider 逐段写出 SSE。
+// TODO(阶段5/production): 接入真实 adapter stream 后删除该 mock chunk 逻辑，由 gateway/adapter 逐段写出 SSE。
 func (h *chatCompletionsHandler) writeMockStream(w http.ResponseWriter, req ChatCompletionRequest) {
 	now := time.Now().Unix()
 

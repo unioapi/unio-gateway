@@ -10,8 +10,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ThankCat/unio-api/internal/adapter/mock"
 	"github.com/ThankCat/unio-api/internal/auth"
+	"github.com/ThankCat/unio-api/internal/channel"
 	"github.com/ThankCat/unio-api/internal/config"
+	"github.com/ThankCat/unio-api/internal/gateway"
 	"github.com/ThankCat/unio-api/internal/httpapi"
 	"github.com/ThankCat/unio-api/internal/ratelimit"
 	"github.com/ThankCat/unio-api/internal/redis"
@@ -34,6 +37,7 @@ func main() {
 	startupCtx, startupCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer startupCancel()
 
+	// TODO(阶段1/production): 将启动超时、HTTP server timeout 和 shutdown timeout 纳入 config，并配合 readiness/metrics 暴露运行状态。
 	// TODO(阶段2/production): 启动前接入 migration runner（迁移执行器）或 schema 版本检查，避免服务连接到未迁移数据库。
 	// DB 启动期先检查数据库可用，避免服务带病启动。
 	pgPool, err := store.OpenPostgres(startupCtx, cfg.DB.URL)
@@ -64,12 +68,16 @@ func main() {
 		APIKeyAuthenticator: apiKeyAuthenticator,
 		RateLimiter:         rateLimiter,
 
-		// TODO(阶段3/production): 将 rate limit（限流）阈值和窗口迁入 config，并支持项目级、模型级和全局限流策略。
+		// TODO(阶段3/production): 将默认 rate limit（限流）阈值和窗口迁入 config；项目级、模型级和 channel 级策略后续来自数据库。
 		RateLimitLimit:  60,
 		RateLimitWindow: time.Minute,
 
-		// TODO(阶段5/production): 引入 gateway/provider 后移除 mock service，真实请求必须走 provider adapter、usage 统计和 billing 前置流程。
-		ChatCompletionService: httpapi.NewMockChatCompletionService(),
+		// TODO(阶段5/production): 接入真实 adapter 后替换 mock adapter；真实请求必须经过 routing/channel selection、usage 统计和 billing 前置流程。
+		ChatCompletionService: gateway.NewChatCompletionService(mock.NewChatAdapter(), channel.Runtime{
+			ID:      0,
+			BaseURL: "mock://provider",
+			Timeout: 30 * time.Second,
+		}),
 	})
 
 	server := &http.Server{
