@@ -108,7 +108,7 @@ func (h *chatCompletionsHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 		})
 		if err != nil {
 			if streamStarted {
-				// TODO(阶段5/production): 后续接入 stream error mapping 和 request status，区分上游错误、客户端断开和解析错误，并服务 billing/refund。
+				// TODO(阶段7/production): SSE 写出后错误缺少 request status 会影响结算和退款审计；接入 billing/request record 时；映射上游错误、客户端断开和解析错误并驱动 settle/refund。
 				return
 			}
 

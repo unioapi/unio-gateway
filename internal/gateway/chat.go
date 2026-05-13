@@ -17,7 +17,7 @@ type chatAdapter interface {
 
 // ChatCompletionService 把 HTTP 层请求转换为 adapter 请求。
 type ChatCompletionService struct {
-	// TODO(阶段5/production): 当前直接持有 adapter 和 runtime channel 只是过渡实现；后续应接入 routing/channel selection、usage 统计、billing 和 fallback。
+	// TODO(阶段6/production): 直接持有单一 runtime channel 会绕过 channel health 和同模型 fallback；实现 routing/channel selection 时；改为每次请求由 routing 选择 channel 后传给 adapter。
 	adapter chatAdapter
 	channel channel.Runtime
 }

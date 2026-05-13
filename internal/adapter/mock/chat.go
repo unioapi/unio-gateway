@@ -8,7 +8,7 @@ import (
 )
 
 // chatAdapter 是临时 mock adapter。
-// TODO(阶段5/production): 接入真实 adapter 后移除该 mock adapter；真实请求必须经过 routing/channel selection、usage 统计和 billing 前置流程。
+// TODO(阶段6/production): mock adapter 会掩盖真实 channel selection 和上游错误；接入 model catalog 和 routing 时；移除 mock adapter 并由 routing 选择真实 adapter/channel。
 type chatAdapter struct{}
 
 // NewChatAdapter 创建临时 mock adapter。

@@ -7,7 +7,6 @@ import (
 )
 
 // ChatAdapter 定义聊天补全 adapter 需要提供的协议转换和上游调用能力。
-// TODO(阶段5/production): adapter 调用必须接收 gateway/routing 选出的运行时 channel 参数，不能从 config/env 读取上游 base URL 或 API key。
 type ChatAdapter interface {
 	ChatCompletions(ctx context.Context, ch channel.Runtime, req ChatRequest) (*ChatResponse, error)
 }

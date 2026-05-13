@@ -72,7 +72,7 @@ func main() {
 		RateLimitLimit:  60,
 		RateLimitWindow: time.Minute,
 
-		// TODO(阶段5/production): 接入真实 adapter 后替换 mock adapter；真实请求必须经过 routing/channel selection、usage 统计和 billing 前置流程。
+		// TODO(阶段6/production): mock adapter/runtime channel 会让生产请求依赖硬编码上游；接入 model catalog 和 routing 时；替换为从数据库 channel 业务数据生成运行时参数。
 		ChatCompletionService: gateway.NewChatCompletionService(mock.NewChatAdapter(), channel.Runtime{
 			ID:      0,
 			BaseURL: "mock://provider",

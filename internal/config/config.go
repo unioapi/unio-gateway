@@ -42,7 +42,7 @@ type RedisConfig struct {
 	// TODO(阶段2/production): 将 Redis dial/read/write timeout、pool size、namespace 和故障降级策略纳入配置。
 }
 
-// TODO(阶段5/production): 只将 KMS/master key、全局默认上游请求 timeout 等启动级配置放入 config；provider/channel 的 base URL、API key、价格和 fallback 策略必须来自数据库业务数据。
+// TODO(阶段6/production): provider/channel 业务数据进入 config 会阻断后台动态管理；接入数据库 channel 时；config 只保留 KMS/master key 和全局默认上游 timeout 等启动级配置。
 
 // Load 从环境变量加载配置，并对需要解析的字段做启动期校验。
 func Load() (Config, error) {
