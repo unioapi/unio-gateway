@@ -171,3 +171,152 @@ func TestAdapterChatCompletionsUsesChannelTimeout(t *testing.T) {
 		t.Fatalf("expected timeout error, got %v", err)
 	}
 }
+
+func TestAdapterStreamChatCompletionsParsesUpstreamSSE(t *testing.T) {
+	var gotAuthorization string
+	var gotContentType string
+	var gotRequestBody chatCompletionRequest
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("got %q, want %q", r.Method, http.MethodPost)
+		}
+
+		if r.URL.Path != "/v1/chat/completions" {
+			t.Fatalf("got %q, want %q", r.URL.Path, "/v1/chat/completions")
+		}
+
+		gotAuthorization = r.Header.Get("Authorization")
+		gotContentType = r.Header.Get("Content-Type")
+
+		if err := json.NewDecoder(r.Body).Decode(&gotRequestBody); err != nil {
+			t.Fatalf("failed to decode body: %v", err)
+		}
+
+		if !gotRequestBody.Stream {
+			t.Fatal("expected stream request body to be true")
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Fatal("expected response writer to support flush")
+		}
+		stop := "stop"
+		chunks := []chatCompletionStreamResponse{
+			{
+				ID:    "chatcmpl_stream_test",
+				Model: "gpt-4.1",
+				Choices: []chatStreamChoice{
+					{
+						Delta: chatStreamDelta{
+							Role:    "assistant",
+							Content: "hello ",
+						},
+						FinishReason: nil,
+					},
+				},
+			},
+			{
+				ID:    "chatcmpl_stream_test",
+				Model: "gpt-4.1",
+				Choices: []chatStreamChoice{
+					{
+						Delta: chatStreamDelta{
+							Content: "world",
+						},
+						FinishReason: &stop,
+					},
+				},
+			},
+		}
+
+		for _, chunk := range chunks {
+			payload, err := json.Marshal(chunk)
+			if err != nil {
+				t.Fatalf("failed to marshal chunk: %v", err)
+			}
+
+			if _, err := w.Write([]byte("data: " + string(payload) + "\n\n")); err != nil {
+				t.Fatalf("write stream chunk: %v", err)
+			}
+			flusher.Flush()
+		}
+
+		if _, err := w.Write([]byte("data: [DONE]\n\n")); err != nil {
+			t.Fatalf("write done chunk: %v", err)
+		}
+		flusher.Flush()
+	}))
+	defer server.Close()
+
+	openAIAdapter := NewAdapter(server.Client())
+	selectedChannel := channel.Runtime{
+		ID:      123,
+		BaseURL: server.URL + "/v1",
+		APIKey:  "test-secret",
+		Timeout: 30 * time.Second,
+	}
+
+	got, err := openAIAdapter.StreamChatCompletions(context.Background(), selectedChannel, adapter.ChatRequest{
+		Model: "gpt-4.1",
+		Messages: []adapter.ChatMessage{
+			{Role: "user", Content: "hello"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("StreamChatCompletions returned err: %v", err)
+	}
+
+	if gotAuthorization != "Bearer test-secret" {
+		t.Fatalf("authorization header: got %q, want %q", gotAuthorization, "Bearer test-secret")
+	}
+
+	if !strings.HasPrefix(gotContentType, "application/json") {
+		t.Fatalf("content type: got %q, want application/json", gotContentType)
+	}
+
+	if gotRequestBody.Model != "gpt-4.1" {
+		t.Fatalf("body model: got %q, want %q", gotRequestBody.Model, "gpt-4.1")
+	}
+
+	if len(gotRequestBody.Messages) != 1 {
+		t.Fatalf("got %d messages, want 1", len(gotRequestBody.Messages))
+	}
+
+	if gotRequestBody.Messages[0].Role != "user" {
+		t.Fatalf("got role %q, want %q", gotRequestBody.Messages[0].Role, "user")
+	}
+
+	if gotRequestBody.Messages[0].Content != "hello" {
+		t.Fatalf("got content %q, want %q", gotRequestBody.Messages[0].Content, "hello")
+	}
+
+	if len(got) != 2 {
+		t.Fatalf("got %d chunks, want 2", len(got))
+	}
+
+	if got[0].ID != "chatcmpl_stream_test" {
+		t.Fatalf("got id %q, want %q", got[0].ID, "chatcmpl_stream_test")
+	}
+	if got[0].Model != "gpt-4.1" {
+		t.Fatalf("got model %q, want %q", got[0].Model, "gpt-4.1")
+	}
+	if got[0].Role != "assistant" {
+		t.Fatalf("got role %q, want %q", got[0].Role, "assistant")
+	}
+	if got[0].Content != "hello " {
+		t.Fatalf("got content %q, want %q", got[0].Content, "hello ")
+	}
+
+	if got[1].Content != "world" {
+		t.Fatalf("got content %q, want %q", got[1].Content, "world")
+	}
+	if got[1].FinishReason == nil {
+		t.Fatal("got nil finish reason, want stop")
+	}
+	if *got[1].FinishReason != "stop" {
+		t.Fatalf("got finish reason %q, want %q", *got[1].FinishReason, "stop")
+	}
+}
