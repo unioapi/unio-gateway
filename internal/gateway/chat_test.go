@@ -32,13 +32,23 @@ func (a *fakeChatAdapter) ChatCompletions(ctx context.Context, ch channel.Runtim
 	return a.chatResp, a.chatErr
 }
 
-// StreamChatCompletions 记录 gateway 传入的流式请求，并返回测试预设 chunk。
-func (a *fakeChatAdapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime, req adapter.ChatRequest) ([]adapter.ChatStreamChunk, error) {
+// StreamChatCompletions 记录 gateway 传入的流式请求，并逐个发出测试预设 chunk。
+func (a *fakeChatAdapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime, req adapter.ChatRequest, emit func(adapter.ChatStreamChunk) error) error {
 	a.streamCalled = true
 	a.streamReq = req
 	a.ch = ch
 
-	return a.streamResp, a.streamErr
+	if a.streamErr != nil {
+		return a.streamErr
+	}
+
+	for _, chunk := range a.streamResp {
+		if err := emit(chunk); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func TestChatCompletionServiceCreateChatCompletionCallsAdapter(t *testing.T) {
@@ -173,7 +183,11 @@ func TestChatCompletionServiceStreamChatCompletionCallsAdapter(t *testing.T) {
 		Messages: []httpapi.ChatMessage{{Role: "user", Content: "hello"}},
 	}
 
-	chunks, err := service.StreamChatCompletion(context.Background(), req)
+	chunks := make([]httpapi.ChatCompletionStreamResponse, 0)
+	err := service.StreamChatCompletion(context.Background(), req, func(chunk httpapi.ChatCompletionStreamResponse) error {
+		chunks = append(chunks, chunk)
+		return nil
+	})
 
 	if !fakeAdapter.streamCalled {
 		t.Fatal("expected adapter to be called")

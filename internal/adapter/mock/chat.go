@@ -26,13 +26,17 @@ func (a *chatAdapter) ChatCompletions(ctx context.Context, runtime channel.Runti
 }
 
 // StreamChatCompletions 返回固定 mock 流式响应，保持当前 stream 接口可用。
-func (a *chatAdapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime, req adapter.ChatRequest) ([]adapter.ChatStreamChunk, error) {
-	return []adapter.ChatStreamChunk{
-		{
-			ID:      "chatcmpl_mock",
-			Model:   req.Model,
-			Role:    "assistant",
-			Content: "mock response",
-		},
-	}, nil
+func (a *chatAdapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime, req adapter.ChatRequest, emit func(chunk adapter.ChatStreamChunk) error) error {
+	if err := emit(adapter.ChatStreamChunk{
+		ID:           "chatcmpl_mock",
+		Model:        req.Model,
+		Role:         "assistant",
+		Content:      "mock response",
+		FinishReason: nil,
+	}); err != nil {
+		return err
+	}
+
+	return nil
+
 }

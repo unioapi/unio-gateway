@@ -11,7 +11,7 @@ import (
 // ChatCompletionService 定义 chat completions handler 依赖的业务能力。
 type ChatCompletionService interface {
 	CreateChatCompletion(ctx context.Context, req ChatCompletionRequest) (*ChatCompletionResponse, error)
-	StreamChatCompletion(ctx context.Context, req ChatCompletionRequest) ([]ChatCompletionStreamResponse, error)
+	StreamChatCompletion(ctx context.Context, req ChatCompletionRequest, emit func(ChatCompletionStreamResponse) error) error
 }
 
 // chatCompletionsHandler 处理 OpenAI-compatible chat completions 请求。
@@ -89,23 +89,18 @@ func (h *chatCompletionsHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 	}
 
 	if req.Stream != nil && *req.Stream {
-		// TODO(阶段5/production): stream=true 必须走 gateway -> adapter 流式接口，不能由 handler 伪造响应。
-		chunks, err := h.service.StreamChatCompletion(r.Context(), req)
-		if err != nil {
-			_ = httpx.WriteError(w, http.StatusInternalServerError, "stream_chat_completion_error", err.Error())
-			return
-		}
-
-		for _, chunk := range chunks {
+		err := h.service.StreamChatCompletion(r.Context(), req, func(chunk ChatCompletionStreamResponse) error {
 			payload, err := json.Marshal(chunk)
 			if err != nil {
-				_ = httpx.WriteError(w, http.StatusInternalServerError, "stream_chat_completion_error", err.Error())
-				return
+				return err
 			}
 
-			if err := httpx.WriteSSE(w, payload); err != nil {
-				return
-			}
+			return httpx.WriteSSE(w, payload)
+		})
+		if err != nil {
+			// TODO(阶段5/production): stream 已写出部分 chunk 后不能再返回普通 JSON 错误；接入 stream error mapping 后改为 SSE 错误事件或中断连接并记录请求状态。
+			_ = httpx.WriteError(w, http.StatusInternalServerError, "stream_chat_completion_error", err.Error())
+			return
 		}
 
 		_ = httpx.WriteSSE(w, []byte("[DONE]"))

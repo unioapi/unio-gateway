@@ -69,7 +69,7 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ht
 }
 
 // StreamChatCompletion 调用 adapter 完成流式聊天补全，并转换为 HTTP stream DTO。
-func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req httpapi.ChatCompletionRequest) ([]httpapi.ChatCompletionStreamResponse, error) {
+func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req httpapi.ChatCompletionRequest, emit func(httpapi.ChatCompletionStreamResponse) error) error {
 	messages := make([]adapter.ChatMessage, 0, len(req.Messages))
 	for _, msg := range req.Messages {
 		messages = append(messages, adapter.ChatMessage{
@@ -78,22 +78,14 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ht
 		})
 	}
 
-	adapterChunks, err := s.adapter.StreamChatCompletions(ctx, s.channel, adapter.ChatRequest{
+	return s.adapter.StreamChatCompletions(ctx, s.channel, adapter.ChatRequest{
 		Model:    req.Model,
 		Messages: messages,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	now := time.Now().Unix()
-
-	result := make([]httpapi.ChatCompletionStreamResponse, 0, len(adapterChunks))
-	for _, chunk := range adapterChunks {
-		result = append(result, httpapi.ChatCompletionStreamResponse{
+	}, func(chunk adapter.ChatStreamChunk) error {
+		httpChunk := httpapi.ChatCompletionStreamResponse{
 			ID:      chunk.ID,
 			Object:  "chat.completion.chunk",
-			Created: now,
+			Created: time.Now().Unix(),
 			Model:   chunk.Model,
 			Choices: []httpapi.ChatCompletionStreamChoice{
 				{
@@ -105,8 +97,7 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ht
 					FinishReason: chunk.FinishReason,
 				},
 			},
-		})
-	}
-
-	return result, nil
+		}
+		return emit(httpChunk)
+	})
 }

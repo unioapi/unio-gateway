@@ -259,11 +259,15 @@ func TestAdapterStreamChatCompletionsParsesUpstreamSSE(t *testing.T) {
 		Timeout: 30 * time.Second,
 	}
 
-	got, err := openAIAdapter.StreamChatCompletions(context.Background(), selectedChannel, adapter.ChatRequest{
+	got := make([]adapter.ChatStreamChunk, 0)
+	err := openAIAdapter.StreamChatCompletions(context.Background(), selectedChannel, adapter.ChatRequest{
 		Model: "gpt-4.1",
 		Messages: []adapter.ChatMessage{
 			{Role: "user", Content: "hello"},
 		},
+	}, func(chunk adapter.ChatStreamChunk) error {
+		got = append(got, chunk)
+		return nil
 	})
 	if err != nil {
 		t.Fatalf("StreamChatCompletions returned err: %v", err)

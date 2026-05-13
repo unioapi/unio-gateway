@@ -232,11 +232,22 @@ func (s *fakeChatCompletionService) CreateChatCompletion(ctx context.Context, re
 	return s.createResp, s.err
 }
 
-// StreamChatCompletion 记录 handler 传入的流式请求，并返回测试预设的流式响应。
-func (s *fakeChatCompletionService) StreamChatCompletion(ctx context.Context, req ChatCompletionRequest) ([]ChatCompletionStreamResponse, error) {
+// StreamChatCompletion 记录 handler 传入的流式请求，并逐个发出测试预设响应。
+func (s *fakeChatCompletionService) StreamChatCompletion(ctx context.Context, req ChatCompletionRequest, emit func(ChatCompletionStreamResponse) error) error {
 	s.streamCalled = true
 	s.req = req
-	return s.streamResp, s.err
+
+	if s.err != nil {
+		return s.err
+	}
+
+	for _, chunk := range s.streamResp {
+		if err := emit(chunk); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func TestRouterV1ChatCompletionCallsService(t *testing.T) {

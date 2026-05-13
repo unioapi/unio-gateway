@@ -97,9 +97,13 @@ func (a *Adapter) ChatCompletions(ctx context.Context, ch channel.Runtime, req a
 }
 
 // StreamChatCompletions 调用上游 /chat/completions stream，并转换为统一 adapter chunk。
-func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime, req adapter.ChatRequest) ([]adapter.ChatStreamChunk, error) {
+func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime, req adapter.ChatRequest, emit func(adapter.ChatStreamChunk) error) error {
+	if emit == nil {
+		return fmt.Errorf("openai adapter: stream emit is nil")
+	}
+
 	if ch.BaseURL == "" {
-		return nil, fmt.Errorf("openai adapter: channel base url is empty")
+		return fmt.Errorf("openai adapter: channel base url is empty")
 	}
 
 	if ch.Timeout > 0 {
@@ -125,12 +129,12 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 	}
 	buf := new(bytes.Buffer)
 	if err := json.NewEncoder(buf).Encode(upstreamReqBody); err != nil {
-		return nil, fmt.Errorf("openai adapter: encode stream chat completion request: %w", err)
+		return fmt.Errorf("openai adapter: encode stream chat completion request: %w", err)
 	}
 
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, url, buf)
 	if err != nil {
-		return nil, fmt.Errorf("openai adapter: create stream chat completion request: %w", err)
+		return fmt.Errorf("openai adapter: create stream chat completion request: %w", err)
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "text/event-stream")
@@ -138,18 +142,17 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 
 	upstreamResp, err := a.client.Do(request)
 	if err != nil {
-		return nil, fmt.Errorf("openai adapter: send stream chat completion request: %w", err)
+		return fmt.Errorf("openai adapter: send stream chat completion request: %w", err)
 	}
 	defer upstreamResp.Body.Close()
 
 	if upstreamResp.StatusCode < http.StatusOK || upstreamResp.StatusCode >= http.StatusMultipleChoices {
-		return nil, fmt.Errorf("openai adapter: upstream stream status %d", upstreamResp.StatusCode)
+		return fmt.Errorf("openai adapter: upstream stream status %d", upstreamResp.StatusCode)
 	}
 
 	scanner := bufio.NewScanner(upstreamResp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
-	chunks := make([]adapter.ChatStreamChunk, 0)
 	for scanner.Scan() {
 		line := scanner.Text()
 
@@ -164,7 +167,7 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 
 		var streamResp chatCompletionStreamResponse
 		if err := json.Unmarshal([]byte(payload), &streamResp); err != nil {
-			return nil, fmt.Errorf("openai adapter: decode stream chunk: %w", err)
+			return fmt.Errorf("openai adapter: decode stream chunk: %w", err)
 		}
 
 		if len(streamResp.Choices) == 0 {
@@ -172,18 +175,22 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 		}
 
 		choice := streamResp.Choices[0]
-		chunks = append(chunks, adapter.ChatStreamChunk{
+		chunk := adapter.ChatStreamChunk{
 			ID:           streamResp.ID,
 			Model:        streamResp.Model,
 			Role:         choice.Delta.Role,
 			Content:      choice.Delta.Content,
 			FinishReason: choice.FinishReason,
-		})
+		}
+
+		if err := emit(chunk); err != nil {
+			return fmt.Errorf("openai adapter: send stream chunk: %w", err)
+		}
 	}
 
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("openai adapter: scan stream chunk: %w", err)
+		return fmt.Errorf("openai adapter: scan stream chunk: %w", err)
 	}
 
-	return chunks, nil
+	return nil
 }
