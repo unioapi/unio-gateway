@@ -12,6 +12,11 @@ type ChatAdapter interface {
 	ChatCompletions(ctx context.Context, ch channel.Runtime, req ChatRequest) (*ChatResponse, error)
 }
 
+// StreamChatAdapter 定义聊天补全流式 adapter 能力。
+type StreamChatAdapter interface {
+	StreamChatCompletions(ctx context.Context, ch channel.Runtime, req ChatRequest) ([]ChatStreamChunk, error)
+}
+
 // ChatRequest 是 gateway 传给聊天补全 adapter 的内部请求 DTO。
 type ChatRequest struct {
 	Model    string

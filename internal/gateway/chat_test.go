@@ -12,20 +12,33 @@ import (
 
 // fakeChatAdapter 是 gateway 测试使用的 adapter 替身。
 type fakeChatAdapter struct {
-	called bool
-	ch     channel.Runtime
-	req    adapter.ChatRequest
-	resp   *adapter.ChatResponse
-	err    error
+	chatCalled   bool
+	chatReq      adapter.ChatRequest
+	chatResp     *adapter.ChatResponse
+	chatErr      error
+	streamCalled bool
+	streamReq    adapter.ChatRequest
+	streamResp   []adapter.ChatStreamChunk
+	streamErr    error
+	ch           channel.Runtime
 }
 
 // ChatCompletions 记录 gateway 传入的请求，并返回测试预设响应。
 func (a *fakeChatAdapter) ChatCompletions(ctx context.Context, ch channel.Runtime, req adapter.ChatRequest) (*adapter.ChatResponse, error) {
-	a.called = true
+	a.chatCalled = true
+	a.chatReq = req
 	a.ch = ch
-	a.req = req
 
-	return a.resp, a.err
+	return a.chatResp, a.chatErr
+}
+
+// StreamChatCompletions 记录 gateway 传入的流式请求，并返回测试预设 chunk。
+func (a *fakeChatAdapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime, req adapter.ChatRequest) ([]adapter.ChatStreamChunk, error) {
+	a.streamCalled = true
+	a.streamReq = req
+	a.ch = ch
+
+	return a.streamResp, a.streamErr
 }
 
 func TestChatCompletionServiceCreateChatCompletionCallsAdapter(t *testing.T) {
@@ -36,7 +49,7 @@ func TestChatCompletionServiceCreateChatCompletionCallsAdapter(t *testing.T) {
 		Timeout: 30 * time.Second,
 	}
 	fakeAdapter := &fakeChatAdapter{
-		resp: &adapter.ChatResponse{
+		chatResp: &adapter.ChatResponse{
 			ID:      "chatcmpl_provider_test",
 			Model:   "openai/gpt-4.1",
 			Content: "adapter response",
@@ -64,28 +77,28 @@ func TestChatCompletionServiceCreateChatCompletionCallsAdapter(t *testing.T) {
 		t.Fatalf("CreateChatCompletion returned err: %v", err)
 	}
 
-	if !fakeAdapter.called {
+	if !fakeAdapter.chatCalled {
 		t.Fatal("expected adapter to be called")
 	}
 
-	if fakeAdapter.req.Model != "openai/gpt-4.1" {
-		t.Fatalf("expected model %q, got %q", "openai/gpt-4.1", fakeAdapter.req.Model)
+	if fakeAdapter.chatReq.Model != "openai/gpt-4.1" {
+		t.Fatalf("expected model %q, got %q", "openai/gpt-4.1", fakeAdapter.chatReq.Model)
 	}
 
-	if len(fakeAdapter.req.Messages) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(fakeAdapter.req.Messages))
+	if len(fakeAdapter.chatReq.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(fakeAdapter.chatReq.Messages))
 	}
 
 	if len(got.Choices) != 1 {
 		t.Fatalf("expected 1 choice, got %d", len(got.Choices))
 	}
 
-	if fakeAdapter.req.Messages[0].Content != "hello" {
-		t.Fatalf("expected message content %q, got %q", "hello", fakeAdapter.req.Messages[0].Content)
+	if fakeAdapter.chatReq.Messages[0].Content != "hello" {
+		t.Fatalf("expected message content %q, got %q", "hello", fakeAdapter.chatReq.Messages[0].Content)
 	}
 
-	if fakeAdapter.req.Messages[0].Role != "user" {
-		t.Fatalf("expected message role %q, got %q", "user", fakeAdapter.req.Messages[0].Role)
+	if fakeAdapter.chatReq.Messages[0].Role != "user" {
+		t.Fatalf("expected message role %q, got %q", "user", fakeAdapter.chatReq.Messages[0].Role)
 	}
 
 	if got.Choices[0].Message.Content != "adapter response" {
@@ -135,8 +148,17 @@ func TestChatCompletionServiceCreateChatCompletionCallsAdapter(t *testing.T) {
 	}
 }
 
-func TestChatCompletionServiceStreamChatCompletionReturnsMockChunk(t *testing.T) {
-	fakeAdapter := &fakeChatAdapter{}
+func TestChatCompletionServiceStreamChatCompletionCallsAdapter(t *testing.T) {
+	fakeAdapter := &fakeChatAdapter{
+		streamResp: []adapter.ChatStreamChunk{
+			{
+				ID:      "chatcmpl_mock",
+				Model:   "openai/gpt-4.1",
+				Role:    "assistant",
+				Content: "mock response",
+			},
+		},
+	}
 	selectedChannel := channel.Runtime{
 		ID:      123,
 		BaseURL: "https://example.test/v1",
@@ -152,6 +174,15 @@ func TestChatCompletionServiceStreamChatCompletionReturnsMockChunk(t *testing.T)
 	}
 
 	chunks, err := service.StreamChatCompletion(context.Background(), req)
+
+	if !fakeAdapter.streamCalled {
+		t.Fatal("expected adapter to be called")
+	}
+
+	if fakeAdapter.streamReq.Model != "openai/gpt-4.1" {
+		t.Fatalf("expected model %q, got %q", "openai/gpt-4.1", fakeAdapter.streamReq.Model)
+	}
+
 	if err != nil {
 		t.Fatalf("StreamChatCompletion returned err: %v", err)
 	}

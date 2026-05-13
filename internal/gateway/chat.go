@@ -9,15 +9,21 @@ import (
 	"github.com/ThankCat/unio-api/internal/httpapi"
 )
 
+// chatAdapter 是 ChatCompletionService 当前需要的 adapter 能力集合。
+type chatAdapter interface {
+	adapter.ChatAdapter
+	adapter.StreamChatAdapter
+}
+
 // ChatCompletionService 把 HTTP 层请求转换为 adapter 请求。
 type ChatCompletionService struct {
 	// TODO(阶段5/production): 当前直接持有 adapter 和 runtime channel 只是过渡实现；后续应接入 routing/channel selection、usage 统计、billing 和 fallback。
-	adapter adapter.ChatAdapter
+	adapter chatAdapter
 	channel channel.Runtime
 }
 
 // NewChatCompletionService 创建聊天补全 gateway service。
-func NewChatCompletionService(adapter adapter.ChatAdapter, channel channel.Runtime) *ChatCompletionService {
+func NewChatCompletionService(adapter chatAdapter, channel channel.Runtime) *ChatCompletionService {
 	return &ChatCompletionService{adapter: adapter, channel: channel}
 }
 
@@ -62,27 +68,45 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ht
 	}, nil
 }
 
-// StreamChatCompletion 返回临时流式 chunk，并转换为 HTTP stream DTO。
+// StreamChatCompletion 调用 adapter 完成流式聊天补全，并转换为 HTTP stream DTO。
 func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req httpapi.ChatCompletionRequest) ([]httpapi.ChatCompletionStreamResponse, error) {
-	// TODO(阶段5/production): 当前仍返回临时 mock stream chunk；接入 adapter stream 后改为逐段转换上游 chunk。
+	messages := make([]adapter.ChatMessage, 0, len(req.Messages))
+	for _, msg := range req.Messages {
+		messages = append(messages, adapter.ChatMessage{
+			Role:    msg.Role,
+			Content: msg.Content,
+		})
+	}
+
+	adapterChunks, err := s.adapter.StreamChatCompletions(ctx, s.channel, adapter.ChatRequest{
+		Model:    req.Model,
+		Messages: messages,
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	now := time.Now().Unix()
 
-	return []httpapi.ChatCompletionStreamResponse{
-		{
-			ID:      "chatcmpl_mock",
+	result := make([]httpapi.ChatCompletionStreamResponse, 0, len(adapterChunks))
+	for _, chunk := range adapterChunks {
+		result = append(result, httpapi.ChatCompletionStreamResponse{
+			ID:      chunk.ID,
 			Object:  "chat.completion.chunk",
 			Created: now,
-			Model:   req.Model,
+			Model:   chunk.Model,
 			Choices: []httpapi.ChatCompletionStreamChoice{
 				{
 					Index: 0,
 					Delta: httpapi.ChatCompletionStreamDelta{
-						Role:    "assistant",
-						Content: "mock response",
+						Role:    chunk.Role,
+						Content: chunk.Content,
 					},
-					FinishReason: nil,
+					FinishReason: chunk.FinishReason,
 				},
 			},
-		},
-	}, nil
+		})
+	}
+
+	return result, nil
 }
