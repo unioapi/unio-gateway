@@ -217,12 +217,13 @@ func TestRouterV1ChatCompletionWithMissingMessages(t *testing.T) {
 
 // fakeChatCompletionService 是 chat completions 测试使用的 service 替身。
 type fakeChatCompletionService struct {
-	createCalled bool
-	streamCalled bool
-	req          ChatCompletionRequest
-	createResp   *ChatCompletionResponse
-	streamResp   []ChatCompletionStreamResponse
-	err          error
+	createCalled       bool
+	streamCalled       bool
+	req                ChatCompletionRequest
+	createResp         *ChatCompletionResponse
+	streamResp         []ChatCompletionStreamResponse
+	err                error
+	streamErrAfterEmit error
 }
 
 // CreateChatCompletion 记录 handler 传入的请求，并返回测试预设的响应。
@@ -247,7 +248,7 @@ func (s *fakeChatCompletionService) StreamChatCompletion(ctx context.Context, re
 		}
 	}
 
-	return nil
+	return s.streamErrAfterEmit
 }
 
 func TestRouterV1ChatCompletionCallsService(t *testing.T) {
@@ -703,5 +704,141 @@ func TestRouterV1ChatCompletionWithStreamTrueWritesSSE(t *testing.T) {
 
 	if service.req.Messages[0].Content != "Hello" {
 		t.Fatalf("expected message content %q, got %q", "Hello", service.req.Messages[0].Content)
+	}
+}
+
+func TestRouterV1ChatCompletionStreamReturnsJSONErrorBeforeFirstChunk(t *testing.T) {
+	service := &fakeChatCompletionService{
+		err: context.DeadlineExceeded,
+	}
+	router := newTestRouter(&fakeAPIKeyAuthenticator{
+		principal: &auth.APIKeyPrincipal{
+			APIKeyID:  1,
+			ProjectID: 1,
+			KeyPrefix: "unio_sk_test",
+		},
+	}, service, nil)
+
+	stream := true
+	reqBody := ChatCompletionRequest{
+		Model: "openai/gpt-4.1",
+		Messages: []ChatMessage{
+			{Role: "user", Content: "Hello"},
+		},
+		Stream: &stream,
+	}
+	reqBuf := new(bytes.Buffer)
+	if err := json.NewEncoder(reqBuf).Encode(reqBody); err != nil {
+		t.Fatalf("encode request body: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", reqBuf)
+	req.Header.Set("Authorization", "Bearer unio_sk_test")
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected status %d, got %d", http.StatusInternalServerError, rec.Code)
+	}
+
+	gotBody := rec.Body.String()
+
+	var body httpx.ErrorResponse
+	if err := json.NewDecoder(strings.NewReader(gotBody)).Decode(&body); err != nil {
+		t.Fatalf("decode response body: %v", err)
+	}
+
+	if body.Error.Code != "stream_chat_completion_error" {
+		t.Fatalf("expected error code %q, got %q", "stream_chat_completion_error", body.Error.Code)
+	}
+
+	if strings.Contains(gotBody, "data:") {
+		t.Fatalf("expected body not to contain %q, got %q", "data:", gotBody)
+	}
+
+	if !service.streamCalled {
+		t.Fatal("expected stream service to be called")
+	}
+
+	if service.createCalled {
+		t.Fatal("expected create service not to be called")
+	}
+}
+
+func TestRouterV1ChatCompletionStreamDoesNotWriteJSONErrorAfterChunkStarted(t *testing.T) {
+	service := &fakeChatCompletionService{
+		streamResp: []ChatCompletionStreamResponse{
+			{
+				ID:      "chatcmpl_stream_test",
+				Object:  "chat.completion.chunk",
+				Created: 123,
+				Model:   "openai/gpt-4.1",
+				Choices: []ChatCompletionStreamChoice{
+					{
+						Index: 0,
+						Delta: ChatCompletionStreamDelta{
+							Role:    "assistant",
+							Content: "mock response",
+						},
+						FinishReason: nil,
+					},
+				},
+			},
+		},
+		streamErrAfterEmit: context.Canceled,
+	}
+	router := newTestRouter(&fakeAPIKeyAuthenticator{
+		principal: &auth.APIKeyPrincipal{
+			APIKeyID:  1,
+			ProjectID: 1,
+			KeyPrefix: "unio_sk_test",
+		},
+	}, service, nil)
+
+	stream := true
+	reqBody := ChatCompletionRequest{
+		Model: "openai/gpt-4.1",
+		Messages: []ChatMessage{
+			{Role: "user", Content: "Hello"},
+		},
+		Stream: &stream,
+	}
+	reqBuf := new(bytes.Buffer)
+	if err := json.NewEncoder(reqBuf).Encode(reqBody); err != nil {
+		t.Fatalf("encode request body: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", reqBuf)
+	req.Header.Set("Authorization", "Bearer unio_sk_test")
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+
+	if rec.Header().Get("Content-Type") != httpx.ContentTypeSSE {
+		t.Fatalf("expected Content-Type %q, got %q", httpx.ContentTypeSSE, rec.Header().Get("Content-Type"))
+	}
+
+	gotBody := rec.Body.String()
+	if !strings.Contains(gotBody, "mock response") {
+		t.Fatalf("expected body to contain %q, got %q", "mock response", gotBody)
+	}
+
+	if strings.Contains(gotBody, "stream_chat_completion_error") {
+		t.Fatalf("expected body not to contain %q, got %q", "stream_chat_completion_error", gotBody)
+	}
+
+	if strings.Contains(gotBody, "data: [DONE]") {
+		t.Fatalf("expected body not to contain %q, got %q", "data: [DONE]", gotBody)
+	}
+
+	if !service.streamCalled {
+		t.Fatal("expected stream service to be called")
+	}
+
+	if service.createCalled {
+		t.Fatal("expected create service not to be called")
 	}
 }

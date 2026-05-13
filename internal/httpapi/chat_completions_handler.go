@@ -89,16 +89,29 @@ func (h *chatCompletionsHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 	}
 
 	if req.Stream != nil && *req.Stream {
+		if _, ok := w.(http.Flusher); !ok {
+			_ = httpx.WriteError(w, http.StatusInternalServerError, "streaming_unsupported", "streaming unsupported")
+			return
+		}
+
+		streamStarted := false
+
 		err := h.service.StreamChatCompletion(r.Context(), req, func(chunk ChatCompletionStreamResponse) error {
 			payload, err := json.Marshal(chunk)
 			if err != nil {
 				return err
 			}
 
+			// 从这里开始，响应已经进入 SSE 写出路径；后续不能再退回普通 JSON error。
+			streamStarted = true
 			return httpx.WriteSSE(w, payload)
 		})
 		if err != nil {
-			// TODO(阶段5/production): stream 已写出部分 chunk 后不能再返回普通 JSON 错误；接入 stream error mapping 后改为 SSE 错误事件或中断连接并记录请求状态。
+			if streamStarted {
+				// TODO(阶段5/production): 后续接入 stream error mapping 和 request status，区分上游错误、客户端断开和解析错误，并服务 billing/refund。
+				return
+			}
+
 			_ = httpx.WriteError(w, http.StatusInternalServerError, "stream_chat_completion_error", err.Error())
 			return
 		}
