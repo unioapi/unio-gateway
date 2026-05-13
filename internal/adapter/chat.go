@@ -38,3 +38,12 @@ type ChatUsage struct {
 	CompletionTokens int
 	TotalTokens      int
 }
+
+// ChatStreamChunk 表示 adapter 返回给 gateway 的一段聊天补全流式内容。
+type ChatStreamChunk struct {
+	ID           string
+	Model        string
+	Role         string
+	Content      string
+	FinishReason *string
+}

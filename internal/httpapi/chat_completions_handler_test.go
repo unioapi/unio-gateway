@@ -217,17 +217,26 @@ func TestRouterV1ChatCompletionWithMissingMessages(t *testing.T) {
 
 // fakeChatCompletionService 是 chat completions 测试使用的 service 替身。
 type fakeChatCompletionService struct {
-	called bool
-	req    ChatCompletionRequest
-	resp   *ChatCompletionResponse
-	err    error
+	createCalled bool
+	streamCalled bool
+	req          ChatCompletionRequest
+	createResp   *ChatCompletionResponse
+	streamResp   []ChatCompletionStreamResponse
+	err          error
 }
 
 // CreateChatCompletion 记录 handler 传入的请求，并返回测试预设的响应。
 func (s *fakeChatCompletionService) CreateChatCompletion(ctx context.Context, req ChatCompletionRequest) (*ChatCompletionResponse, error) {
-	s.called = true
+	s.createCalled = true
 	s.req = req
-	return s.resp, s.err
+	return s.createResp, s.err
+}
+
+// StreamChatCompletion 记录 handler 传入的流式请求，并返回测试预设的流式响应。
+func (s *fakeChatCompletionService) StreamChatCompletion(ctx context.Context, req ChatCompletionRequest) ([]ChatCompletionStreamResponse, error) {
+	s.streamCalled = true
+	s.req = req
+	return s.streamResp, s.err
 }
 
 func TestRouterV1ChatCompletionCallsService(t *testing.T) {
@@ -240,7 +249,7 @@ func TestRouterV1ChatCompletionCallsService(t *testing.T) {
 	}
 
 	service := &fakeChatCompletionService{
-		resp: &ChatCompletionResponse{
+		createResp: &ChatCompletionResponse{
 			Object: "chat.completion",
 			Model:  "openai/gpt-4.1",
 			Choices: []ChatCompletionChoice{
@@ -279,7 +288,7 @@ func TestRouterV1ChatCompletionCallsService(t *testing.T) {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
 	}
 
-	if !service.called {
+	if !service.createCalled {
 		t.Fatal("expected chat completion service to be called")
 	}
 
@@ -296,8 +305,8 @@ func TestRouterV1ChatCompletionCallsService(t *testing.T) {
 		t.Fatalf("decode response body: %v", err)
 	}
 
-	if recBody.Model != service.resp.Model {
-		t.Fatalf("expected response model %q, got %q", service.resp.Model, recBody.Model)
+	if recBody.Model != service.createResp.Model {
+		t.Fatalf("expected response model %q, got %q", service.createResp.Model, recBody.Model)
 	}
 }
 
@@ -310,7 +319,7 @@ func TestRouterV1ChatCompletionPreservesExplicitZeroTemperature(t *testing.T) {
 		},
 	}
 	service := &fakeChatCompletionService{
-		resp: &ChatCompletionResponse{
+		createResp: &ChatCompletionResponse{
 			Object: "chat.completion",
 			Model:  "openai/gpt-4.1",
 			Choices: []ChatCompletionChoice{
@@ -351,7 +360,7 @@ func TestRouterV1ChatCompletionPreservesExplicitZeroTemperature(t *testing.T) {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
 	}
 
-	if !service.called {
+	if !service.createCalled {
 		t.Fatal("expected chat completion service to be called")
 	}
 
@@ -428,7 +437,7 @@ func assertChatCompletionInvalidRequest(t *testing.T, reqBody ChatCompletionRequ
 		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, rec.Code)
 	}
 
-	if service.called {
+	if service.createCalled {
 		t.Fatal("expected chat completion service not to be called")
 	}
 
@@ -575,6 +584,27 @@ func TestChatCompletionMissingMessagesReturnsOpenAIError(t *testing.T) {
 }
 
 func TestRouterV1ChatCompletionWithStreamTrueWritesSSE(t *testing.T) {
+	service := &fakeChatCompletionService{
+		streamResp: []ChatCompletionStreamResponse{
+			{
+				ID:      "chatcmpl_stream_test",
+				Object:  "chat.completion.chunk",
+				Created: 123,
+				Model:   "openai/gpt-4.1",
+				Choices: []ChatCompletionStreamChoice{
+					{
+						Index: 0,
+						Delta: ChatCompletionStreamDelta{
+							Role:    "assistant",
+							Content: "mock response",
+						},
+						FinishReason: nil,
+					},
+				},
+			},
+		},
+	}
+
 	// 构造带认证的 router。
 	router := newTestRouter(&fakeAPIKeyAuthenticator{
 		principal: &auth.APIKeyPrincipal{
@@ -582,7 +612,7 @@ func TestRouterV1ChatCompletionWithStreamTrueWritesSSE(t *testing.T) {
 			ProjectID: 1,
 			KeyPrefix: "unio_sk_test",
 		},
-	}, nil, nil)
+	}, service, nil)
 
 	// 发送 stream=true 的 chat completions 请求。
 	stream := true
@@ -634,5 +664,33 @@ func TestRouterV1ChatCompletionWithStreamTrueWritesSSE(t *testing.T) {
 	// 断言 body 包含 data: [DONE]。
 	if !strings.Contains(gotBody, "data: [DONE]") {
 		t.Fatalf("expected body to contain %q, got %q", "data: [DONE]", gotBody)
+	}
+
+	if !service.streamCalled {
+		t.Fatal("expected stream service to be called")
+	}
+
+	if service.createCalled {
+		t.Fatal("expected create service not to be called")
+	}
+
+	if service.req.Model != "openai/gpt-4.1" {
+		t.Fatalf("expected model %q, got %q", "openai/gpt-4.1", service.req.Model)
+	}
+
+	if service.req.Stream == nil || !*service.req.Stream {
+		t.Fatal("expected stream to be true")
+	}
+
+	if len(service.req.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(service.req.Messages))
+	}
+
+	if service.req.Messages[0].Role != "user" {
+		t.Fatalf("expected message role %q, got %q", "user", service.req.Messages[0].Role)
+	}
+
+	if service.req.Messages[0].Content != "Hello" {
+		t.Fatalf("expected message content %q, got %q", "Hello", service.req.Messages[0].Content)
 	}
 }

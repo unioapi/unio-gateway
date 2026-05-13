@@ -61,3 +61,28 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ht
 		},
 	}, nil
 }
+
+// StreamChatCompletion 返回临时流式 chunk，并转换为 HTTP stream DTO。
+func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req httpapi.ChatCompletionRequest) ([]httpapi.ChatCompletionStreamResponse, error) {
+	// TODO(阶段5/production): 当前仍返回临时 mock stream chunk；接入 adapter stream 后改为逐段转换上游 chunk。
+	now := time.Now().Unix()
+
+	return []httpapi.ChatCompletionStreamResponse{
+		{
+			ID:      "chatcmpl_mock",
+			Object:  "chat.completion.chunk",
+			Created: now,
+			Model:   req.Model,
+			Choices: []httpapi.ChatCompletionStreamChoice{
+				{
+					Index: 0,
+					Delta: httpapi.ChatCompletionStreamDelta{
+						Role:    "assistant",
+						Content: "mock response",
+					},
+					FinishReason: nil,
+				},
+			},
+		},
+	}, nil
+}

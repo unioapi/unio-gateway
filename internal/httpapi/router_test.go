@@ -70,6 +70,28 @@ func (s *routerTestChatCompletionService) CreateChatCompletion(ctx context.Conte
 	}, nil
 }
 
+// StreamChatCompletion 返回固定流式响应，避免 router 测试依赖 gateway/adapter 组合。
+func (s *routerTestChatCompletionService) StreamChatCompletion(ctx context.Context, req ChatCompletionRequest) ([]ChatCompletionStreamResponse, error) {
+	return []ChatCompletionStreamResponse{
+		{
+			ID:      "chatcmpl_mock",
+			Object:  "chat.completion.chunk",
+			Created: time.Now().Unix(),
+			Model:   req.Model,
+			Choices: []ChatCompletionStreamChoice{
+				{
+					Index: 0,
+					Delta: ChatCompletionStreamDelta{
+						Role:    "assistant",
+						Content: "mock response",
+					},
+					FinishReason: nil,
+				},
+			},
+		},
+	}, nil
+}
+
 // newTestRouter 创建带默认测试依赖的 router。
 func newTestRouter(authenticator middleware.APIKeyAuthenticator, chatService ChatCompletionService, limiter middleware.RateLimiter) http.Handler {
 	if chatService == nil {

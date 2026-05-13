@@ -134,3 +134,63 @@ func TestChatCompletionServiceCreateChatCompletionCallsAdapter(t *testing.T) {
 		t.Fatalf("expected total_tokens %d, got %d", 21, got.Usage.TotalTokens)
 	}
 }
+
+func TestChatCompletionServiceStreamChatCompletionReturnsMockChunk(t *testing.T) {
+	fakeAdapter := &fakeChatAdapter{}
+	selectedChannel := channel.Runtime{
+		ID:      123,
+		BaseURL: "https://example.test/v1",
+		APIKey:  "test-secret",
+		Timeout: 30 * time.Second,
+	}
+
+	service := NewChatCompletionService(fakeAdapter, selectedChannel)
+
+	req := httpapi.ChatCompletionRequest{
+		Model:    "openai/gpt-4.1",
+		Messages: []httpapi.ChatMessage{{Role: "user", Content: "hello"}},
+	}
+
+	chunks, err := service.StreamChatCompletion(context.Background(), req)
+	if err != nil {
+		t.Fatalf("StreamChatCompletion returned err: %v", err)
+	}
+
+	if len(chunks) != 1 {
+		t.Fatalf("expected 1 chunk, got %d", len(chunks))
+	}
+
+	chunk := chunks[0]
+
+	if chunk.ID != "chatcmpl_mock" {
+		t.Fatalf("expected ID %q, got %q", "chatcmpl_mock", chunk.ID)
+	}
+
+	if chunk.Object != "chat.completion.chunk" {
+		t.Fatalf("expected object %q, got %q", "chat.completion.chunk", chunk.Object)
+	}
+
+	if chunk.Model != "openai/gpt-4.1" {
+		t.Fatalf("expected model %q, got %q", "openai/gpt-4.1", chunk.Model)
+	}
+
+	if len(chunk.Choices) != 1 {
+		t.Fatalf("expected 1 choice, got %d", len(chunk.Choices))
+	}
+
+	if chunk.Choices[0].Index != 0 {
+		t.Fatalf("expected index %d, got %d", 0, chunk.Choices[0].Index)
+	}
+
+	if chunk.Choices[0].Delta.Role != "assistant" {
+		t.Fatalf("expected role %s, got %s", "assistant", chunk.Choices[0].Delta.Role)
+	}
+
+	if chunk.Choices[0].Delta.Content != "mock response" {
+		t.Fatalf("expected content %s, got %s", "mock response", chunk.Choices[0].Delta.Content)
+	}
+
+	if chunk.Choices[0].FinishReason != nil {
+		t.Fatalf("expected finish reason nil, got %q", *chunk.Choices[0].FinishReason)
+	}
+}

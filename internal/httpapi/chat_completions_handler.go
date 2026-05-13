@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"time"
 
 	"github.com/ThankCat/unio-api/internal/httpx"
 )
@@ -12,6 +11,7 @@ import (
 // ChatCompletionService 定义 chat completions handler 依赖的业务能力。
 type ChatCompletionService interface {
 	CreateChatCompletion(ctx context.Context, req ChatCompletionRequest) (*ChatCompletionResponse, error)
+	StreamChatCompletion(ctx context.Context, req ChatCompletionRequest) ([]ChatCompletionStreamResponse, error)
 }
 
 // chatCompletionsHandler 处理 OpenAI-compatible chat completions 请求。
@@ -90,7 +90,25 @@ func (h *chatCompletionsHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 
 	if req.Stream != nil && *req.Stream {
 		// TODO(阶段5/production): stream=true 必须走 gateway -> adapter 流式接口，不能由 handler 伪造响应。
-		h.writeMockStream(w, req)
+		chunks, err := h.service.StreamChatCompletion(r.Context(), req)
+		if err != nil {
+			_ = httpx.WriteError(w, http.StatusInternalServerError, "stream_chat_completion_error", err.Error())
+			return
+		}
+
+		for _, chunk := range chunks {
+			payload, err := json.Marshal(chunk)
+			if err != nil {
+				_ = httpx.WriteError(w, http.StatusInternalServerError, "stream_chat_completion_error", err.Error())
+				return
+			}
+
+			if err := httpx.WriteSSE(w, payload); err != nil {
+				return
+			}
+		}
+
+		_ = httpx.WriteSSE(w, []byte("[DONE]"))
 		return
 	}
 
@@ -114,46 +132,4 @@ func (h *chatCompletionsHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 // stringPtr 返回字符串指针，用于构造 optional 字段。
 func stringPtr(v string) *string {
 	return &v
-}
-
-// writeMockStream 写出 OpenAI-compatible SSE 占位流。
-// TODO(阶段5/production): 接入真实 adapter stream 后删除该 mock chunk 逻辑，由 gateway/adapter 逐段写出 SSE。
-func (h *chatCompletionsHandler) writeMockStream(w http.ResponseWriter, req ChatCompletionRequest) {
-	now := time.Now().Unix()
-
-	chunk := ChatCompletionStreamResponse{
-		ID:      "chatcmpl_mock",
-		Object:  "chat.completion.chunk",
-		Created: now,
-		Model:   req.Model,
-		Choices: []ChatCompletionStreamChoice{
-			{
-				Index: 0,
-				Delta: ChatCompletionStreamDelta{
-					Role:    "assistant",
-					Content: "mock response",
-				},
-				FinishReason: nil,
-			},
-		},
-	}
-
-	payload, err := json.Marshal(chunk)
-	if err != nil {
-		_ = httpx.WriteOpenAIError(
-			w,
-			http.StatusInternalServerError,
-			"internal_error",
-			"encode stream chunk failed",
-			"api_error",
-			nil,
-		)
-		return
-	}
-
-	if err := httpx.WriteSSE(w, payload); err != nil {
-		return
-	}
-
-	_ = httpx.WriteSSE(w, []byte("[DONE]"))
 }
