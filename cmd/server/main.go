@@ -10,14 +10,17 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/adapter/mock"
+	"github.com/ThankCat/unio-api/internal/adapter"
+	"github.com/ThankCat/unio-api/internal/adapter/openai"
 	"github.com/ThankCat/unio-api/internal/auth"
-	"github.com/ThankCat/unio-api/internal/channel"
 	"github.com/ThankCat/unio-api/internal/config"
+	"github.com/ThankCat/unio-api/internal/credential"
 	"github.com/ThankCat/unio-api/internal/gateway"
 	"github.com/ThankCat/unio-api/internal/httpapi"
+	"github.com/ThankCat/unio-api/internal/modelcatalog"
 	"github.com/ThankCat/unio-api/internal/ratelimit"
 	"github.com/ThankCat/unio-api/internal/redis"
+	"github.com/ThankCat/unio-api/internal/routing"
 	"github.com/ThankCat/unio-api/internal/store"
 	"github.com/ThankCat/unio-api/internal/store/sqlc"
 )
@@ -57,8 +60,26 @@ func main() {
 	defer redisClient.Close()
 	logger.Info("redis connected", "addr", cfg.Redis.Addr, "db", cfg.Redis.DB)
 
+	// TODO(阶段6/production): main 函数直接装配 credential、routing、adapter registry 和 gateway 会让启动逻辑膨胀；阶段 6 收口或进入后台管理装配前；抽出 server bootstrap/app wiring 组件，保持 main 只负责配置、生命周期和退出信号。
 	queries := sqlc.New(pgPool)
 	apiKeyAuthenticator := auth.NewAPIKeyAuthenticator(queries)
+	modelCatalogService := modelcatalog.NewService(queries)
+	credentialResolver := credential.NewStaticResolver(map[string]string{})
+
+	chatRouter := routing.NewRouter(queries, credentialResolver, 30*time.Second)
+	openaiAdapter := openai.NewAdapter(http.DefaultClient)
+	// TODO(阶段6/production): provider.adapter 缺少启动/后台写入校验会导致运行时 registry miss；开放后台管理或启用真实 channel 前；在 provider 写入和启动 preflight 中校验 adapter key 必须存在于 adapter registry。
+	adapterRegistry, err := adapter.NewRegistry(adapter.Registration{
+		Key:        "openai",
+		Chat:       openaiAdapter,
+		StreamChat: openaiAdapter,
+	})
+	if err != nil {
+		logger.Error("openai adapter failed", "error", err)
+		os.Exit(1)
+	}
+
+	chatCompletionService := gateway.NewChatCompletionService(chatRouter, adapterRegistry, nil)
 
 	rateLimitStore := ratelimit.NewRedisStore(redisClient)
 	rateLimiter := ratelimit.NewLimiter(rateLimitStore)
@@ -72,12 +93,8 @@ func main() {
 		RateLimitLimit:  60,
 		RateLimitWindow: time.Minute,
 
-		// TODO(阶段6/production): mock adapter/runtime channel 会让生产请求依赖硬编码上游；接入 model catalog 和 routing 时；替换为从数据库 channel 业务数据生成运行时参数。
-		ChatCompletionService: gateway.NewChatCompletionService(mock.NewChatAdapter(), channel.Runtime{
-			ID:      0,
-			BaseURL: "mock://provider",
-			Timeout: 30 * time.Second,
-		}),
+		ChatCompletionService: chatCompletionService,
+		ModelCatalogService:   modelCatalogService,
 	})
 
 	server := &http.Server{

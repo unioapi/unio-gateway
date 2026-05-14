@@ -13,6 +13,7 @@ import (
 	"github.com/ThankCat/unio-api/internal/auth"
 	"github.com/ThankCat/unio-api/internal/httpx"
 	"github.com/ThankCat/unio-api/internal/middleware"
+	"github.com/ThankCat/unio-api/internal/modelcatalog"
 	"github.com/ThankCat/unio-api/internal/ratelimit"
 )
 
@@ -36,6 +37,21 @@ type routerTestRateLimiter struct {
 	window   time.Duration
 	decision ratelimit.Decision
 	err      error
+}
+
+// routerTestModelCatalogService 是 router 测试使用的模型目录 service 替身。
+type routerTestModelCatalogService struct {
+	called    bool
+	projectID int64
+	models    []modelcatalog.Model
+	err       error
+}
+
+// ListAvailableModels 记录收到的 project id，并返回测试预设的模型列表。
+func (s *routerTestModelCatalogService) ListAvailableModels(ctx context.Context, projectID int64) ([]modelcatalog.Model, error) {
+	s.called = true
+	s.projectID = projectID
+	return s.models, s.err
 }
 
 // Allow 记录收到的限流参数，并返回测试预设的限流判断结果。
@@ -91,13 +107,18 @@ func (s *routerTestChatCompletionService) StreamChatCompletion(ctx context.Conte
 }
 
 // newTestRouter 创建带默认测试依赖的 router。
-func newTestRouter(authenticator middleware.APIKeyAuthenticator, chatService ChatCompletionService, limiter middleware.RateLimiter) http.Handler {
+func newTestRouter(authenticator middleware.APIKeyAuthenticator, chatService ChatCompletionService, limiter middleware.RateLimiter, modelCatalogServices ...ModelCatalogService) http.Handler {
 	if chatService == nil {
 		chatService = &routerTestChatCompletionService{}
 	}
 
 	if limiter == nil {
 		limiter = newAllowingRateLimiter()
+	}
+
+	modelCatalogService := ModelCatalogService(&routerTestModelCatalogService{})
+	if len(modelCatalogServices) > 0 && modelCatalogServices[0] != nil {
+		modelCatalogService = modelCatalogServices[0]
 	}
 
 	return NewRouter(RouterDeps{
@@ -107,6 +128,7 @@ func newTestRouter(authenticator middleware.APIKeyAuthenticator, chatService Cha
 		RateLimitLimit:        60,
 		RateLimitWindow:       time.Minute,
 		ChatCompletionService: chatService,
+		ModelCatalogService:   modelCatalogService,
 	})
 }
 

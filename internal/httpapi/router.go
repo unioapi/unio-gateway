@@ -19,6 +19,7 @@ type RouterDeps struct {
 	RateLimiter           middleware.RateLimiter
 	RateLimitLimit        int64
 	RateLimitWindow       time.Duration
+	ModelCatalogService   ModelCatalogService
 }
 
 // NewRouter 创建 API server 使用的 HTTP handler。
@@ -56,7 +57,10 @@ func NewRouter(deps RouterDeps) http.Handler {
 		r.Use(middleware.APIKeyAuth(deps.APIKeyAuthenticator))
 		r.Use(middleware.RateLimit(deps.RateLimiter, deps.RateLimitLimit, deps.RateLimitWindow))
 
-		r.Get("/models", handleModels)
+		modelsHandler := &modelsHandler{
+			service: deps.ModelCatalogService,
+		}
+		r.Get("/models", modelsHandler.handleModels)
 
 		chatHandler := &chatCompletionsHandler{
 			service: deps.ChatCompletionService,

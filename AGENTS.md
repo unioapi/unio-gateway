@@ -48,6 +48,15 @@ Unio API 是商业化多 provider / 多 channel / 可后台管理 / 可 fallback
 - 临时 mock、fake、硬编码默认值必须加 production TODO，说明未来替换成数据库、routing、adapter 或 billing 的哪一部分。
 - 不照搬 new-api 的 Gin context 和大而全 adaptor 接口；Unio 按能力拆分 `ChatAdapter`、`StreamChatAdapter`、`EmbeddingAdapter` 等小接口，避免 framework context 泄漏到 adapter。
 
+credential_ref 落地方案：
+
+- `channels.credential_ref` 只保存凭据引用，不作为长期明文 API key 字段使用。
+- 第六阶段可以用开发期 `credential.StaticResolver` 占位，但必须保留 production TODO；真实生产请求不能依赖空 map、硬编码 key 或正式 provider env。
+- 正式形态应由 `credential.Resolver` 根据 `credential_ref` 读取密文记录、secret manager 路径或 KMS/master key 加密数据，并解析出上游调用所需的明文 credential。
+- `routing` 在构造 `channel.Runtime` 时调用 `credential.Resolver`，把解析后的 credential 放入运行时参数；adapter 只接收 `channel.Runtime`，不得知道 credential 的存储、解密或轮换方式。
+- 生产级 credential resolver 默认在第 9 阶段前置小节完成，因为它依赖后台 channel 管理、凭据录入、轮换和审计入口。
+- 当开始真实上游联调、后台 channel 管理、凭据轮换或生产部署准备时，必须先实现正式 credential resolver 或明确的开发 seed/playground 方案，不能把 `OPENAI_API_KEY` 等 provider 业务凭据扩展成正式 config/env 来源。
+
 ## 阶段开始前生产级自检清单
 
 每次进入新章节前，必须先按生产上线系统视角做全盘复盘，而不是只跟随用户举的例子。
@@ -329,6 +338,13 @@ POST /v1/chat/completions
 - 允许同模型 fallback。
 - 默认不做静默跨模型 fallback。
 
+错误响应策略：
+
+- OpenAI-compatible endpoint 应返回 OpenAI-compatible 错误结构，但不能无脑透传上游错误 body。
+- 第六阶段先使用安全、稳定的用户可见错误文案；上游原始错误、状态码、request id、provider/channel 信息只进入内部日志或后续 request record。
+- 上游 `401/403`、adapter key 不存在、channel credential 错误、base URL 错误等属于平台配置或上游账号问题，不能让用户误以为自己的 API key 或请求一定有错。
+- 后续进入 provider error classification 时，再由 adapter 解析上游错误为结构化错误，gateway 决定 fallback，HTTP 层负责映射成安全的 OpenAI-compatible error。
+
 可能的模型 ID 格式：
 
 ```text
@@ -538,6 +554,7 @@ Adapter 层命名原则：
 - 优先选择实用、可维护方案，可以抽象但不追求炫技的抽象。
 - 控制范围，不要一次扩太大。
 - 如果某个能力的生产级最终形态已经明确，必须先讲清楚最终形态和边界，再拆小步实现；不能为了教学方便先设计一个马上会被推翻的中间接口。
+- 进入生产代码实现时，必须遵循“先边界接口、再具体实现、最后装配”的顺序；不能为了快速跑通而先在某个文件里堆实现，再倒推接口和边界。
 - 对 stream、billing、routing、fallback、usage、ledger 这类核心能力，必须先定正确生产边界，再分步落地；临时过渡只能用于不可避免的外部依赖缺口，并且必须说明为什么临时、何时删除、未来替换成什么。
 - 小课可以拆实现步骤，但不能让用户为错误路线或教学型临时方案重复返工；如果发现当前路线会被生产形态推翻，必须立刻暂停并重新设计。
 - 教学实现顺序默认是：先完成可运行的完整行为，再由你在模块或章节收口时补测试验证行为；不要每个小节都补测试，不要用 TDD 红灯测试驱动用户，也不要要求用户先写一个必然编译失败的测试。
@@ -679,9 +696,11 @@ Adapter 层命名原则：
 - audit logs
 - logs / metrics / traces 必须能按 project、model、provider、channel 聚合，同时脱敏 API key 和上游凭据。
 - retry、circuit breaker、fallback 必须围绕 channel health 和 provider error classification 设计。
+- provider error classification 需要覆盖上游 OpenAI-compatible error 解析，但用户响应必须经过安全映射，不能直接暴露上游原始错误 body。
 
 阶段 9：后台管理
 
+- 阶段 9 前置：上游凭据存储与解析，包括 `credential_ref` 指向、密文存储或 secret manager 路径、KMS/master key 解密、凭据轮换和审计边界。
 - admin auth
 - JWT
 - user management

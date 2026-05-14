@@ -2,29 +2,57 @@ package gateway
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/ThankCat/unio-api/internal/adapter"
-	"github.com/ThankCat/unio-api/internal/channel"
+	"github.com/ThankCat/unio-api/internal/auth"
 	"github.com/ThankCat/unio-api/internal/httpapi"
+	"github.com/ThankCat/unio-api/internal/routing"
 )
 
-// chatAdapter 是 ChatCompletionService 当前需要的 adapter 能力集合。
-type chatAdapter interface {
-	adapter.ChatAdapter
-	adapter.StreamChatAdapter
+// ChatRouter 定义 gateway 生成 chat route plan 所需的 routing 能力。
+type ChatRouter interface {
+	PlanChat(ctx context.Context, req routing.ChatRouteRequest) (routing.ChatRoutePlan, error)
+}
+
+// AdapterRegistry 定义 gateway 根据 adapter key 查找 adapter 的能力。
+type AdapterRegistry interface {
+	Chat(adapterKey string) (adapter.ChatAdapter, bool)
+	StreamChat(adapterKey string) (adapter.StreamChatAdapter, bool)
+}
+
+// RetryClassifier 定义 gateway 判断错误是否允许尝试下一个同模型 channel 的能力。
+type RetryClassifier interface {
+	IsRetryable(err error) bool
+}
+
+// NeverRetryClassifier 是保守的错误分类器，默认不重试任何错误。
+type NeverRetryClassifier struct{}
+
+// IsRetryable 始终返回 false，避免没有明确错误分类时误触发 fallback。
+func (NeverRetryClassifier) IsRetryable(err error) bool {
+	return false
 }
 
 // ChatCompletionService 把 HTTP 层请求转换为 adapter 请求。
 type ChatCompletionService struct {
-	// TODO(阶段6/production): 直接持有单一 runtime channel 会绕过 channel health 和同模型 fallback；实现 routing/channel selection 时；改为每次请求由 routing 选择 channel 后传给 adapter。
-	adapter chatAdapter
-	channel channel.Runtime
+	router          ChatRouter
+	registry        AdapterRegistry
+	retryClassifier RetryClassifier
 }
 
 // NewChatCompletionService 创建聊天补全 gateway service。
-func NewChatCompletionService(adapter chatAdapter, channel channel.Runtime) *ChatCompletionService {
-	return &ChatCompletionService{adapter: adapter, channel: channel}
+func NewChatCompletionService(router ChatRouter, registry AdapterRegistry, retryClassifier RetryClassifier) *ChatCompletionService {
+	if retryClassifier == nil {
+		retryClassifier = NeverRetryClassifier{}
+	}
+
+	return &ChatCompletionService{
+		router:          router,
+		registry:        registry,
+		retryClassifier: retryClassifier,
+	}
 }
 
 // CreateChatCompletion 调用 adapter 完成聊天补全，并转换为 HTTP 响应 DTO。
@@ -37,35 +65,67 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ht
 		})
 	}
 
-	adapterResp, err := s.adapter.ChatCompletions(ctx, s.channel, adapter.ChatRequest{
-		Model:    req.Model,
-		Messages: messages,
+	principal, ok := auth.APIKeyPrincipalFromContext(ctx)
+	if !ok {
+		return nil, auth.ErrMissingAPIKey
+	}
+
+	plan, err := s.router.PlanChat(ctx, routing.ChatRouteRequest{
+		ProjectID: principal.ProjectID,
+		ModelID:   req.Model,
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	return &httpapi.ChatCompletionResponse{
-		ID:      adapterResp.ID,
-		Object:  "chat.completion",
-		Created: time.Now().Unix(),
-		Model:   adapterResp.Model,
-		Choices: []httpapi.ChatCompletionChoice{
-			{
-				Index: 0,
-				Message: httpapi.ChatMessage{
-					Role:    "assistant",
-					Content: adapterResp.Content,
+	var lastErr error
+
+	for _, candidate := range plan.Candidates {
+		chatAdapter, ok := s.registry.Chat(candidate.AdapterKey)
+		if !ok {
+			return nil, fmt.Errorf("gateway: chat adapter %q not registered", candidate.AdapterKey)
+		}
+
+		adapterResp, err := chatAdapter.ChatCompletions(ctx, candidate.Channel, adapter.ChatRequest{
+			Model:    candidate.UpstreamModel,
+			Messages: messages,
+		})
+		if err != nil {
+			if !s.retryClassifier.IsRetryable(err) {
+				return nil, err
+			}
+			lastErr = err
+			continue
+		}
+
+		return &httpapi.ChatCompletionResponse{
+			ID:      adapterResp.ID,
+			Object:  "chat.completion",
+			Created: time.Now().Unix(),
+			Model:   req.Model,
+			Choices: []httpapi.ChatCompletionChoice{
+				{
+					Index: 0,
+					Message: httpapi.ChatMessage{
+						Role:    "assistant",
+						Content: adapterResp.Content,
+					},
+					FinishReason: "stop",
 				},
-				FinishReason: "stop",
 			},
-		},
-		Usage: httpapi.ChatCompletionUsage{
-			PromptTokens:     adapterResp.Usage.PromptTokens,
-			CompletionTokens: adapterResp.Usage.CompletionTokens,
-			TotalTokens:      adapterResp.Usage.TotalTokens,
-		},
-	}, nil
+			Usage: httpapi.ChatCompletionUsage{
+				PromptTokens:     adapterResp.Usage.PromptTokens,
+				CompletionTokens: adapterResp.Usage.CompletionTokens,
+				TotalTokens:      adapterResp.Usage.TotalTokens,
+			},
+		}, nil
+	}
+
+	if lastErr != nil {
+		return nil, lastErr
+	}
+
+	return nil, routing.ErrNoAvailableChannel
 }
 
 // StreamChatCompletion 调用 adapter 完成流式聊天补全，并转换为 HTTP stream DTO。
@@ -78,26 +138,71 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ht
 		})
 	}
 
-	return s.adapter.StreamChatCompletions(ctx, s.channel, adapter.ChatRequest{
-		Model:    req.Model,
-		Messages: messages,
-	}, func(chunk adapter.ChatStreamChunk) error {
-		httpChunk := httpapi.ChatCompletionStreamResponse{
-			ID:      chunk.ID,
-			Object:  "chat.completion.chunk",
-			Created: time.Now().Unix(),
-			Model:   chunk.Model,
-			Choices: []httpapi.ChatCompletionStreamChoice{
-				{
-					Index: 0,
-					Delta: httpapi.ChatCompletionStreamDelta{
-						Role:    chunk.Role,
-						Content: chunk.Content,
-					},
-					FinishReason: chunk.FinishReason,
-				},
-			},
-		}
-		return emit(httpChunk)
+	principal, ok := auth.APIKeyPrincipalFromContext(ctx)
+	if !ok {
+		return auth.ErrMissingAPIKey
+	}
+
+	plan, err := s.router.PlanChat(ctx, routing.ChatRouteRequest{
+		ProjectID: principal.ProjectID,
+		ModelID:   req.Model,
 	})
+	if err != nil {
+		return err
+	}
+
+	var lastErr error
+
+	for _, candidate := range plan.Candidates {
+		streamAdapter, ok := s.registry.StreamChat(candidate.AdapterKey)
+		if !ok {
+			return fmt.Errorf("gateway: stream chat adapter %q not registered", candidate.AdapterKey)
+		}
+
+		emitted := false
+
+		err := streamAdapter.StreamChatCompletions(ctx, candidate.Channel, adapter.ChatRequest{
+			Model:    candidate.UpstreamModel,
+			Messages: messages,
+		}, func(chunk adapter.ChatStreamChunk) error {
+			emitted = true
+			return emit(httpapi.ChatCompletionStreamResponse{
+				ID:      chunk.ID,
+				Object:  "chat.completion.chunk",
+				Created: time.Now().Unix(),
+				Model:   req.Model,
+				Choices: []httpapi.ChatCompletionStreamChoice{
+					{
+						Index: 0,
+						Delta: httpapi.ChatCompletionStreamDelta{
+							Role:    chunk.Role,
+							Content: chunk.Content,
+						},
+						FinishReason: chunk.FinishReason,
+					},
+				},
+			})
+		})
+
+		if err != nil {
+			if emitted {
+				return err
+			}
+
+			if !s.retryClassifier.IsRetryable(err) {
+				return err
+			}
+
+			lastErr = err
+			continue
+		}
+
+		return nil
+	}
+
+	if lastErr != nil {
+		return lastErr
+	}
+
+	return routing.ErrNoAvailableChannel
 }

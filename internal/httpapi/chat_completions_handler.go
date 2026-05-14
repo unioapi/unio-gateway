@@ -112,7 +112,14 @@ func (h *chatCompletionsHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 				return
 			}
 
-			_ = httpx.WriteError(w, http.StatusInternalServerError, "stream_chat_completion_error", err.Error())
+			_ = httpx.WriteOpenAIError(
+				w,
+				http.StatusInternalServerError,
+				"stream_chat_completion_error",
+				"stream chat completion failed",
+				"api_error",
+				nil,
+			)
 			return
 		}
 

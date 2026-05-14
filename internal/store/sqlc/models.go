@@ -22,10 +22,53 @@ type ApiKey struct {
 	UpdatedAt  pgtype.Timestamptz
 }
 
+type Channel struct {
+	ID            int64
+	ProviderID    int64
+	Name          string
+	BaseUrl       string
+	CredentialRef string
+	Status        string
+	Priority      int32
+	TimeoutMs     pgtype.Int4
+	CreatedAt     pgtype.Timestamptz
+	UpdatedAt     pgtype.Timestamptz
+}
+
+type ChannelModel struct {
+	ID            int64
+	ChannelID     int64
+	ModelID       int64
+	UpstreamModel string
+	Status        string
+	CreatedAt     pgtype.Timestamptz
+	UpdatedAt     pgtype.Timestamptz
+}
+
+type Model struct {
+	ID          int64
+	ModelID     string
+	DisplayName string
+	OwnedBy     string
+	Status      string
+	CreatedAt   pgtype.Timestamptz
+	UpdatedAt   pgtype.Timestamptz
+}
+
 type Project struct {
 	ID        int64
 	UserID    int64
 	Name      string
+	CreatedAt pgtype.Timestamptz
+	UpdatedAt pgtype.Timestamptz
+}
+
+type Provider struct {
+	ID        int64
+	Slug      string
+	Name      string
+	Adapter   string
+	Status    string
 	CreatedAt pgtype.Timestamptz
 	UpdatedAt pgtype.Timestamptz
 }

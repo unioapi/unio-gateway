@@ -3,12 +3,14 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/ThankCat/unio-api/internal/auth"
+	"github.com/ThankCat/unio-api/internal/modelcatalog"
 	"github.com/ThankCat/unio-api/internal/ratelimit"
 )
 
@@ -29,11 +31,19 @@ func TestRouterModelsRequiresAPIKey(t *testing.T) {
 	authenticator := &modelsTestAPIKeyAuthenticator{
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
-			ProjectID: 1,
+			ProjectID: 42,
 			KeyPrefix: "unio_sk_test",
 		},
 	}
-	handler := newTestRouter(authenticator, nil, nil)
+	modelCatalogService := &routerTestModelCatalogService{
+		models: []modelcatalog.Model{
+			{
+				ID:      "openai/gpt-4.1",
+				OwnedBy: "openai",
+			},
+		},
+	}
+	handler := newTestRouter(authenticator, nil, nil, modelCatalogService)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	rec := httptest.NewRecorder()
@@ -53,11 +63,19 @@ func TestRouterModelsSuccess(t *testing.T) {
 	authenticator := &modelsTestAPIKeyAuthenticator{
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
-			ProjectID: 1,
+			ProjectID: 42,
 			KeyPrefix: "unio_sk_test",
 		},
 	}
-	handler := newTestRouter(authenticator, nil, nil)
+	modelCatalogService := &routerTestModelCatalogService{
+		models: []modelcatalog.Model{
+			{
+				ID:      "openai/gpt-4.1",
+				OwnedBy: "openai",
+			},
+		},
+	}
+	handler := newTestRouter(authenticator, nil, nil, modelCatalogService)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	req.Header.Set("Authorization", "Bearer unio_sk_test")
@@ -75,7 +93,11 @@ func TestRouterModelsSuccess(t *testing.T) {
 
 	var body struct {
 		Object string `json:"object"`
-		Data   []any  `json:"data"`
+		Data   []struct {
+			ID      string `json:"id"`
+			Object  string `json:"object"`
+			OwnedBy string `json:"owned_by"`
+		} `json:"data"`
 	}
 	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 		t.Fatalf("decode response body: %v", err)
@@ -85,8 +107,64 @@ func TestRouterModelsSuccess(t *testing.T) {
 		t.Fatalf("expected object %q, got %q", "list", body.Object)
 	}
 
-	if len(body.Data) != 0 {
-		t.Fatalf("expected empty data, got %d items", len(body.Data))
+	if !modelCatalogService.called {
+		t.Fatal("expected model catalog service to be called")
+	}
+
+	if modelCatalogService.projectID != 42 {
+		t.Fatalf("expected project id %d, got %d", int64(42), modelCatalogService.projectID)
+	}
+
+	if len(body.Data) != 1 {
+		t.Fatalf("expected 1 model, got %d items", len(body.Data))
+	}
+
+	if body.Data[0].ID != "openai/gpt-4.1" {
+		t.Fatalf("expected model id %q, got %q", "openai/gpt-4.1", body.Data[0].ID)
+	}
+
+	if body.Data[0].Object != "model" {
+		t.Fatalf("expected model object %q, got %q", "model", body.Data[0].Object)
+	}
+
+	if body.Data[0].OwnedBy != "openai" {
+		t.Fatalf("expected owned_by %q, got %q", "openai", body.Data[0].OwnedBy)
+	}
+}
+
+func TestRouterModelsServiceError(t *testing.T) {
+	authenticator := &modelsTestAPIKeyAuthenticator{
+		principal: &auth.APIKeyPrincipal{
+			APIKeyID:  1,
+			ProjectID: 1,
+			KeyPrefix: "unio_sk_test",
+		},
+	}
+	handler := newTestRouter(authenticator, nil, nil, &routerTestModelCatalogService{
+		err: errors.New("database unavailable"),
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer unio_sk_test")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected status %d, got %d", http.StatusInternalServerError, rec.Code)
+	}
+
+	var body struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response body: %v", err)
+	}
+
+	if body.Error.Code != "internal_error" {
+		t.Fatalf("expected error code %q, got %q", "internal_error", body.Error.Code)
 	}
 }
 
