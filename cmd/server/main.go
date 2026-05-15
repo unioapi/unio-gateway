@@ -20,6 +20,7 @@ import (
 	"github.com/ThankCat/unio-api/internal/modelcatalog"
 	"github.com/ThankCat/unio-api/internal/ratelimit"
 	"github.com/ThankCat/unio-api/internal/redis"
+	"github.com/ThankCat/unio-api/internal/requestlog"
 	"github.com/ThankCat/unio-api/internal/routing"
 	"github.com/ThankCat/unio-api/internal/store"
 	"github.com/ThankCat/unio-api/internal/store/sqlc"
@@ -64,6 +65,7 @@ func main() {
 	queries := sqlc.New(pgPool)
 	apiKeyAuthenticator := auth.NewAPIKeyAuthenticator(queries)
 	modelCatalogService := modelcatalog.NewService(queries)
+	requestLogStore := requestlog.NewStore(queries)
 	credentialResolver := credential.NewStaticResolver(map[string]string{})
 
 	chatRouter := routing.NewRouter(queries, credentialResolver, 30*time.Second)
@@ -79,7 +81,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	chatCompletionService := gateway.NewChatCompletionService(chatRouter, adapterRegistry, nil)
+	chatCompletionService := gateway.NewChatCompletionService(chatRouter, adapterRegistry, nil, requestLogStore)
 
 	rateLimitStore := ratelimit.NewRedisStore(redisClient)
 	rateLimiter := ratelimit.NewLimiter(rateLimitStore)

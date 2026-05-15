@@ -93,6 +93,10 @@ func TestIdentityQueries(t *testing.T) {
 		t.Fatalf("expected project id %d, got %d", project.ID, gotKey.ProjectID)
 	}
 
+	if gotKey.UserID != user.ID {
+		t.Fatalf("expected user id %d, got %d", user.ID, gotKey.UserID)
+	}
+
 	if !apikey.Verify(key.Plaintext, gotKey.KeyHash) {
 		t.Fatal("expected plaintext key to verify against stored hash")
 	}

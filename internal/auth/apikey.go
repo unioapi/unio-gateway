@@ -27,13 +27,14 @@ var (
 // APIKeyPrincipal 表示 API Key 认证成功后的请求身份。
 type APIKeyPrincipal struct {
 	APIKeyID  int64
+	UserID    int64
 	ProjectID int64
 	KeyPrefix string
 }
 
 // APIKeyStore 定义 API Key 认证所需的存储查询和更新能力。
 type APIKeyStore interface {
-	GetAPIKeyByHash(ctx context.Context, keyHash string) (sqlc.ApiKey, error)
+	GetAPIKeyByHash(ctx context.Context, keyHash string) (sqlc.GetAPIKeyByHashRow, error)
 	UpdateAPIKeyLastUsedAt(ctx context.Context, arg sqlc.UpdateAPIKeyLastUsedAtParams) error
 }
 
@@ -91,6 +92,7 @@ func (a *APIKeyAuthenticator) AuthenticateAPIKey(ctx context.Context, plaintext 
 
 	return &APIKeyPrincipal{
 		APIKeyID:  key.ID,
+		UserID:    key.UserID,
 		ProjectID: key.ProjectID,
 		KeyPrefix: key.KeyPrefix,
 	}, nil

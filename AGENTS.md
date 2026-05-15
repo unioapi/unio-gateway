@@ -8,6 +8,7 @@
 - 开始新章节前必须判断当前阶段相关 TODO 是否需要先实现；不能只根据用户举例局部复盘，必须按生产上线系统全盘检查。
 - TODO 必须区分生产欠账和教学说明；已完成测试不保留 TODO。
 - 代码里的 TODO 只标记当前阶段、已完成阶段欠账、下一阶段直接相关的内容；阶段 6 以后这类远期能力先留在路线和自检清单里，进入对应阶段前再落到代码 TODO，避免当前章节被远期噪音淹没。
+- 如果协作过程中发现必须记录的生产欠账，AI 可以直接补充符合格式的 production TODO，不需要再次询问用户；但 TODO 仍必须说明风险、触发时机和未来替换方向。
 - 如果设计专业术语必须在后面添加说明, 例如: 这课目标不是接真实 provider(xxxx)
 - 默认不要每个小节都补单元测试；优先在一个大模块、一个章节或一个稳定行为闭环完成后，再统一补测试。
 - 用户已授权：以后测试代码统一由你直接编写、运行和修复；不要再要求用户亲手写测试。
@@ -332,7 +333,12 @@ POST /v1/chat/completions
 模型策略：
 
 - MVP 不强制做隐藏别名。
-- 优先使用透明模型 ID。
+- 默认对外暴露真实上游模型名，不强制添加 provider 前缀，例如 `deepseek-v4-pro`、`gpt-4.1`。
+- `models.owned_by` 用于表达默认 provider / 模型归属，例如 `deepseek`、`openai`。
+- `channel_models.upstream_model` 用于表达实际转发给上游的模型名；它可以等于对外 `models.model_id`，也可以不同。
+- `models.model_id` 必须被当作 opaque string（不透明字符串）处理，不允许代码假设其中包含 `/` 或 provider 前缀。
+- 只有模型名冲突、同名多 provider、或用户明确需要强制 provider 时，才使用 `provider/model` 这类带前缀模型 ID。
+- 后续进入 model alias（模型别名）/ provider constraint（指定 provider 路由约束）能力时，再引入 `model_aliases` 或路由约束，不在第七阶段为此扩表。
 - 用户应该知道自己正在使用哪个真实模型。
 - 有些用户明确希望使用国外模型。
 - 允许同模型 fallback。
@@ -345,7 +351,7 @@ POST /v1/chat/completions
 - 上游 `401/403`、adapter key 不存在、channel credential 错误、base URL 错误等属于平台配置或上游账号问题，不能让用户误以为自己的 API key 或请求一定有错。
 - 后续进入 provider error classification 时，再由 adapter 解析上游错误为结构化错误，gateway 决定 fallback，HTTP 层负责映射成安全的 OpenAI-compatible error。
 
-可能的模型 ID 格式：
+可选的 provider 前缀模型 ID 格式：
 
 ```text
 openai/gpt-4.1

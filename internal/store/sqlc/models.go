@@ -73,10 +73,61 @@ type Provider struct {
 	UpdatedAt pgtype.Timestamptz
 }
 
+type RequestAttempt struct {
+	ID                    int64
+	RequestRecordID       int64
+	AttemptIndex          int32
+	ProviderID            int64
+	ChannelID             int64
+	AdapterKey            string
+	UpstreamModel         string
+	UpstreamResponseModel pgtype.Text
+	Status                string
+	UpstreamStatusCode    pgtype.Int4
+	UpstreamRequestID     pgtype.Text
+	ErrorCode             pgtype.Text
+	ErrorMessage          pgtype.Text
+	StartedAt             pgtype.Timestamptz
+	CompletedAt           pgtype.Timestamptz
+	CreatedAt             pgtype.Timestamptz
+}
+
+type RequestRecord struct {
+	ID               int64
+	RequestID        string
+	UserID           int64
+	ProjectID        int64
+	ApiKeyID         int64
+	RequestedModelID string
+	ResponseModelID  pgtype.Text
+	Stream           bool
+	Status           string
+	FinalProviderID  pgtype.Int8
+	FinalChannelID   pgtype.Int8
+	ErrorCode        pgtype.Text
+	ErrorMessage     pgtype.Text
+	StartedAt        pgtype.Timestamptz
+	CompletedAt      pgtype.Timestamptz
+	CreatedAt        pgtype.Timestamptz
+	UpdatedAt        pgtype.Timestamptz
+}
+
 type SchemaHealthCheck struct {
 	ID        int64
 	Name      string
 	CreatedAt pgtype.Timestamptz
+}
+
+type UsageRecord struct {
+	ID               int64
+	RequestRecordID  int64
+	PromptTokens     int64
+	CompletionTokens int64
+	TotalTokens      int64
+	CachedTokens     int64
+	ReasoningTokens  int64
+	Source           string
+	CreatedAt        pgtype.Timestamptz
 }
 
 type User struct {

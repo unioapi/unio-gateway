@@ -41,6 +41,7 @@ func TestRouterPlanChatReturnsOrderedCandidates(t *testing.T) {
 		rows: []sqlc.FindRouteCandidatesRow{
 			{
 				RequestedModelID: "openai/gpt-4.1",
+				ProviderID:       11,
 				AdapterKey:       "openai",
 				ChannelID:        123,
 				BaseUrl:          "https://api.openai.example/v1",
@@ -50,6 +51,7 @@ func TestRouterPlanChatReturnsOrderedCandidates(t *testing.T) {
 			},
 			{
 				RequestedModelID: "openai/gpt-4.1",
+				ProviderID:       11,
 				AdapterKey:       "openai",
 				ChannelID:        456,
 				BaseUrl:          "https://backup.openai.example/v1",
@@ -94,6 +96,9 @@ func TestRouterPlanChatReturnsOrderedCandidates(t *testing.T) {
 	}
 
 	first := got.Candidates[0]
+	if first.ProviderID != 11 {
+		t.Fatalf("expected provider id %d, got %d", int64(11), first.ProviderID)
+	}
 	if first.AdapterKey != "openai" {
 		t.Fatalf("expected adapter key %q, got %q", "openai", first.AdapterKey)
 	}

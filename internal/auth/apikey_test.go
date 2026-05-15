@@ -13,7 +13,7 @@ import (
 
 // fakeAPIKeyStore 是认证测试使用的存储替身，用来避免连接真实数据库。
 type fakeAPIKeyStore struct {
-	key        sqlc.ApiKey
+	key        sqlc.GetAPIKeyByHashRow
 	err        error
 	updatedArg sqlc.UpdateAPIKeyLastUsedAtParams
 	updated    bool
@@ -21,7 +21,7 @@ type fakeAPIKeyStore struct {
 }
 
 // GetAPIKeyByHash 返回测试预设的 API Key 记录或错误。
-func (s *fakeAPIKeyStore) GetAPIKeyByHash(ctx context.Context, keyHash string) (sqlc.ApiKey, error) {
+func (s *fakeAPIKeyStore) GetAPIKeyByHash(ctx context.Context, keyHash string) (sqlc.GetAPIKeyByHashRow, error) {
 	return s.key, s.err
 }
 
@@ -33,9 +33,10 @@ func (s *fakeAPIKeyStore) UpdateAPIKeyLastUsedAt(ctx context.Context, arg sqlc.U
 }
 
 // validAPIKey 返回一条默认有效的测试 API Key 记录。
-func validAPIKey() sqlc.ApiKey {
-	return sqlc.ApiKey{
+func validAPIKey() sqlc.GetAPIKeyByHashRow {
+	return sqlc.GetAPIKeyByHashRow{
 		ID:        1,
+		UserID:    10,
 		ProjectID: 100,
 		KeyPrefix: "unio_sk_test",
 	}
@@ -120,6 +121,9 @@ func TestAuthenticateAPIKeyValid(t *testing.T) {
 	}
 	if principal.APIKeyID != key.ID {
 		t.Fatalf("expected api key id %d, got %d", key.ID, principal.APIKeyID)
+	}
+	if principal.UserID != key.UserID {
+		t.Fatalf("expected user id %d, got %d", key.UserID, principal.UserID)
 	}
 	if principal.KeyPrefix != key.KeyPrefix {
 		t.Fatalf("expected key prefix %q, got %q", key.KeyPrefix, principal.KeyPrefix)

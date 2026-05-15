@@ -1,0 +1,275 @@
+package requestlog
+
+import (
+	"context"
+	"time"
+
+	"github.com/ThankCat/unio-api/internal/store/sqlc"
+	"github.com/jackc/pgx/v5/pgtype"
+)
+
+// Store 使用 sqlc 查询实现 request log 写入能力。
+type Store struct {
+	queries *sqlc.Queries
+}
+
+// NewStore 创建 request log store。
+func NewStore(queries *sqlc.Queries) *Store {
+	return &Store{queries: queries}
+}
+
+// CreateRequest 创建一条 pending request record。
+func (s *Store) CreateRequest(ctx context.Context, params CreateRequestParams) (RequestRecord, error) {
+	row, err := s.queries.CreateRequestRecord(ctx, sqlc.CreateRequestRecordParams{
+		RequestID:        params.RequestID,
+		UserID:           params.UserID,
+		ProjectID:        params.ProjectID,
+		ApiKeyID:         params.APIKeyID,
+		RequestedModelID: params.RequestedModelID,
+		ResponseModelID:  pgtype.Text{Valid: false},
+		Stream:           params.Stream,
+		Status:           string(RequestStatusPending),
+		FinalProviderID:  pgtype.Int8{Valid: false},
+		FinalChannelID:   pgtype.Int8{Valid: false},
+		ErrorCode:        pgtype.Text{Valid: false},
+		ErrorMessage:     pgtype.Text{Valid: false},
+		StartedAt:        timestamptz(params.StartedAt),
+		CompletedAt:      pgtype.Timestamptz{Valid: false},
+	})
+	if err != nil {
+		return RequestRecord{}, err
+	}
+
+	return requestRecordFromSQLC(row), nil
+}
+
+// MarkRequestRunning 将 request record 标记为 running。
+func (s *Store) MarkRequestRunning(ctx context.Context, id int64) (RequestRecord, error) {
+	row, err := s.queries.MarkRequestRunning(ctx, id)
+	if err != nil {
+		return RequestRecord{}, err
+	}
+
+	return requestRecordFromSQLC(row), nil
+}
+
+// MarkRequestSucceeded 将 request record 标记为 succeeded。
+func (s *Store) MarkRequestSucceeded(ctx context.Context, params MarkRequestSucceededParams) (RequestRecord, error) {
+	row, err := s.queries.MarkRequestSucceeded(ctx, sqlc.MarkRequestSucceededParams{
+		ResponseModelID: pgtype.Text{String: params.ResponseModelID, Valid: true},
+		FinalProviderID: pgtype.Int8{Int64: params.FinalProviderID, Valid: true},
+		FinalChannelID:  pgtype.Int8{Int64: params.FinalChannelID, Valid: true},
+		CompletedAt:     timestamptz(params.CompletedAt),
+		ID:              params.ID,
+	})
+	if err != nil {
+		return RequestRecord{}, err
+	}
+
+	return requestRecordFromSQLC(row), nil
+}
+
+// MarkRequestFailed 将 request record 标记为 failed。
+func (s *Store) MarkRequestFailed(ctx context.Context, params MarkRequestFailedParams) (RequestRecord, error) {
+	row, err := s.queries.MarkRequestFailed(ctx, sqlc.MarkRequestFailedParams{
+		ErrorCode:    pgtype.Text{String: params.ErrorCode, Valid: true},
+		ErrorMessage: pgtype.Text{String: params.ErrorMessage, Valid: true},
+		CompletedAt:  timestamptz(params.CompletedAt),
+		ID:           params.ID,
+	})
+	if err != nil {
+		return RequestRecord{}, err
+	}
+
+	return requestRecordFromSQLC(row), nil
+}
+
+// MarkRequestCanceled 将 request record 标记为 canceled。
+func (s *Store) MarkRequestCanceled(ctx context.Context, params MarkRequestCanceledParams) (RequestRecord, error) {
+	row, err := s.queries.MarkRequestCanceled(ctx, sqlc.MarkRequestCanceledParams{
+		ErrorCode:    pgtype.Text{String: params.ErrorCode, Valid: true},
+		ErrorMessage: pgtype.Text{String: params.ErrorMessage, Valid: true},
+		CompletedAt:  timestamptz(params.CompletedAt),
+		ID:           params.ID,
+	})
+	if err != nil {
+		return RequestRecord{}, err
+	}
+
+	return requestRecordFromSQLC(row), nil
+}
+
+// CreateAttempt 创建一条 running request attempt。
+func (s *Store) CreateAttempt(ctx context.Context, params CreateAttemptParams) (AttemptRecord, error) {
+	row, err := s.queries.CreateRequestAttempt(ctx, sqlc.CreateRequestAttemptParams{
+		RequestRecordID:       params.RequestRecordID,
+		AttemptIndex:          int32(params.AttemptIndex),
+		ProviderID:            params.ProviderID,
+		ChannelID:             params.ChannelID,
+		AdapterKey:            params.AdapterKey,
+		UpstreamModel:         params.UpstreamModel,
+		UpstreamResponseModel: pgtype.Text{Valid: false},
+		Status:                string(AttemptStatusRunning),
+		UpstreamStatusCode:    pgtype.Int4{Valid: false},
+		UpstreamRequestID:     pgtype.Text{Valid: false},
+		ErrorCode:             pgtype.Text{Valid: false},
+		ErrorMessage:          pgtype.Text{Valid: false},
+		StartedAt:             timestamptz(params.StartedAt),
+		CompletedAt:           pgtype.Timestamptz{Valid: false},
+	})
+	if err != nil {
+		return AttemptRecord{}, err
+	}
+
+	return attemptRecordFromSQLC(row), nil
+}
+
+// MarkAttemptSucceeded 将 request attempt 标记为 succeeded。
+func (s *Store) MarkAttemptSucceeded(ctx context.Context, params MarkAttemptSucceededParams) (AttemptRecord, error) {
+	row, err := s.queries.MarkRequestAttemptSucceeded(ctx, sqlc.MarkRequestAttemptSucceededParams{
+		UpstreamResponseModel: pgtype.Text{String: params.UpstreamResponseModel, Valid: true},
+		UpstreamStatusCode:    pgtype.Int4{Int32: int32(params.UpstreamStatusCode), Valid: true},
+		UpstreamRequestID:     optionalText(params.UpstreamRequestID),
+		CompletedAt:           timestamptz(params.CompletedAt),
+		ID:                    params.ID,
+	})
+	if err != nil {
+		return AttemptRecord{}, err
+	}
+
+	return attemptRecordFromSQLC(row), nil
+}
+
+// MarkAttemptFailed 将 request attempt 标记为 failed。
+func (s *Store) MarkAttemptFailed(ctx context.Context, params MarkAttemptFailedParams) (AttemptRecord, error) {
+	row, err := s.queries.MarkRequestAttemptFailed(ctx, sqlc.MarkRequestAttemptFailedParams{
+		UpstreamStatusCode: optionalInt4(params.UpstreamStatusCode),
+		UpstreamRequestID:  optionalText(params.UpstreamRequestID),
+		ErrorCode:          pgtype.Text{String: params.ErrorCode, Valid: true},
+		ErrorMessage:       pgtype.Text{String: params.ErrorMessage, Valid: true},
+		CompletedAt:        timestamptz(params.CompletedAt),
+		ID:                 params.ID,
+	})
+	if err != nil {
+		return AttemptRecord{}, err
+	}
+
+	return attemptRecordFromSQLC(row), nil
+}
+
+// MarkAttemptCanceled 将 request attempt 标记为 canceled。
+func (s *Store) MarkAttemptCanceled(ctx context.Context, params MarkAttemptCanceledParams) (AttemptRecord, error) {
+	row, err := s.queries.MarkRequestAttemptCanceled(ctx, sqlc.MarkRequestAttemptCanceledParams{
+		ErrorCode:    pgtype.Text{String: params.ErrorCode, Valid: true},
+		ErrorMessage: pgtype.Text{String: params.ErrorMessage, Valid: true},
+		CompletedAt:  timestamptz(params.CompletedAt),
+		ID:           params.ID,
+	})
+	if err != nil {
+		return AttemptRecord{}, err
+	}
+
+	return attemptRecordFromSQLC(row), nil
+}
+
+// requestRecordFromSQLC 将 sqlc request row 转成 requestlog 领域 DTO。
+func requestRecordFromSQLC(row sqlc.RequestRecord) RequestRecord {
+	return RequestRecord{
+		ID:               row.ID,
+		RequestID:        row.RequestID,
+		UserID:           row.UserID,
+		ProjectID:        row.ProjectID,
+		APIKeyID:         row.ApiKeyID,
+		RequestedModelID: row.RequestedModelID,
+		ResponseModelID:  textPtr(row.ResponseModelID),
+		Stream:           row.Stream,
+		Status:           RequestStatus(row.Status),
+		FinalProviderID:  int64Ptr(row.FinalProviderID),
+		FinalChannelID:   int64Ptr(row.FinalChannelID),
+		ErrorCode:        textPtr(row.ErrorCode),
+		ErrorMessage:     textPtr(row.ErrorMessage),
+		StartedAt:        row.StartedAt.Time,
+		CompletedAt:      timePtr(row.CompletedAt),
+	}
+}
+
+// attemptRecordFromSQLC 将 sqlc attempt row 转成 requestlog 领域 DTO。
+func attemptRecordFromSQLC(row sqlc.RequestAttempt) AttemptRecord {
+	return AttemptRecord{
+		ID:                    row.ID,
+		RequestRecordID:       row.RequestRecordID,
+		AttemptIndex:          int(row.AttemptIndex),
+		ProviderID:            row.ProviderID,
+		ChannelID:             row.ChannelID,
+		AdapterKey:            row.AdapterKey,
+		UpstreamModel:         row.UpstreamModel,
+		UpstreamResponseModel: textPtr(row.UpstreamResponseModel),
+		Status:                AttemptStatus(row.Status),
+		UpstreamStatusCode:    intPtr(row.UpstreamStatusCode),
+		UpstreamRequestID:     textPtr(row.UpstreamRequestID),
+		ErrorCode:             textPtr(row.ErrorCode),
+		ErrorMessage:          textPtr(row.ErrorMessage),
+		StartedAt:             row.StartedAt.Time,
+		CompletedAt:           timePtr(row.CompletedAt),
+	}
+}
+
+// timestamptz 将 time.Time 包装成有效的 pgtype.Timestamptz。
+func timestamptz(t time.Time) pgtype.Timestamptz {
+	return pgtype.Timestamptz{Time: t, Valid: true}
+}
+
+// optionalText 把可选字符串转换为 pgtype.Text，避免把未知字段写成空字符串。
+func optionalText(s *string) pgtype.Text {
+	if s == nil {
+		return pgtype.Text{Valid: false}
+	}
+
+	return pgtype.Text{String: *s, Valid: true}
+}
+
+// optionalInt4 把可选整数转换为 pgtype.Int4，避免把未知 HTTP 状态写成 0。
+func optionalInt4(value *int) pgtype.Int4 {
+	if value == nil {
+		return pgtype.Int4{Valid: false}
+	}
+
+	return pgtype.Int4{Int32: int32(*value), Valid: true}
+}
+
+// textPtr 将 pgtype.Text 转成可选字符串。
+func textPtr(s pgtype.Text) *string {
+	if !s.Valid {
+		return nil
+	}
+
+	return &s.String
+}
+
+// int64Ptr 将 pgtype.Int8 转成可选 int64。
+func int64Ptr(i pgtype.Int8) *int64 {
+	if !i.Valid {
+		return nil
+	}
+
+	return &i.Int64
+}
+
+// intPtr 将 pgtype.Int4 转成可选 int。
+func intPtr(value pgtype.Int4) *int {
+	if !value.Valid {
+		return nil
+	}
+
+	n := int(value.Int32)
+	return &n
+}
+
+// timePtr 将 pgtype.Timestamptz 转成可选 time.Time。
+func timePtr(value pgtype.Timestamptz) *time.Time {
+	if !value.Valid {
+		return nil
+	}
+
+	return &value.Time
+}

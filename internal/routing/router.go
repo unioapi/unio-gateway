@@ -27,6 +27,7 @@ type ChatRouteRequest struct {
 
 // ChatRouteCandidate 表示一个可尝试的 chat 上游候选。
 type ChatRouteCandidate struct {
+	ProviderID    int64
 	AdapterKey    string
 	Channel       channel.Runtime
 	UpstreamModel string
@@ -119,6 +120,7 @@ func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindRoute
 	}
 
 	return ChatRouteCandidate{
+		ProviderID: row.ProviderID,
 		AdapterKey: row.AdapterKey,
 		Channel: channel.Runtime{
 			ID:      row.ChannelID,

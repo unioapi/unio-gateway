@@ -101,17 +101,34 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 }
 
 const getAPIKeyByHash = `-- name: GetAPIKeyByHash :one
-SELECT id, project_id, name, key_prefix, key_hash, last_used_at, expires_at, disabled_at, revoked_at, created_at, updated_at
-FROM api_keys
+SELECT k.id, p.user_id, k.project_id, k.name, k.key_prefix, k.key_hash, k.last_used_at, k.expires_at, k.disabled_at, k.revoked_at, k.created_at, k.updated_at
+FROM api_keys k
+JOIN projects p ON p.id = k.project_id
 WHERE key_hash = $1
 LIMIT 1
 `
 
-func (q *Queries) GetAPIKeyByHash(ctx context.Context, keyHash string) (ApiKey, error) {
+type GetAPIKeyByHashRow struct {
+	ID         int64
+	UserID     int64
+	ProjectID  int64
+	Name       string
+	KeyPrefix  string
+	KeyHash    string
+	LastUsedAt pgtype.Timestamptz
+	ExpiresAt  pgtype.Timestamptz
+	DisabledAt pgtype.Timestamptz
+	RevokedAt  pgtype.Timestamptz
+	CreatedAt  pgtype.Timestamptz
+	UpdatedAt  pgtype.Timestamptz
+}
+
+func (q *Queries) GetAPIKeyByHash(ctx context.Context, keyHash string) (GetAPIKeyByHashRow, error) {
 	row := q.db.QueryRow(ctx, getAPIKeyByHash, keyHash)
-	var i ApiKey
+	var i GetAPIKeyByHashRow
 	err := row.Scan(
 		&i.ID,
+		&i.UserID,
 		&i.ProjectID,
 		&i.Name,
 		&i.KeyPrefix,
