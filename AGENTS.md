@@ -393,6 +393,10 @@ type StreamChatAdapter interface {
 
 规则：
 
+- 当前产品先按个人账户模式设计：`user` 是个人账号和付费主体；`project` 是用户下面的应用 / 业务空间，用于组织 API Key、归集用量、隔离策略和未来预算，不作为余额事实来源。
+- 第七阶段余额事实落在 `user_balances` 和 `ledger_entries.user_id`；`request_records` 必须同时记录 `user_id`、`project_id`、`api_key_id`，保证能按用户扣费、按 project/API key 审计和统计。
+- 未来进入团队 / 企业模式时，再引入 `organization` 或 `billing_account` 作为付费主体；管理员只是账单管理权限，不是账单事实归属。迁移方向是从 user 钱包迁移到 organization/account 钱包，project 继续作为应用空间和用量归集边界。
+- 每次请求的客户侧扣费主体和上游 provider 成本主体必须区分：客户侧余额属于 Unio 用户；上游账号余额属于 Unio 平台成本，不依赖上游余额作为客户余额事实。
 - 使用 ledger-first billing。
 - 每一次余额变动都必须生成 ledger entry。
 - 请求日志不等于账本记录。
@@ -430,7 +434,7 @@ API Key 规则：
 - 保存 / 展示 prefix 用于识别。
 - 创建后不再保存完整明文 API key。
 - 支持 revoke / disable。
-- 关联 user / project / org。
+- API Key 属于 project；project 属于 user。当前个人账户模式下，API Key 不直接承载余额，只作为调用身份和审计入口。
 - 日志只记录 key prefix，不记录完整 key。
 
 密码规则：
@@ -441,7 +445,7 @@ API Key 规则：
 
 授权：
 
-- 清晰区分 user、organization、project、key 边界。
+- 清晰区分 user、project、key 边界；organization 是未来团队模式能力，未进入团队阶段前不要把个人账户计费强行设计成 organization。
 - 不混用 admin 权限和 customer API 权限。
 
 ## DTO 原则
@@ -622,13 +626,14 @@ Adapter 层命名原则：
 
 阶段 3：用户与 API Key
 
-- users / projects / orgs
+- users / projects
 - API key 生成
 - API key hash
 - API key middleware
 - request auth context
 - 基础 rate limit
-- API key 是 customer/project 身份入口，后续所有 request、usage、billing 都必须能关联 project。
+- API key 是 customer/project 身份入口，后续所有 request、usage、billing 都必须能关联 user、project 和 api_key。
+- 当前 project 表示个人账号下的应用 / 业务空间，用于组织 API Key、归集用量、隔离配置和未来预算，不是余额事实来源。
 - rate limit 初期可硬编码过渡，后续应支持全局默认配置 + 数据库策略，并可按 project/model/channel 扩展。
 
 阶段 4：OpenAI-compatible API
@@ -675,14 +680,17 @@ Adapter 层命名原则：
 - usage records
 - request records
 - ledger_entries
-- balance projection
+- user_balances
 - pre-authorize
 - settle
 - refund
 - idempotency
 - transaction and row lock
-- request record 必须关联 project、model、provider、channel 和上游请求结果。
+- 第七阶段先按个人账户模式实现：余额落 user，project 只做应用空间、API Key 容器、用量归集和未来预算边界。
+- request record 必须关联 user、project、api key、model、provider、channel 和上游请求结果。
 - usage / price snapshot / ledger entry 必须能支撑历史账单复算和审计。
+- 非流式成功请求可以先做 post-settle debit；失败请求、上游错误、fallback 失败和 stream 中断必须先记录 request/attempt 状态，不允许悄悄扣费。
+- stream 已写出后不能 fallback 到另一个 channel；若当前 adapter 无法可靠获得最终 usage，第七阶段先记录状态并保留生产 TODO，不强行扣费。
 
 阶段 8：可观测性与稳定性
 
