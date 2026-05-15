@@ -175,6 +175,13 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 		}
 
 		choice := streamResp.Choices[0]
+
+		// 上游可能发送空 delta 作为 stream 心跳或占位事件；这类 chunk 没有用户可见内容，
+		// 也不携带结束原因，直接跳过，避免污染下游 SSE。
+		if choice.Delta.Role == "" && choice.Delta.Content == "" && choice.FinishReason == nil {
+			continue
+		}
+
 		chunk := adapter.ChatStreamChunk{
 			ID:           streamResp.ID,
 			Model:        streamResp.Model,

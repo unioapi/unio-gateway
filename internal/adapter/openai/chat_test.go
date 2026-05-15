@@ -213,6 +213,16 @@ func TestAdapterStreamChatCompletionsParsesUpstreamSSE(t *testing.T) {
 				Model: "gpt-4.1",
 				Choices: []chatStreamChoice{
 					{
+						Delta:        chatStreamDelta{},
+						FinishReason: nil,
+					},
+				},
+			},
+			{
+				ID:    "chatcmpl_stream_test",
+				Model: "gpt-4.1",
+				Choices: []chatStreamChoice{
+					{
 						Delta: chatStreamDelta{
 							Role:    "assistant",
 							Content: "hello ",
