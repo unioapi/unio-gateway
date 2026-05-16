@@ -45,6 +45,20 @@ type ChannelModel struct {
 	UpdatedAt     pgtype.Timestamptz
 }
 
+type LedgerEntry struct {
+	ID              int64
+	UserID          int64
+	RequestRecordID pgtype.Int8
+	EntryType       string
+	Amount          pgtype.Numeric
+	Currency        string
+	BalanceBefore   pgtype.Numeric
+	BalanceAfter    pgtype.Numeric
+	IdempotencyKey  string
+	Reason          string
+	CreatedAt       pgtype.Timestamptz
+}
+
 type Model struct {
 	ID          int64
 	ModelID     string
@@ -53,6 +67,36 @@ type Model struct {
 	Status      string
 	CreatedAt   pgtype.Timestamptz
 	UpdatedAt   pgtype.Timestamptz
+}
+
+type Price struct {
+	ID                   int64
+	ModelID              int64
+	Currency             string
+	PricingUnit          string
+	InputPrice           pgtype.Numeric
+	OutputPrice          pgtype.Numeric
+	CachedInputPrice     pgtype.Numeric
+	ReasoningOutputPrice pgtype.Numeric
+	Status               string
+	EffectiveFrom        pgtype.Timestamptz
+	EffectiveTo          pgtype.Timestamptz
+	CreatedAt            pgtype.Timestamptz
+	UpdatedAt            pgtype.Timestamptz
+}
+
+type PriceSnapshot struct {
+	ID                   int64
+	RequestRecordID      int64
+	PriceID              pgtype.Int8
+	Currency             string
+	PricingUnit          string
+	InputPrice           pgtype.Numeric
+	OutputPrice          pgtype.Numeric
+	CachedInputPrice     pgtype.Numeric
+	ReasoningOutputPrice pgtype.Numeric
+	FormulaVersion       string
+	CreatedAt            pgtype.Timestamptz
 }
 
 type Project struct {
@@ -137,4 +181,13 @@ type User struct {
 	DisplayName  string
 	CreatedAt    pgtype.Timestamptz
 	UpdatedAt    pgtype.Timestamptz
+}
+
+type UserBalance struct {
+	ID        int64
+	UserID    int64
+	Currency  string
+	Balance   pgtype.Numeric
+	CreatedAt pgtype.Timestamptz
+	UpdatedAt pgtype.Timestamptz
 }
