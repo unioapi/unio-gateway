@@ -44,7 +44,13 @@ type ChatCompletionService struct {
 }
 
 // NewChatCompletionService 创建聊天补全 gateway service。
-func NewChatCompletionService(router ChatRouter, registry AdapterRegistry, retryClassifier RetryClassifier, requestLog requestlog.Service, chatSettlement ChatSettlementExecutor) *ChatCompletionService {
+func NewChatCompletionService(
+	router ChatRouter,
+	registry AdapterRegistry,
+	retryClassifier RetryClassifier,
+	requestLog requestlog.Service,
+	chatSettlement ChatSettlementExecutor,
+) *ChatCompletionService {
 	if retryClassifier == nil {
 		retryClassifier = NeverRetryClassifier{}
 	}
@@ -65,7 +71,12 @@ func NewChatCompletionService(router ChatRouter, registry AdapterRegistry, retry
 }
 
 // createRequestRecord 创建用户可见请求记录，并立即推进到 running 状态。
-func (s *ChatCompletionService) createRequestRecord(ctx context.Context, principal *auth.APIKeyPrincipal, req httpapi.ChatCompletionRequest, stream bool) (requestlog.RequestRecord, error) {
+func (s *ChatCompletionService) createRequestRecord(
+	ctx context.Context,
+	principal *auth.APIKeyPrincipal,
+	req httpapi.ChatCompletionRequest,
+	stream bool,
+) (requestlog.RequestRecord, error) {
 	// TODO(阶段7/production): request_records.request_id 复用可由客户端传入的 X-Request-ID 会导致重复 header 触发唯一约束；开放公网 API 前；拆分服务端生成 request_id 和 trace/correlation id，request record 只保存服务端生成 ID。
 	requestID := httpx.RequestID(ctx)
 	if requestID == "" {
@@ -93,8 +104,29 @@ func (s *ChatCompletionService) createRequestRecord(ctx context.Context, princip
 	return record, nil
 }
 
+// markStreamRequestSucceeded 把流式请求标记为成功，并记录最终 provider/channel。
+func (s *ChatCompletionService) markStreamAttemptSucceeded(
+	ctx context.Context,
+	attempt requestlog.AttemptRecord,
+	upstreamModel string,
+) error {
+	_, err := s.requestLog.MarkAttemptSucceeded(ctx, requestlog.MarkAttemptSucceededParams{
+		ID:                    attempt.ID,
+		UpstreamResponseModel: upstreamModel,
+		UpstreamStatusCode:    200,
+		UpstreamRequestID:     nil,
+		CompletedAt:           time.Now(),
+	})
+	return err
+}
+
 // markRequestFailed 把 request record 标记为失败；失败路径不覆盖原始业务错误。
-func (s *ChatCompletionService) markRequestFailed(ctx context.Context, requestRecord requestlog.RequestRecord, code string, err error) {
+func (s *ChatCompletionService) markRequestFailed(
+	ctx context.Context,
+	requestRecord requestlog.RequestRecord,
+	code string,
+	err error,
+) {
 	message := ""
 	if err != nil {
 		message = err.Error()
@@ -109,7 +141,12 @@ func (s *ChatCompletionService) markRequestFailed(ctx context.Context, requestRe
 }
 
 // createAttempt 创建一次上游 channel 尝试记录。
-func (s *ChatCompletionService) createAttempt(ctx context.Context, requestRecord requestlog.RequestRecord, attemptIndex int, candidate routing.ChatRouteCandidate) (requestlog.AttemptRecord, error) {
+func (s *ChatCompletionService) createAttempt(
+	ctx context.Context,
+	requestRecord requestlog.RequestRecord,
+	attemptIndex int,
+	candidate routing.ChatRouteCandidate,
+) (requestlog.AttemptRecord, error) {
 	attempt, err := s.requestLog.CreateAttempt(ctx, requestlog.CreateAttemptParams{
 		RequestRecordID: requestRecord.ID,
 		AttemptIndex:    attemptIndex,
@@ -127,7 +164,12 @@ func (s *ChatCompletionService) createAttempt(ctx context.Context, requestRecord
 }
 
 // markAttemptFailed 把一次上游尝试标记为失败；失败路径不覆盖原始业务错误。
-func (s *ChatCompletionService) markAttemptFailed(ctx context.Context, attempt requestlog.AttemptRecord, code string, err error) {
+func (s *ChatCompletionService) markAttemptFailed(
+	ctx context.Context,
+	attempt requestlog.AttemptRecord,
+	code string,
+	err error,
+) {
 	message := ""
 	if err != nil {
 		message = err.Error()
@@ -139,6 +181,23 @@ func (s *ChatCompletionService) markAttemptFailed(ctx context.Context, attempt r
 		ErrorMessage: message,
 		CompletedAt:  time.Now(),
 	})
+}
+
+// markStreamRequestSucceeded 把流式请求标记为成功，并记录最终 provider/channel。
+func (s *ChatCompletionService) markStreamRequestSucceeded(
+	ctx context.Context,
+	requestRecord requestlog.RequestRecord,
+	req httpapi.ChatCompletionRequest,
+	candidate routing.ChatRouteCandidate,
+) error {
+	_, err := s.requestLog.MarkRequestSucceeded(ctx, requestlog.MarkRequestSucceededParams{
+		ID:              requestRecord.ID,
+		ResponseModelID: req.Model,
+		FinalProviderID: candidate.ProviderID,
+		FinalChannelID:  candidate.Channel.ID,
+		CompletedAt:     time.Now(),
+	})
+	return err
 }
 
 // CreateChatCompletion 调用 adapter 完成聊天补全，并转换为 HTTP 响应 DTO。
@@ -270,29 +329,48 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ht
 		return auth.ErrMissingAPIKey
 	}
 
+	requestRecord, err := s.createRequestRecord(ctx, principal, req, true)
+	if err != nil {
+		return err
+	}
+
 	plan, err := s.router.PlanChat(ctx, routing.ChatRouteRequest{
 		ProjectID: principal.ProjectID,
 		ModelID:   req.Model,
 	})
 	if err != nil {
+		s.markRequestFailed(ctx, requestRecord, "routing_error", err)
 		return err
 	}
 
 	var lastErr error
 
-	for _, candidate := range plan.Candidates {
+	for index, candidate := range plan.Candidates {
+		// 每个 stream candidate 也必须先创建 attempt，确保 fallback 和中断都能审计。
+		attempt, err := s.createAttempt(ctx, requestRecord, index, candidate)
+		if err != nil {
+			s.markRequestFailed(ctx, requestRecord, "request_attempt_create_failed", err)
+			return err
+		}
+
 		streamAdapter, ok := s.registry.StreamChat(candidate.AdapterKey)
 		if !ok {
-			return fmt.Errorf("gateway: stream chat adapter %q not registered", candidate.AdapterKey)
+			err := fmt.Errorf("gateway: stream chat adapter %q not registered", candidate.AdapterKey)
+
+			s.markAttemptFailed(ctx, attempt, "adapter_not_registered", err)
+			s.markRequestFailed(ctx, requestRecord, "adapter_not_registered", err)
+
+			return err
 		}
 
 		emitted := false
 
-		err := streamAdapter.StreamChatCompletions(ctx, candidate.Channel, adapter.ChatRequest{
+		err = streamAdapter.StreamChatCompletions(ctx, candidate.Channel, adapter.ChatRequest{
 			Model:    candidate.UpstreamModel,
 			Messages: messages,
 		}, func(chunk adapter.ChatStreamChunk) error {
 			emitted = true
+
 			return emit(httpapi.ChatCompletionStreamResponse{
 				ID:      chunk.ID,
 				Object:  "chat.completion.chunk",
@@ -312,11 +390,16 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ht
 		})
 
 		if err != nil {
+			s.markAttemptFailed(ctx, attempt, "stream_adapter_error", err)
+
 			if emitted {
+				// SSE 已经写出后不能 fallback，否则一个客户端响应会混入两个 channel 的内容。
+				s.markRequestFailed(ctx, requestRecord, "stream_adapter_error_after_emit", err)
 				return err
 			}
 
 			if !s.retryClassifier.IsRetryable(err) {
+				s.markRequestFailed(ctx, requestRecord, "stream_adapter_error", err)
 				return err
 			}
 
@@ -324,12 +407,26 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ht
 			continue
 		}
 
+		// TODO(阶段7/production): stream final usage 暂不可可靠获得会导致无法准确扣费；接入 provider stream usage 解析前；扩展 adapter stream final usage 事件并复用 settlement 事务结算。
+		if err := s.markStreamAttemptSucceeded(ctx, attempt, candidate.UpstreamModel); err != nil {
+			s.markRequestFailed(ctx, requestRecord, "stream_attempt_mark_succeeded_failed", err)
+			return err
+		}
+
+		if err := s.markStreamRequestSucceeded(ctx, requestRecord, req, candidate); err != nil {
+			s.markRequestFailed(ctx, requestRecord, "stream_request_mark_succeeded_failed", err)
+			return err
+		}
+
 		return nil
 	}
 
 	if lastErr != nil {
+		s.markRequestFailed(ctx, requestRecord, "stream_adapter_error", lastErr)
 		return lastErr
 	}
 
-	return routing.ErrNoAvailableChannel
+	err = routing.ErrNoAvailableChannel
+	s.markRequestFailed(ctx, requestRecord, "no_available_channel", err)
+	return err
 }
