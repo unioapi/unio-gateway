@@ -13,10 +13,12 @@ import (
 	"github.com/ThankCat/unio-api/internal/adapter"
 	"github.com/ThankCat/unio-api/internal/adapter/openai"
 	"github.com/ThankCat/unio-api/internal/auth"
+	"github.com/ThankCat/unio-api/internal/billing"
 	"github.com/ThankCat/unio-api/internal/config"
 	"github.com/ThankCat/unio-api/internal/credential"
 	"github.com/ThankCat/unio-api/internal/gateway"
 	"github.com/ThankCat/unio-api/internal/httpapi"
+	"github.com/ThankCat/unio-api/internal/ledger"
 	"github.com/ThankCat/unio-api/internal/modelcatalog"
 	"github.com/ThankCat/unio-api/internal/ratelimit"
 	"github.com/ThankCat/unio-api/internal/redis"
@@ -81,7 +83,21 @@ func main() {
 		os.Exit(1)
 	}
 
-	chatCompletionService := gateway.NewChatCompletionService(chatRouter, adapterRegistry, nil, requestLogStore)
+	ledgerService := ledger.NewService(pgPool, queries)
+	chatSettlementService := gateway.NewChatSettlementService(
+		pgPool,
+		queries,
+		billing.Service{},
+		ledgerService,
+	)
+
+	chatCompletionService := gateway.NewChatCompletionService(
+		chatRouter,
+		adapterRegistry,
+		nil,
+		requestLogStore,
+		chatSettlementService,
+	)
 
 	rateLimitStore := ratelimit.NewRedisStore(redisClient)
 	rateLimiter := ratelimit.NewLimiter(rateLimitStore)

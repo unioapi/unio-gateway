@@ -79,12 +79,24 @@ type fakeRequestLogService struct {
 	markAttemptFailedArgs    []requestlog.MarkAttemptFailedParams
 }
 
+// fakeChatSettlementExecutor 是 gateway 测试使用的 chat settlement 替身。
+type fakeChatSettlementExecutor struct {
+	params []ChatSettlementParams
+	err    error
+}
+
 // newFakeRequestLogService 创建测试用 requestlog.Service。
 func newFakeRequestLogService() *fakeRequestLogService {
 	return &fakeRequestLogService{
 		nextRequestID: 1,
 		nextAttemptID: 1,
 	}
+}
+
+// SettleSuccessfulChat 记录结算参数，并返回测试预设错误。
+func (s *fakeChatSettlementExecutor) SettleSuccessfulChat(ctx context.Context, params ChatSettlementParams) error {
+	s.params = append(s.params, params)
+	return s.err
 }
 
 // CreateRequest 记录创建 request record 的参数并返回 pending 记录。
@@ -265,6 +277,7 @@ func routePlan(candidates ...routing.ChatRouteCandidate) routing.ChatRoutePlan {
 // routeCandidate 创建测试用 route candidate。
 func routeCandidate(adapterKey string, channelID int64, upstreamModel string) routing.ChatRouteCandidate {
 	return routing.ChatRouteCandidate{
+		ModelDBID:  1000 + channelID,
 		ProviderID: 9000 + channelID,
 		AdapterKey: adapterKey,
 		Channel: channel.Runtime{
@@ -291,6 +304,11 @@ func chatResponse(content string) *adapter.ChatResponse {
 	}
 }
 
+// newChatCompletionSettlementForTest 创建 chat completion 测试用结算替身。
+func newChatCompletionSettlementForTest() *fakeChatSettlementExecutor {
+	return &fakeChatSettlementExecutor{}
+}
+
 func TestChatCompletionServiceCreateChatCompletionRoutesAndCallsAdapter(t *testing.T) {
 	fakeAdapter := &fakeChatAdapter{
 		chatResp: chatResponse("adapter response"),
@@ -304,7 +322,8 @@ func TestChatCompletionServiceCreateChatCompletionRoutesAndCallsAdapter(t *testi
 		},
 	}
 	requestLog := newFakeRequestLogService()
-	service := NewChatCompletionService(router, registry, nil, requestLog)
+	settlement := newChatCompletionSettlementForTest()
+	service := NewChatCompletionService(router, registry, nil, requestLog, settlement)
 
 	got, err := service.CreateChatCompletion(contextWithPrincipal(42), chatRequest())
 	if err != nil {
@@ -368,17 +387,27 @@ func TestChatCompletionServiceCreateChatCompletionRoutesAndCallsAdapter(t *testi
 	if requestLog.createAttempts[0].ChannelID != 123 {
 		t.Fatalf("expected attempt channel id %d, got %d", int64(123), requestLog.createAttempts[0].ChannelID)
 	}
-	if len(requestLog.markAttemptSucceededArgs) != 1 {
-		t.Fatalf("expected one succeeded attempt, got %d", len(requestLog.markAttemptSucceededArgs))
+	if len(settlement.params) != 1 {
+		t.Fatalf("expected one settlement call, got %d", len(settlement.params))
 	}
-	if requestLog.markAttemptSucceededArgs[0].UpstreamRequestID != nil {
-		t.Fatalf("expected unknown upstream request id to stay nil, got %v", requestLog.markAttemptSucceededArgs[0].UpstreamRequestID)
+	settlementParams := settlement.params[0]
+	if settlementParams.RequestRecord.ID != 1 {
+		t.Fatalf("expected settlement request record id 1, got %d", settlementParams.RequestRecord.ID)
 	}
-	if len(requestLog.markRequestSucceededArgs) != 1 {
-		t.Fatalf("expected one succeeded request, got %d", len(requestLog.markRequestSucceededArgs))
+	if settlementParams.AttemptRecord.ID != 1 {
+		t.Fatalf("expected settlement attempt id 1, got %d", settlementParams.AttemptRecord.ID)
 	}
-	if requestLog.markRequestSucceededArgs[0].FinalProviderID != 9123 {
-		t.Fatalf("expected final provider id %d, got %d", int64(9123), requestLog.markRequestSucceededArgs[0].FinalProviderID)
+	if settlementParams.ResponseModelID != "openai/gpt-4.1" {
+		t.Fatalf("expected response model %q, got %q", "openai/gpt-4.1", settlementParams.ResponseModelID)
+	}
+	if settlementParams.ModelDBID != 1123 {
+		t.Fatalf("expected model db id %d, got %d", int64(1123), settlementParams.ModelDBID)
+	}
+	if settlementParams.FinalProviderID != 9123 {
+		t.Fatalf("expected final provider id %d, got %d", int64(9123), settlementParams.FinalProviderID)
+	}
+	if settlementParams.FinalChannelID != 123 {
+		t.Fatalf("expected final channel id %d, got %d", int64(123), settlementParams.FinalChannelID)
 	}
 }
 
@@ -395,6 +424,7 @@ func TestChatCompletionServiceCreateChatCompletionDoesNotCallAdapterOnRoutingErr
 		},
 		nil,
 		requestLog,
+		newChatCompletionSettlementForTest(),
 	)
 
 	_, err := service.CreateChatCompletion(contextWithPrincipal(42), chatRequest())
@@ -418,14 +448,54 @@ func TestChatCompletionServiceCreateChatCompletionDoesNotCallAdapterOnRoutingErr
 	}
 }
 
+func TestChatCompletionServiceCreateChatCompletionMarksRequestFailedOnSettlementError(t *testing.T) {
+	settlementErr := errors.New("settlement failed")
+	settlement := &fakeChatSettlementExecutor{err: settlementErr}
+
+	fakeAdapter := &fakeChatAdapter{
+		chatResp: chatResponse("adapter response"),
+	}
+	requestLog := newFakeRequestLogService()
+	service := NewChatCompletionService(
+		&fakeChatRouter{plan: routePlan(routeCandidate("openai", 123, "gpt-4.1"))},
+		&fakeAdapterRegistry{
+			chatAdapters: map[string]adapter.ChatAdapter{
+				"openai": fakeAdapter,
+			},
+		},
+		nil,
+		requestLog,
+		settlement,
+	)
+
+	_, err := service.CreateChatCompletion(contextWithPrincipal(42), chatRequest())
+	if !errors.Is(err, settlementErr) {
+		t.Fatalf("expected settlement error, got %v", err)
+	}
+	if len(settlement.params) != 1 {
+		t.Fatalf("expected settlement to be called once, got %d", len(settlement.params))
+	}
+	if len(requestLog.markRequestFailedArgs) != 1 {
+		t.Fatalf("expected request to be marked failed once, got %d", len(requestLog.markRequestFailedArgs))
+	}
+	if requestLog.markRequestFailedArgs[0].ErrorCode != "chat_settlement_failed" {
+		t.Fatalf("expected chat_settlement_failed, got %q", requestLog.markRequestFailedArgs[0].ErrorCode)
+	}
+	if len(requestLog.markRequestSucceededArgs) != 0 {
+		t.Fatalf("expected request not to be marked succeeded, got %d", len(requestLog.markRequestSucceededArgs))
+	}
+}
+
 func TestChatCompletionServiceCreateChatCompletionReturnsMissingAdapterWithoutRetry(t *testing.T) {
 	classifier := &fakeRetryClassifier{retryable: true}
 	requestLog := newFakeRequestLogService()
+	settlement := newChatCompletionSettlementForTest()
 	service := NewChatCompletionService(
 		&fakeChatRouter{plan: routePlan(routeCandidate("missing", 123, "gpt-4.1"))},
 		&fakeAdapterRegistry{chatAdapters: map[string]adapter.ChatAdapter{}},
 		classifier,
 		requestLog,
+		settlement,
 	)
 
 	_, err := service.CreateChatCompletion(contextWithPrincipal(42), chatRequest())
@@ -434,6 +504,9 @@ func TestChatCompletionServiceCreateChatCompletionReturnsMissingAdapterWithoutRe
 	}
 	if classifier.called != 0 {
 		t.Fatalf("expected retry classifier not to be called, got %d calls", classifier.called)
+	}
+	if len(settlement.params) != 0 {
+		t.Fatalf("expected settlement not to be called, got %d calls", len(settlement.params))
 	}
 	if len(requestLog.createAttempts) != 1 {
 		t.Fatalf("expected one attempt for missing adapter, got %d", len(requestLog.createAttempts))
@@ -461,6 +534,7 @@ func TestChatCompletionServiceCreateChatCompletionFallsBackOnRetryableAdapterErr
 	secondAdapter := &fakeChatAdapter{chatResp: chatResponse("fallback response")}
 	classifier := &fakeRetryClassifier{retryable: true}
 	requestLog := newFakeRequestLogService()
+	settlement := newChatCompletionSettlementForTest()
 	service := NewChatCompletionService(
 		&fakeChatRouter{plan: routePlan(
 			routeCandidate("openai-primary", 101, "gpt-4.1"),
@@ -474,6 +548,7 @@ func TestChatCompletionServiceCreateChatCompletionFallsBackOnRetryableAdapterErr
 		},
 		classifier,
 		requestLog,
+		settlement,
 	)
 
 	got, err := service.CreateChatCompletion(contextWithPrincipal(42), chatRequest())
@@ -504,11 +579,11 @@ func TestChatCompletionServiceCreateChatCompletionFallsBackOnRetryableAdapterErr
 	if requestLog.markAttemptFailedArgs[0].ErrorCode != "adapter_error" {
 		t.Fatalf("expected adapter_error, got %q", requestLog.markAttemptFailedArgs[0].ErrorCode)
 	}
-	if len(requestLog.markAttemptSucceededArgs) != 1 {
-		t.Fatalf("expected second attempt to succeed once, got %d", len(requestLog.markAttemptSucceededArgs))
+	if len(requestLog.markAttemptSucceededArgs) != 0 {
+		t.Fatalf("expected attempt success to be handled by settlement, got requestlog succeeded attempts %d", len(requestLog.markAttemptSucceededArgs))
 	}
-	if len(requestLog.markRequestSucceededArgs) != 1 {
-		t.Fatalf("expected request to succeed once, got %d", len(requestLog.markRequestSucceededArgs))
+	if len(settlement.params) != 1 {
+		t.Fatalf("expected request to be settled once, got %d", len(settlement.params))
 	}
 	if len(requestLog.markRequestFailedArgs) != 0 {
 		t.Fatalf("expected request not to fail, got %#v", requestLog.markRequestFailedArgs)
@@ -534,6 +609,7 @@ func TestChatCompletionServiceCreateChatCompletionDoesNotFallbackOnNonRetryableA
 		},
 		classifier,
 		requestLog,
+		newChatCompletionSettlementForTest(),
 	)
 
 	_, err := service.CreateChatCompletion(contextWithPrincipal(42), chatRequest())
@@ -585,7 +661,7 @@ func TestChatCompletionServiceStreamChatCompletionRoutesAndCallsAdapter(t *testi
 			"openai": fakeAdapter,
 		},
 	}
-	service := NewChatCompletionService(router, registry, nil, newFakeRequestLogService())
+	service := NewChatCompletionService(router, registry, nil, newFakeRequestLogService(), newChatCompletionSettlementForTest())
 
 	chunks := make([]httpapi.ChatCompletionStreamResponse, 0)
 	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk httpapi.ChatCompletionStreamResponse) error {
@@ -629,6 +705,7 @@ func TestChatCompletionServiceStreamChatCompletionReturnsMissingAdapterWithoutRe
 		&fakeAdapterRegistry{streamChatAdapters: map[string]adapter.StreamChatAdapter{}},
 		classifier,
 		newFakeRequestLogService(),
+		newChatCompletionSettlementForTest(),
 	)
 
 	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk httpapi.ChatCompletionStreamResponse) error {
@@ -669,6 +746,7 @@ func TestChatCompletionServiceStreamChatCompletionFallsBackBeforeFirstChunk(t *t
 		},
 		classifier,
 		newFakeRequestLogService(),
+		newChatCompletionSettlementForTest(),
 	)
 
 	chunks := make([]httpapi.ChatCompletionStreamResponse, 0)
@@ -733,6 +811,7 @@ func TestChatCompletionServiceStreamChatCompletionDoesNotFallbackAfterFirstChunk
 		},
 		classifier,
 		newFakeRequestLogService(),
+		newChatCompletionSettlementForTest(),
 	)
 
 	chunks := make([]httpapi.ChatCompletionStreamResponse, 0)

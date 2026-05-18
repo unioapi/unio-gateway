@@ -229,29 +229,6 @@ func TestRequestAttemptsOrderAndUniqueness(t *testing.T) {
 		t.Fatalf("create first attempt: %v", err)
 	}
 
-	_, err = queries.CreateRequestAttempt(ctx, sqlc.CreateRequestAttemptParams{
-		RequestRecordID:       record.ID,
-		AttemptIndex:          0,
-		ProviderID:            providerID,
-		ChannelID:             channelID,
-		AdapterKey:            "openai",
-		UpstreamModel:         "deepseek-v4-pro",
-		UpstreamResponseModel: pgtype.Text{Valid: false},
-		Status:                "running",
-		UpstreamStatusCode:    pgtype.Int4{Valid: false},
-		UpstreamRequestID:     pgtype.Text{Valid: false},
-		ErrorCode:             pgtype.Text{Valid: false},
-		ErrorMessage:          pgtype.Text{Valid: false},
-		StartedAt:             pgtype.Timestamptz{Time: time.Now(), Valid: true},
-		CompletedAt:           pgtype.Timestamptz{Valid: false},
-	})
-	if err == nil {
-		t.Fatal("expected duplicate attempt_index error")
-	}
-	if !isUniqueViolation(err) {
-		t.Fatalf("expected unique violation, got %v", err)
-	}
-
 	completedAt := pgtype.Timestamptz{Time: time.Now(), Valid: true}
 	succeeded, err := queries.MarkRequestAttemptSucceeded(ctx, sqlc.MarkRequestAttemptSucceededParams{
 		UpstreamResponseModel: pgtype.Text{String: "deepseek-v4-pro-actual", Valid: true},
@@ -294,5 +271,28 @@ func TestRequestAttemptsOrderAndUniqueness(t *testing.T) {
 	}
 	if attempts[0].ID != firstAttempt.ID || attempts[1].ID != secondAttempt.ID {
 		t.Fatalf("expected attempts ordered by index, got ids %d then %d", attempts[0].ID, attempts[1].ID)
+	}
+
+	_, err = queries.CreateRequestAttempt(ctx, sqlc.CreateRequestAttemptParams{
+		RequestRecordID:       record.ID,
+		AttemptIndex:          0,
+		ProviderID:            providerID,
+		ChannelID:             channelID,
+		AdapterKey:            "openai",
+		UpstreamModel:         "deepseek-v4-pro",
+		UpstreamResponseModel: pgtype.Text{Valid: false},
+		Status:                "running",
+		UpstreamStatusCode:    pgtype.Int4{Valid: false},
+		UpstreamRequestID:     pgtype.Text{Valid: false},
+		ErrorCode:             pgtype.Text{Valid: false},
+		ErrorMessage:          pgtype.Text{Valid: false},
+		StartedAt:             pgtype.Timestamptz{Time: time.Now(), Valid: true},
+		CompletedAt:           pgtype.Timestamptz{Valid: false},
+	})
+	if err == nil {
+		t.Fatal("expected duplicate attempt_index error")
+	}
+	if !isUniqueViolation(err) {
+		t.Fatalf("expected unique violation, got %v", err)
 	}
 }

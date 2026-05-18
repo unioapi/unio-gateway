@@ -21,19 +21,33 @@ func isForeignKeyViolation(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == "23503"
 }
 
-// assertNumericEquals 校验 NUMERIC 字段的整数测试值。
+// assertNumericEquals 校验 NUMERIC 字段表示的金额值，忽略 PostgreSQL 返回的 scale 差异。
 func assertNumericEquals(t *testing.T, got pgtype.Numeric, want int64) {
 	t.Helper()
 
 	if !got.Valid {
 		t.Fatalf("expected numeric %d to be valid", want)
 	}
-	if got.Exp != 0 {
-		t.Fatalf("expected numeric exponent 0, got %d", got.Exp)
+	if got.Int == nil {
+		t.Fatal("expected numeric int to be set")
 	}
-	if got.Int.Cmp(big.NewInt(want)) != 0 {
-		t.Fatalf("expected numeric %d, got %v", want, got.Int)
+
+	rat := new(big.Rat).SetInt(new(big.Int).Set(got.Int))
+	if got.Exp > 0 {
+		rat.Mul(rat, new(big.Rat).SetInt(pow10(got.Exp)))
 	}
+	if got.Exp < 0 {
+		rat.Quo(rat, new(big.Rat).SetInt(pow10(-got.Exp)))
+	}
+
+	if rat.Cmp(big.NewRat(want, 1)) != 0 {
+		t.Fatalf("expected numeric %d, got %s", want, rat.String())
+	}
+}
+
+// pow10 返回 10 的 exp 次方。
+func pow10(exp int32) *big.Int {
+	return new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(exp)), nil)
 }
 
 // createLedgerEntryForTest 创建测试账本流水。

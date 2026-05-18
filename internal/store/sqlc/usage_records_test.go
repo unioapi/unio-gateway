@@ -100,11 +100,6 @@ func TestUsageRecordRejectsDuplicateRequest(t *testing.T) {
 }
 
 func TestUsageRecordRejectsInvalidTokenConstraints(t *testing.T) {
-	ctx, _, queries, cleanup := newModelChannelTestTx(t)
-	defer cleanup()
-
-	identity := createRequestRecordIdentity(t, ctx, queries)
-
 	cases := []struct {
 		name   string
 		params sqlc.CreateUsageRecordParams
@@ -168,6 +163,10 @@ func TestUsageRecordRejectsInvalidTokenConstraints(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			ctx, _, queries, cleanup := newModelChannelTestTx(t)
+			defer cleanup()
+
+			identity := createRequestRecordIdentity(t, ctx, queries)
 			requestID := fmt.Sprintf("usage-invalid-%s-%d", tc.name, time.Now().UnixNano())
 			requestRecord := createRequestRecordForTest(t, ctx, queries, identity, requestID)
 			tc.params.RequestRecordID = requestRecord.ID

@@ -32,6 +32,30 @@ func nullNumeric() pgtype.Numeric {
 	return pgtype.Numeric{Valid: false}
 }
 
+// assertPriceNumericEquals 校验价格 NUMERIC 字段表示的金额值，忽略 PostgreSQL 返回的 scale 差异。
+func assertPriceNumericEquals(t *testing.T, got pgtype.Numeric, want int64) {
+	t.Helper()
+
+	if !got.Valid {
+		t.Fatalf("expected numeric %d to be valid", want)
+	}
+	if got.Int == nil {
+		t.Fatal("expected numeric int to be set")
+	}
+
+	rat := new(big.Rat).SetInt(new(big.Int).Set(got.Int))
+	if got.Exp > 0 {
+		rat.Mul(rat, new(big.Rat).SetInt(pow10(got.Exp)))
+	}
+	if got.Exp < 0 {
+		rat.Quo(rat, new(big.Rat).SetInt(pow10(-got.Exp)))
+	}
+
+	if rat.Cmp(big.NewRat(want, 1)) != 0 {
+		t.Fatalf("expected numeric %d, got %s", want, rat.String())
+	}
+}
+
 // priceParams 创建一组默认可用的测试价格参数。
 func priceParams(modelID int64, now time.Time) sqlc.CreatePriceParams {
 	return sqlc.CreatePriceParams{
@@ -114,9 +138,7 @@ func TestFindActivePriceForModelFiltersAndOrders(t *testing.T) {
 	if got.Status != "enabled" {
 		t.Fatalf("expected enabled price, got %q", got.Status)
 	}
-	if got.InputPrice.Int.Cmp(big.NewInt(3)) != 0 {
-		t.Fatalf("expected input price 3, got %v", got.InputPrice.Int)
-	}
+	assertPriceNumericEquals(t, got.InputPrice, 3)
 }
 
 func TestPriceRejectsInvalidConstraints(t *testing.T) {
@@ -284,9 +306,8 @@ func TestPriceSnapshotKeepsCopiedPriceValues(t *testing.T) {
 	if got.ID != created.ID {
 		t.Fatalf("expected snapshot id %d, got %d", created.ID, got.ID)
 	}
-	if got.InputPrice.Int.Cmp(big.NewInt(2)) != 0 || got.OutputPrice.Int.Cmp(big.NewInt(8)) != 0 {
-		t.Fatalf("expected copied price values 2/8, got %v/%v", got.InputPrice.Int, got.OutputPrice.Int)
-	}
+	assertPriceNumericEquals(t, got.InputPrice, 2)
+	assertPriceNumericEquals(t, got.OutputPrice, 8)
 	if got.CachedInputPrice.Valid || got.ReasoningOutputPrice.Valid {
 		t.Fatal("expected nullable specialized prices to remain null in snapshot")
 	}

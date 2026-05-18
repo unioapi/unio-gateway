@@ -29,12 +29,9 @@ type RetryClassifier interface {
 	IsRetryable(err error) bool
 }
 
-// NeverRetryClassifier 是保守的错误分类器，默认不重试任何错误。
-type NeverRetryClassifier struct{}
-
-// IsRetryable 始终返回 false，避免没有明确错误分类时误触发 fallback。
-func (NeverRetryClassifier) IsRetryable(err error) bool {
-	return false
+// ChatSettlementExecutor 定义非流式 chat 成功后提交结算事务的能力。
+type ChatSettlementExecutor interface {
+	SettleSuccessfulChat(ctx context.Context, params ChatSettlementParams) error
 }
 
 // ChatCompletionService 把 HTTP 层请求转换为 adapter 请求。
@@ -43,15 +40,19 @@ type ChatCompletionService struct {
 	registry        AdapterRegistry
 	retryClassifier RetryClassifier
 	requestLog      requestlog.Service
+	chatSettlement  ChatSettlementExecutor
 }
 
 // NewChatCompletionService 创建聊天补全 gateway service。
-func NewChatCompletionService(router ChatRouter, registry AdapterRegistry, retryClassifier RetryClassifier, requestLog requestlog.Service) *ChatCompletionService {
+func NewChatCompletionService(router ChatRouter, registry AdapterRegistry, retryClassifier RetryClassifier, requestLog requestlog.Service, chatSettlement ChatSettlementExecutor) *ChatCompletionService {
 	if retryClassifier == nil {
 		retryClassifier = NeverRetryClassifier{}
 	}
 	if requestLog == nil {
 		panic("gateway: request log service is required")
+	}
+	if chatSettlement == nil {
+		panic("gateway: chat settlement service is required")
 	}
 
 	return &ChatCompletionService{
@@ -59,6 +60,7 @@ func NewChatCompletionService(router ChatRouter, registry AdapterRegistry, retry
 		registry:        registry,
 		retryClassifier: retryClassifier,
 		requestLog:      requestLog,
+		chatSettlement:  chatSettlement,
 	}
 }
 
@@ -139,31 +141,6 @@ func (s *ChatCompletionService) markAttemptFailed(ctx context.Context, attempt r
 	})
 }
 
-// markAttemptSucceeded 把一次上游尝试标记为成功。
-func (s *ChatCompletionService) markAttemptSucceeded(ctx context.Context, attempt requestlog.AttemptRecord, adapterResp *adapter.ChatResponse) error {
-	// TODO(阶段8/production): adapter 成功响应缺少真实 upstream status/request id 会影响渠道审计精度；接入 provider error classification / adapter metadata 时；从 adapter response metadata 写入真实 upstream_status_code 和 upstream_request_id。
-	_, err := s.requestLog.MarkAttemptSucceeded(ctx, requestlog.MarkAttemptSucceededParams{
-		ID:                    attempt.ID,
-		UpstreamResponseModel: adapterResp.Model,
-		UpstreamStatusCode:    200,
-		UpstreamRequestID:     nil,
-		CompletedAt:           time.Now(),
-	})
-	return err
-}
-
-// markRequestSucceeded 把用户可见请求标记为成功，并记录最终 provider/channel。
-func (s *ChatCompletionService) markRequestSucceeded(ctx context.Context, requestRecord requestlog.RequestRecord, req httpapi.ChatCompletionRequest, candidate routing.ChatRouteCandidate) error {
-	_, err := s.requestLog.MarkRequestSucceeded(ctx, requestlog.MarkRequestSucceededParams{
-		ID:              requestRecord.ID,
-		ResponseModelID: req.Model,
-		FinalProviderID: candidate.ProviderID,
-		FinalChannelID:  candidate.Channel.ID,
-		CompletedAt:     time.Now(),
-	})
-	return err
-}
-
 // CreateChatCompletion 调用 adapter 完成聊天补全，并转换为 HTTP 响应 DTO。
 func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req httpapi.ChatCompletionRequest) (*httpapi.ChatCompletionResponse, error) {
 	messages := make([]adapter.ChatMessage, 0, len(req.Messages))
@@ -229,13 +206,17 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ht
 			continue
 		}
 
-		if err := s.markAttemptSucceeded(ctx, attempt, adapterResp); err != nil {
-			s.markRequestFailed(ctx, requestRecord, "request_attempt_mark_succeeded_failed", err)
-			return nil, err
-		}
-
-		if err := s.markRequestSucceeded(ctx, requestRecord, req, candidate); err != nil {
-			s.markRequestFailed(ctx, requestRecord, "request_mark_succeeded_failed", err)
+		if err := s.chatSettlement.SettleSuccessfulChat(ctx, ChatSettlementParams{
+			RequestRecord:   requestRecord,
+			AttemptRecord:   attempt,
+			Principal:       principal,
+			ResponseModelID: req.Model,
+			ModelDBID:       candidate.ModelDBID,
+			FinalProviderID: candidate.ProviderID,
+			FinalChannelID:  candidate.Channel.ID,
+			AdapterResp:     adapterResp,
+		}); err != nil {
+			s.markRequestFailed(ctx, requestRecord, "chat_settlement_failed", err)
 			return nil, err
 		}
 

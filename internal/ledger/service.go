@@ -3,6 +3,7 @@ package ledger
 import (
 	"context"
 	"errors"
+	"math/big"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -159,8 +160,31 @@ func (s *Service) Debit(ctx context.Context, params DebitParams) (Entry, error) 
 
 	txQueries := s.queries.WithTx(tx)
 
+	entry, err := s.debitWithQueries(ctx, txQueries, params)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return s.resolveIdempotentCreateConflict(ctx, tx, params.IdempotencyKey, params.UserID, params.RequestRecordID, "debit", params.Amount, params.Currency)
+		}
+
+		return Entry{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return Entry{}, err
+	}
+
+	return entry, nil
+}
+
+// DebitWithQueries 使用调用方传入的 queries 执行扣款。
+// queries 可以是普通 queries，也可以是 queries.WithTx(tx)。
+func (s *Service) DebitWithQueries(ctx context.Context, queries *sqlc.Queries, params DebitParams) (Entry, error) {
+	return s.debitWithQueries(ctx, queries, params)
+}
+
+func (s *Service) debitWithQueries(ctx context.Context, queries *sqlc.Queries, params DebitParams) (Entry, error) {
 	// 幂等命中表示这笔扣费已经完成，直接返回已有流水，避免重复扣余额。
-	existing, err := txQueries.GetLedgerEntryByIdempotencyKey(ctx, params.IdempotencyKey)
+	existing, err := queries.GetLedgerEntryByIdempotencyKey(ctx, params.IdempotencyKey)
 	if err == nil {
 		if err := ensureIdempotentEntryMatches(existing, params.UserID, params.RequestRecordID, "debit", params.Amount, params.Currency); err != nil {
 			return Entry{}, err
@@ -173,7 +197,7 @@ func (s *Service) Debit(ctx context.Context, params DebitParams) (Entry, error) 
 	}
 
 	// 扣费不能自动创建余额行；不存在余额行时应视为余额不足。
-	before, err := txQueries.GetUserBalanceForUpdate(ctx, sqlc.GetUserBalanceForUpdateParams{
+	before, err := queries.GetUserBalanceForUpdate(ctx, sqlc.GetUserBalanceForUpdateParams{
 		UserID:   params.UserID,
 		Currency: params.Currency,
 	})
@@ -185,7 +209,7 @@ func (s *Service) Debit(ctx context.Context, params DebitParams) (Entry, error) 
 	}
 
 	// 让 PostgreSQL 执行 NUMERIC 减法，并通过 WHERE balance >= amount 防止扣成负数。
-	after, err := txQueries.SubtractUserBalance(ctx, sqlc.SubtractUserBalanceParams{
+	after, err := queries.SubtractUserBalance(ctx, sqlc.SubtractUserBalanceParams{
 		Amount:   params.Amount,
 		UserID:   params.UserID,
 		Currency: params.Currency,
@@ -197,8 +221,7 @@ func (s *Service) Debit(ctx context.Context, params DebitParams) (Entry, error) 
 		return Entry{}, err
 	}
 
-	// 写入账本事实；debit 的 balance_after 必须等于 balance_before - amount。
-	created, err := txQueries.CreateLedgerEntry(ctx, sqlc.CreateLedgerEntryParams{
+	created, err := queries.CreateLedgerEntry(ctx, sqlc.CreateLedgerEntryParams{
 		UserID:          params.UserID,
 		RequestRecordID: int64PtrToPgtypeInt8(params.RequestRecordID),
 		EntryType:       "debit",
@@ -210,14 +233,6 @@ func (s *Service) Debit(ctx context.Context, params DebitParams) (Entry, error) 
 		Reason:          params.Reason,
 	})
 	if err != nil {
-		if isUniqueViolation(err) {
-			return s.resolveIdempotentCreateConflict(ctx, tx, params.IdempotencyKey, params.UserID, params.RequestRecordID, "debit", params.Amount, params.Currency)
-		}
-
-		return Entry{}, err
-	}
-
-	if err := tx.Commit(ctx); err != nil {
 		return Entry{}, err
 	}
 
@@ -313,20 +328,35 @@ func sameOptionalInt64(left pgtype.Int8, right *int64) bool {
 	return left.Int64 == *right
 }
 
-// sameNumeric 比较两个 pgtype.Numeric 是否表示同一个测试期金额值。
+// sameNumeric 比较两个 pgtype.Numeric 是否表示同一个金额值。
 func sameNumeric(left pgtype.Numeric, right pgtype.Numeric) bool {
-	if left.Valid != right.Valid {
-		return false
-	}
-	if !left.Valid {
-		return true
-	}
-	if left.Exp != right.Exp {
-		return false
-	}
-	if left.Int == nil || right.Int == nil {
-		return left.Int == right.Int
+	leftRat, leftOK := numericRat(left)
+	rightRat, rightOK := numericRat(right)
+	if !leftOK || !rightOK {
+		return leftOK == rightOK
 	}
 
-	return left.Int.Cmp(right.Int) == 0
+	return leftRat.Cmp(rightRat) == 0
+}
+
+// numericRat 将 pgtype.Numeric 转成有理数，用于金额等值比较。
+func numericRat(value pgtype.Numeric) (*big.Rat, bool) {
+	if !value.Valid || value.NaN || value.InfinityModifier != pgtype.Finite || value.Int == nil {
+		return nil, false
+	}
+
+	rat := new(big.Rat).SetInt(new(big.Int).Set(value.Int))
+	if value.Exp > 0 {
+		rat.Mul(rat, new(big.Rat).SetInt(pow10(value.Exp)))
+	}
+	if value.Exp < 0 {
+		rat.Quo(rat, new(big.Rat).SetInt(pow10(-value.Exp)))
+	}
+
+	return rat, true
+}
+
+// pow10 返回 10 的 exp 次方。
+func pow10(exp int32) *big.Int {
+	return new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(exp)), nil)
 }
