@@ -80,7 +80,7 @@ func (a *APIKeyAuthenticator) AuthenticateAPIKey(ctx context.Context, plaintext 
 		return nil, ErrAPIKeyExpired
 	}
 
-	// TODO(阶段3/production): 每次认证同步更新 last_used_at 会放大数据库写入；后续评估节流、异步或批量更新策略。
+	// TODO(阶段3/production): [GAP-3-001] 每次认证同步更新 last_used_at 会放大数据库写入；后续评估节流、异步或批量更新策略。
 	// 更新最后使用时间
 	usedAt := a.now()
 	if err := a.store.UpdateAPIKeyLastUsedAt(ctx, sqlc.UpdateAPIKeyLastUsedAtParams{
@@ -98,4 +98,4 @@ func (a *APIKeyAuthenticator) AuthenticateAPIKey(ctx context.Context, plaintext 
 	}, nil
 }
 
-// TODO(阶段3/production): 补齐 API Key revoke、disable、list 和审计日志能力，确保后台能安全管理 customer API key。
+// TODO(阶段3/production): [GAP-3-002] 补齐 API Key revoke、disable、list 和审计日志能力，确保后台能安全管理 customer API key。

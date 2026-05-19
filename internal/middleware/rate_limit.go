@@ -36,6 +36,7 @@ func RateLimit(limiter RateLimiter, limit int64, window time.Duration) func(next
 			subject := apiKeyRateLimitSubject(principal.APIKeyID)
 			decision, err := limiter.Allow(r.Context(), subject, limit, window)
 			if err != nil {
+				// TODO(阶段3/production): [GAP-3-006] Redis 限流故障当前会让客户请求全部失败，可能形成单点不可用；生产部署前；将 fail-open/fail-closed 策略配置化，并补充降级日志/metrics。
 				_ = httpx.WriteError(w, http.StatusInternalServerError, "internal_error", "rate limit failed")
 				return
 			}

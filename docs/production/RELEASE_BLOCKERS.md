@@ -1,0 +1,23 @@
+# Release Blockers
+
+本文档只记录公开生产前必须解决的阻断项。
+
+## 当前阻断项
+
+| ID | GAP | 阶段 | 阻断原因 | 关联任务 |
+| --- | --- | --- | --- | --- |
+| RB-001 | GAP-4-001 | 阶段 4 | chat request 深度校验不足，公开 API 可能接受非法 role/content/参数边界。 | ../chapters/phase-04-openai-compatible-api/PLAN.md#task-4-03-chat-dto-validation |
+| RB-002 | GAP-5-001 | 阶段 5 | 用户已传入的部分 OpenAI-compatible 参数未进入 adapter contract，存在静默丢参风险。 | ../chapters/phase-05-adapter-boundary/PLAN.md#task-5-01-chat-parameter-contract |
+| RB-003 | GAP-7-001 | 阶段 7 | 非流式没有余额预检或预授权，余额不足用户可能先产生上游成本。 | ../chapters/phase-07-billing-ledger/PLAN.md#task-7-17-preauthorization |
+| RB-004 | GAP-7-002 | 阶段 7 | stream 没有预授权，长输出和恶意断开无法控损。 | ../chapters/phase-07-billing-ledger/PLAN.md#task-7-17-preauthorization |
+| RB-005 | GAP-7-003 | 阶段 7 | request/attempt 终态缺少状态机守卫，并发更新可能覆盖账务事实。 | ../chapters/phase-07-billing-ledger/PLAN.md#task-7-18-request-state-machine |
+| RB-006 | GAP-7-004 | 阶段 7 | 无 final usage 的客户端取消缺少预授权，平台成本无法准确结算。 | ../chapters/phase-07-billing-ledger/PLAN.md#task-7-17-preauthorization |
+| RB-007 | GAP-7-007 | 阶段 7 | settlement 缺少请求级幂等完成检测，补偿任务可能把已成功请求误标失败。 | ../chapters/phase-07-billing-ledger/PLAN.md#task-7-19-settlement-idempotency |
+| RB-008 | GAP-7-011 | 阶段 7 | ledger 缺少 freeze/capture/refund 语义，stream 和余额不足场景无法生产级控损。 | ../chapters/phase-07-billing-ledger/PLAN.md#task-7-17-preauthorization |
+| RB-009 | GAP-7-012 | 阶段 7 | 外部事务内并发 debit 幂等冲突可能导致 settlement 失败且无法稳定重入。 | ../chapters/phase-07-billing-ledger/PLAN.md#task-7-19-settlement-idempotency |
+
+## 使用规则
+
+1. 任何 `P0` 且 `release_blocker=yes` 的 GAP 必须同步进入本文档。
+2. blocker 关闭时，先完成代码和测试，再更新 TODO register，最后移出本文档。
+3. 本文档不记录普通优化项，只记录影响公开生产、资金、安全、账务或用户契约的阻断项。

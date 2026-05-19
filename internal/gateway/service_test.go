@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -73,10 +74,12 @@ type fakeRequestLogService struct {
 	markRequestRunningIDs    []int64
 	markRequestSucceededArgs []requestlog.MarkRequestSucceededParams
 	markRequestFailedArgs    []requestlog.MarkRequestFailedParams
+	markRequestCanceledArgs  []requestlog.MarkRequestCanceledParams
 
 	createAttempts           []requestlog.CreateAttemptParams
 	markAttemptSucceededArgs []requestlog.MarkAttemptSucceededParams
 	markAttemptFailedArgs    []requestlog.MarkAttemptFailedParams
+	markAttemptCanceledArgs  []requestlog.MarkAttemptCanceledParams
 }
 
 // fakeChatSettlementExecutor 是 gateway 测试使用的 chat settlement 替身。
@@ -151,6 +154,8 @@ func (s *fakeRequestLogService) MarkRequestFailed(ctx context.Context, params re
 
 // MarkRequestCanceled 记录 request canceled 状态变更。
 func (s *fakeRequestLogService) MarkRequestCanceled(ctx context.Context, params requestlog.MarkRequestCanceledParams) (requestlog.RequestRecord, error) {
+	s.markRequestCanceledArgs = append(s.markRequestCanceledArgs, params)
+
 	return requestlog.RequestRecord{
 		ID:     params.ID,
 		Status: requestlog.RequestStatusCanceled,
@@ -199,6 +204,8 @@ func (s *fakeRequestLogService) MarkAttemptFailed(ctx context.Context, params re
 
 // MarkAttemptCanceled 记录 attempt canceled 状态变更。
 func (s *fakeRequestLogService) MarkAttemptCanceled(ctx context.Context, params requestlog.MarkAttemptCanceledParams) (requestlog.AttemptRecord, error) {
+	s.markAttemptCanceledArgs = append(s.markAttemptCanceledArgs, params)
+
 	return requestlog.AttemptRecord{
 		ID:     params.ID,
 		Status: requestlog.AttemptStatusCanceled,
@@ -304,6 +311,21 @@ func chatResponse(content string) *adapter.ChatResponse {
 	}
 }
 
+// streamUsageChunk 创建测试用 stream final usage chunk。
+func streamUsageChunk(model string) adapter.ChatStreamChunk {
+	return adapter.ChatStreamChunk{
+		ID:    "chatcmpl_mock",
+		Model: model,
+		Usage: &adapter.ChatUsage{
+			PromptTokens:     10,
+			CompletionTokens: 11,
+			TotalTokens:      21,
+			CachedTokens:     3,
+			ReasoningTokens:  2,
+		},
+	}
+}
+
 // newChatCompletionSettlementForTest 创建 chat completion 测试用结算替身。
 func newChatCompletionSettlementForTest() *fakeChatSettlementExecutor {
 	return &fakeChatSettlementExecutor{}
@@ -366,6 +388,12 @@ func TestChatCompletionServiceCreateChatCompletionRoutesAndCallsAdapter(t *testi
 	if len(requestLog.createRequests) != 1 {
 		t.Fatalf("expected one request record, got %d", len(requestLog.createRequests))
 	}
+	if requestLog.createRequests[0].RequestID == "gateway-test-request-id" {
+		t.Fatal("expected server-generated request record id, got correlation id from context")
+	}
+	if !strings.HasPrefix(requestLog.createRequests[0].RequestID, "req_") {
+		t.Fatalf("expected server-generated request id prefix %q, got %q", "req_", requestLog.createRequests[0].RequestID)
+	}
 	if requestLog.createRequests[0].UserID != 7 {
 		t.Fatalf("expected user id %d, got %d", int64(7), requestLog.createRequests[0].UserID)
 	}
@@ -408,6 +436,12 @@ func TestChatCompletionServiceCreateChatCompletionRoutesAndCallsAdapter(t *testi
 	}
 	if settlementParams.FinalChannelID != 123 {
 		t.Fatalf("expected final channel id %d, got %d", int64(123), settlementParams.FinalChannelID)
+	}
+	if settlementParams.UpstreamResponseModel != "gpt-4.1" {
+		t.Fatalf("expected upstream response model %q, got %q", "gpt-4.1", settlementParams.UpstreamResponseModel)
+	}
+	if settlementParams.Usage.TotalTokens != 21 {
+		t.Fatalf("expected settlement total tokens %d, got %d", 21, settlementParams.Usage.TotalTokens)
 	}
 }
 
@@ -642,6 +676,64 @@ func TestChatCompletionServiceCreateChatCompletionDoesNotFallbackOnNonRetryableA
 	}
 }
 
+func TestChatCompletionServiceCreateChatCompletionMarksCanceledWithoutFallback(t *testing.T) {
+	firstAdapter := &fakeChatAdapter{chatErr: context.Canceled}
+	secondAdapter := &fakeChatAdapter{chatResp: chatResponse("should not call")}
+	classifier := &fakeRetryClassifier{retryable: true}
+	requestLog := newFakeRequestLogService()
+	settlement := newChatCompletionSettlementForTest()
+	service := NewChatCompletionService(
+		&fakeChatRouter{plan: routePlan(
+			routeCandidate("openai-primary", 101, "gpt-4.1"),
+			routeCandidate("openai-secondary", 102, "gpt-4.1"),
+		)},
+		&fakeAdapterRegistry{
+			chatAdapters: map[string]adapter.ChatAdapter{
+				"openai-primary":   firstAdapter,
+				"openai-secondary": secondAdapter,
+			},
+		},
+		classifier,
+		requestLog,
+		settlement,
+	)
+
+	_, err := service.CreateChatCompletion(contextWithPrincipal(42), chatRequest())
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context canceled error, got %v", err)
+	}
+	if firstAdapter.chatCalled != 1 {
+		t.Fatalf("expected first adapter to be called once, got %d", firstAdapter.chatCalled)
+	}
+	if secondAdapter.chatCalled != 0 {
+		t.Fatalf("expected second adapter not to be called, got %d", secondAdapter.chatCalled)
+	}
+	if classifier.called != 0 {
+		t.Fatalf("expected retry classifier not to be called after client cancel, got %d", classifier.called)
+	}
+	if len(settlement.params) != 0 {
+		t.Fatalf("expected settlement not to be called, got %d calls", len(settlement.params))
+	}
+	if len(requestLog.markAttemptCanceledArgs) != 1 {
+		t.Fatalf("expected 1 attempt canceled call, got %d", len(requestLog.markAttemptCanceledArgs))
+	}
+	if requestLog.markAttemptCanceledArgs[0].ErrorCode != "client_canceled" {
+		t.Fatalf("expected attempt canceled code %q, got %q", "client_canceled", requestLog.markAttemptCanceledArgs[0].ErrorCode)
+	}
+	if len(requestLog.markRequestCanceledArgs) != 1 {
+		t.Fatalf("expected 1 request canceled call, got %d", len(requestLog.markRequestCanceledArgs))
+	}
+	if requestLog.markRequestCanceledArgs[0].ErrorCode != "client_canceled" {
+		t.Fatalf("expected request canceled code %q, got %q", "client_canceled", requestLog.markRequestCanceledArgs[0].ErrorCode)
+	}
+	if len(requestLog.markAttemptFailedArgs) != 0 {
+		t.Fatalf("expected no attempt failed call, got %d", len(requestLog.markAttemptFailedArgs))
+	}
+	if len(requestLog.markRequestFailedArgs) != 0 {
+		t.Fatalf("expected no request failed call, got %d", len(requestLog.markRequestFailedArgs))
+	}
+}
+
 func TestChatCompletionServiceStreamChatCompletionRoutesAndCallsAdapter(t *testing.T) {
 	fakeAdapter := &fakeChatAdapter{
 		streamResp: []adapter.ChatStreamChunk{
@@ -651,6 +743,7 @@ func TestChatCompletionServiceStreamChatCompletionRoutesAndCallsAdapter(t *testi
 				Role:    "assistant",
 				Content: "mock response",
 			},
+			streamUsageChunk("gpt-4.1"),
 		},
 	}
 	router := &fakeChatRouter{
@@ -661,7 +754,9 @@ func TestChatCompletionServiceStreamChatCompletionRoutesAndCallsAdapter(t *testi
 			"openai": fakeAdapter,
 		},
 	}
-	service := NewChatCompletionService(router, registry, nil, newFakeRequestLogService(), newChatCompletionSettlementForTest())
+	requestLog := newFakeRequestLogService()
+	settlement := newChatCompletionSettlementForTest()
+	service := NewChatCompletionService(router, registry, nil, requestLog, settlement)
 
 	chunks := make([]httpapi.ChatCompletionStreamResponse, 0)
 	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk httpapi.ChatCompletionStreamResponse) error {
@@ -696,6 +791,42 @@ func TestChatCompletionServiceStreamChatCompletionRoutesAndCallsAdapter(t *testi
 	if chunks[0].Choices[0].Delta.Content != "mock response" {
 		t.Fatalf("expected content %q, got %q", "mock response", chunks[0].Choices[0].Delta.Content)
 	}
+	if len(requestLog.createRequests) != 1 {
+		t.Fatalf("expected one stream request record, got %d", len(requestLog.createRequests))
+	}
+	if !requestLog.createRequests[0].Stream {
+		t.Fatal("expected request record stream flag to be true")
+	}
+	if len(requestLog.markRequestRunningIDs) != 1 || requestLog.markRequestRunningIDs[0] != 1 {
+		t.Fatalf("expected request to be marked running once, got %#v", requestLog.markRequestRunningIDs)
+	}
+	if len(requestLog.createAttempts) != 1 {
+		t.Fatalf("expected one request attempt, got %d", len(requestLog.createAttempts))
+	}
+	if len(requestLog.markAttemptSucceededArgs) != 0 {
+		t.Fatalf("expected attempt success to be handled by settlement, got %d direct calls", len(requestLog.markAttemptSucceededArgs))
+	}
+	if len(requestLog.markRequestSucceededArgs) != 0 {
+		t.Fatalf("expected request success to be handled by settlement, got %d direct calls", len(requestLog.markRequestSucceededArgs))
+	}
+	if len(settlement.params) != 1 {
+		t.Fatalf("expected one settlement call, got %d", len(settlement.params))
+	}
+	if settlement.params[0].AttemptRecord.ID != 1 {
+		t.Fatalf("expected settlement attempt id 1, got %d", settlement.params[0].AttemptRecord.ID)
+	}
+	if settlement.params[0].ResponseModelID != "openai/gpt-4.1" {
+		t.Fatalf("expected settlement response model %q, got %q", "openai/gpt-4.1", settlement.params[0].ResponseModelID)
+	}
+	if settlement.params[0].UpstreamResponseModel != "gpt-4.1" {
+		t.Fatalf("expected settlement upstream model %q, got %q", "gpt-4.1", settlement.params[0].UpstreamResponseModel)
+	}
+	if settlement.params[0].Usage.CachedTokens != 3 {
+		t.Fatalf("expected cached tokens %d, got %d", 3, settlement.params[0].Usage.CachedTokens)
+	}
+	if settlement.params[0].Usage.ReasoningTokens != 2 {
+		t.Fatalf("expected reasoning tokens %d, got %d", 2, settlement.params[0].Usage.ReasoningTokens)
+	}
 }
 
 func TestChatCompletionServiceStreamChatCompletionReturnsMissingAdapterWithoutRetry(t *testing.T) {
@@ -719,6 +850,246 @@ func TestChatCompletionServiceStreamChatCompletionReturnsMissingAdapterWithoutRe
 	}
 }
 
+func TestChatCompletionServiceStreamChatCompletionFailsWithoutFinalUsage(t *testing.T) {
+	fakeAdapter := &fakeChatAdapter{
+		streamResp: []adapter.ChatStreamChunk{
+			{
+				ID:      "chatcmpl_mock",
+				Model:   "gpt-4.1",
+				Role:    "assistant",
+				Content: "content without final usage",
+			},
+		},
+	}
+	requestLog := newFakeRequestLogService()
+	settlement := newChatCompletionSettlementForTest()
+	service := NewChatCompletionService(
+		&fakeChatRouter{plan: routePlan(routeCandidate("openai", 123, "gpt-4.1"))},
+		&fakeAdapterRegistry{
+			streamChatAdapters: map[string]adapter.StreamChatAdapter{
+				"openai": fakeAdapter,
+			},
+		},
+		nil,
+		requestLog,
+		settlement,
+	)
+
+	chunks := make([]httpapi.ChatCompletionStreamResponse, 0)
+	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk httpapi.ChatCompletionStreamResponse) error {
+		chunks = append(chunks, chunk)
+		return nil
+	})
+	if err == nil {
+		t.Fatal("expected missing final usage error")
+	}
+	if !strings.Contains(err.Error(), "stream final usage is missing") {
+		t.Fatalf("expected missing final usage error, got %v", err)
+	}
+	if len(chunks) != 1 {
+		t.Fatalf("expected visible content chunk to be emitted, got %d chunks", len(chunks))
+	}
+	if len(settlement.params) != 0 {
+		t.Fatalf("expected settlement not to run without final usage, got %d calls", len(settlement.params))
+	}
+	if len(requestLog.markAttemptFailedArgs) != 1 {
+		t.Fatalf("expected attempt to fail once, got %d", len(requestLog.markAttemptFailedArgs))
+	}
+	if requestLog.markAttemptFailedArgs[0].ErrorCode != "stream_usage_missing" {
+		t.Fatalf("expected attempt error code %q, got %q", "stream_usage_missing", requestLog.markAttemptFailedArgs[0].ErrorCode)
+	}
+	if len(requestLog.markRequestFailedArgs) != 1 {
+		t.Fatalf("expected request to fail once, got %d", len(requestLog.markRequestFailedArgs))
+	}
+	if requestLog.markRequestFailedArgs[0].ErrorCode != "stream_usage_missing" {
+		t.Fatalf("expected request error code %q, got %q", "stream_usage_missing", requestLog.markRequestFailedArgs[0].ErrorCode)
+	}
+	if len(requestLog.markAttemptSucceededArgs) != 0 {
+		t.Fatalf("expected no direct attempt success, got %d", len(requestLog.markAttemptSucceededArgs))
+	}
+	if len(requestLog.markRequestSucceededArgs) != 0 {
+		t.Fatalf("expected no direct request success, got %d", len(requestLog.markRequestSucceededArgs))
+	}
+}
+
+func TestChatCompletionServiceStreamChatCompletionMarksRequestFailedOnSettlementError(t *testing.T) {
+	settlementErr := errors.New("stream settlement failed")
+	fakeAdapter := &fakeChatAdapter{
+		streamResp: []adapter.ChatStreamChunk{
+			{
+				ID:      "chatcmpl_mock",
+				Model:   "gpt-4.1",
+				Role:    "assistant",
+				Content: "stream content",
+			},
+			streamUsageChunk("gpt-4.1"),
+		},
+	}
+	requestLog := newFakeRequestLogService()
+	settlement := &fakeChatSettlementExecutor{err: settlementErr}
+	service := NewChatCompletionService(
+		&fakeChatRouter{plan: routePlan(routeCandidate("openai", 123, "gpt-4.1"))},
+		&fakeAdapterRegistry{
+			streamChatAdapters: map[string]adapter.StreamChatAdapter{
+				"openai": fakeAdapter,
+			},
+		},
+		nil,
+		requestLog,
+		settlement,
+	)
+
+	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk httpapi.ChatCompletionStreamResponse) error {
+		return nil
+	})
+	if !errors.Is(err, settlementErr) {
+		t.Fatalf("expected settlement error, got %v", err)
+	}
+	if len(settlement.params) != 1 {
+		t.Fatalf("expected settlement to be called once, got %d", len(settlement.params))
+	}
+	if len(requestLog.markRequestFailedArgs) != 1 {
+		t.Fatalf("expected request to be marked failed once, got %d", len(requestLog.markRequestFailedArgs))
+	}
+	if requestLog.markRequestFailedArgs[0].ErrorCode != "stream_chat_settlement_failed" {
+		t.Fatalf("expected stream_chat_settlement_failed, got %q", requestLog.markRequestFailedArgs[0].ErrorCode)
+	}
+	if len(requestLog.markAttemptSucceededArgs) != 0 {
+		t.Fatalf("expected attempt success to be handled by settlement, got %d direct calls", len(requestLog.markAttemptSucceededArgs))
+	}
+	if len(requestLog.markRequestSucceededArgs) != 0 {
+		t.Fatalf("expected request success to be handled by settlement, got %d direct calls", len(requestLog.markRequestSucceededArgs))
+	}
+}
+
+func TestChatCompletionServiceStreamChatCompletionSettlesAfterFinalUsageWithAdapterError(t *testing.T) {
+	upstreamErr := errors.New("stream tail error after usage")
+	fakeAdapter := &fakeChatAdapter{
+		streamResp: []adapter.ChatStreamChunk{
+			{
+				ID:      "chatcmpl_mock",
+				Model:   "gpt-4.1",
+				Role:    "assistant",
+				Content: "billable stream content",
+			},
+			streamUsageChunk("gpt-4.1"),
+		},
+		streamErr: upstreamErr,
+	}
+	requestLog := newFakeRequestLogService()
+	settlement := newChatCompletionSettlementForTest()
+	service := NewChatCompletionService(
+		&fakeChatRouter{plan: routePlan(routeCandidate("openai", 123, "gpt-4.1"))},
+		&fakeAdapterRegistry{
+			streamChatAdapters: map[string]adapter.StreamChatAdapter{
+				"openai": fakeAdapter,
+			},
+		},
+		nil,
+		requestLog,
+		settlement,
+	)
+
+	chunks := make([]httpapi.ChatCompletionStreamResponse, 0)
+	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk httpapi.ChatCompletionStreamResponse) error {
+		chunks = append(chunks, chunk)
+		return nil
+	})
+	if !errors.Is(err, upstreamErr) {
+		t.Fatalf("expected original stream tail error, got %v", err)
+	}
+	if len(chunks) != 1 {
+		t.Fatalf("expected only visible content chunk to be emitted, got %d chunks", len(chunks))
+	}
+	if len(settlement.params) != 1 {
+		t.Fatalf("expected settlement after final usage, got %d calls", len(settlement.params))
+	}
+	if settlement.params[0].Usage.TotalTokens != 21 {
+		t.Fatalf("expected settlement total tokens 21, got %d", settlement.params[0].Usage.TotalTokens)
+	}
+	if len(requestLog.markAttemptCanceledArgs) != 0 {
+		t.Fatalf("expected no canceled attempt after final usage, got %d", len(requestLog.markAttemptCanceledArgs))
+	}
+	if len(requestLog.markRequestCanceledArgs) != 0 {
+		t.Fatalf("expected no canceled request after final usage, got %d", len(requestLog.markRequestCanceledArgs))
+	}
+	if len(requestLog.markAttemptFailedArgs) != 0 {
+		t.Fatalf("expected no direct failed attempt after final usage settlement, got %d", len(requestLog.markAttemptFailedArgs))
+	}
+	if len(requestLog.markRequestFailedArgs) != 0 {
+		t.Fatalf("expected no direct failed request after final usage settlement, got %d", len(requestLog.markRequestFailedArgs))
+	}
+}
+
+func TestChatCompletionServiceStreamChatCompletionSettlesAfterFinalUsageWithClientCancel(t *testing.T) {
+	fakeAdapter := &fakeChatAdapter{
+		streamResp: []adapter.ChatStreamChunk{
+			{
+				ID:      "chatcmpl_mock",
+				Model:   "gpt-4.1",
+				Role:    "assistant",
+				Content: "billable stream content",
+			},
+			streamUsageChunk("gpt-4.1"),
+		},
+		streamErr: context.Canceled,
+	}
+	classifier := &fakeRetryClassifier{retryable: true}
+	requestLog := newFakeRequestLogService()
+	settlement := newChatCompletionSettlementForTest()
+	service := NewChatCompletionService(
+		&fakeChatRouter{plan: routePlan(
+			routeCandidate("openai-primary", 101, "gpt-4.1"),
+			routeCandidate("openai-secondary", 102, "gpt-4.1"),
+		)},
+		&fakeAdapterRegistry{
+			streamChatAdapters: map[string]adapter.StreamChatAdapter{
+				"openai-primary": fakeAdapter,
+				"openai-secondary": &fakeChatAdapter{
+					streamResp: []adapter.ChatStreamChunk{
+						{Content: "should not fallback"},
+						streamUsageChunk("gpt-4.1"),
+					},
+				},
+			},
+		},
+		classifier,
+		requestLog,
+		settlement,
+	)
+
+	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk httpapi.ChatCompletionStreamResponse) error {
+		return nil
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected original context canceled error, got %v", err)
+	}
+	if classifier.called != 0 {
+		t.Fatalf("expected retry classifier not to run after final usage, got %d calls", classifier.called)
+	}
+	if len(settlement.params) != 1 {
+		t.Fatalf("expected settlement after final usage, got %d calls", len(settlement.params))
+	}
+	if settlement.params[0].AttemptRecord.ID != 1 {
+		t.Fatalf("expected first attempt to be settled, got attempt id %d", settlement.params[0].AttemptRecord.ID)
+	}
+	if len(requestLog.createAttempts) != 1 {
+		t.Fatalf("expected no fallback attempt after final usage, got %d attempts", len(requestLog.createAttempts))
+	}
+	if len(requestLog.markAttemptCanceledArgs) != 0 {
+		t.Fatalf("expected no canceled attempt after final usage, got %d", len(requestLog.markAttemptCanceledArgs))
+	}
+	if len(requestLog.markRequestCanceledArgs) != 0 {
+		t.Fatalf("expected no canceled request after final usage, got %d", len(requestLog.markRequestCanceledArgs))
+	}
+	if len(requestLog.markAttemptFailedArgs) != 0 {
+		t.Fatalf("expected no direct failed attempt after final usage settlement, got %d", len(requestLog.markAttemptFailedArgs))
+	}
+	if len(requestLog.markRequestFailedArgs) != 0 {
+		t.Fatalf("expected no direct failed request after final usage settlement, got %d", len(requestLog.markRequestFailedArgs))
+	}
+}
+
 func TestChatCompletionServiceStreamChatCompletionFallsBackBeforeFirstChunk(t *testing.T) {
 	upstreamErr := errors.New("temporary stream upstream error")
 	firstAdapter := &fakeChatAdapter{streamErr: upstreamErr}
@@ -730,9 +1101,12 @@ func TestChatCompletionServiceStreamChatCompletionFallsBackBeforeFirstChunk(t *t
 				Role:    "assistant",
 				Content: "fallback stream response",
 			},
+			streamUsageChunk("gpt-4.1"),
 		},
 	}
 	classifier := &fakeRetryClassifier{retryable: true}
+	requestLog := newFakeRequestLogService()
+	settlement := newChatCompletionSettlementForTest()
 	service := NewChatCompletionService(
 		&fakeChatRouter{plan: routePlan(
 			routeCandidate("openai-primary", 101, "gpt-4.1"),
@@ -745,8 +1119,8 @@ func TestChatCompletionServiceStreamChatCompletionFallsBackBeforeFirstChunk(t *t
 			},
 		},
 		classifier,
-		newFakeRequestLogService(),
-		newChatCompletionSettlementForTest(),
+		requestLog,
+		settlement,
 	)
 
 	chunks := make([]httpapi.ChatCompletionStreamResponse, 0)
@@ -771,6 +1145,33 @@ func TestChatCompletionServiceStreamChatCompletionFallsBackBeforeFirstChunk(t *t
 	}
 	if chunks[0].Choices[0].Delta.Content != "fallback stream response" {
 		t.Fatalf("expected fallback stream response, got %q", chunks[0].Choices[0].Delta.Content)
+	}
+	if len(requestLog.createAttempts) != 2 {
+		t.Fatalf("expected two stream attempts, got %d", len(requestLog.createAttempts))
+	}
+	if requestLog.createAttempts[0].AttemptIndex != 0 || requestLog.createAttempts[1].AttemptIndex != 1 {
+		t.Fatalf("expected attempt indexes 0 and 1, got %#v", requestLog.createAttempts)
+	}
+	if len(requestLog.markAttemptFailedArgs) != 1 {
+		t.Fatalf("expected first attempt to fail once, got %d", len(requestLog.markAttemptFailedArgs))
+	}
+	if requestLog.markAttemptFailedArgs[0].ErrorCode != "stream_adapter_error" {
+		t.Fatalf("expected stream_adapter_error, got %q", requestLog.markAttemptFailedArgs[0].ErrorCode)
+	}
+	if len(requestLog.markAttemptSucceededArgs) != 0 {
+		t.Fatalf("expected fallback attempt success to be handled by settlement, got %d direct calls", len(requestLog.markAttemptSucceededArgs))
+	}
+	if len(requestLog.markRequestSucceededArgs) != 0 {
+		t.Fatalf("expected request success to be handled by settlement, got %d direct calls", len(requestLog.markRequestSucceededArgs))
+	}
+	if len(settlement.params) != 1 {
+		t.Fatalf("expected request to be settled once after fallback, got %d", len(settlement.params))
+	}
+	if settlement.params[0].AttemptRecord.ID != 2 {
+		t.Fatalf("expected second attempt to be settled, got attempt id %d", settlement.params[0].AttemptRecord.ID)
+	}
+	if len(requestLog.markRequestFailedArgs) != 0 {
+		t.Fatalf("expected request not to fail after successful fallback, got %#v", requestLog.markRequestFailedArgs)
 	}
 }
 
@@ -798,6 +1199,7 @@ func TestChatCompletionServiceStreamChatCompletionDoesNotFallbackAfterFirstChunk
 		},
 	}
 	classifier := &fakeRetryClassifier{retryable: true}
+	requestLog := newFakeRequestLogService()
 	service := NewChatCompletionService(
 		&fakeChatRouter{plan: routePlan(
 			routeCandidate("openai-primary", 101, "gpt-4.1"),
@@ -810,7 +1212,7 @@ func TestChatCompletionServiceStreamChatCompletionDoesNotFallbackAfterFirstChunk
 			},
 		},
 		classifier,
-		newFakeRequestLogService(),
+		requestLog,
 		newChatCompletionSettlementForTest(),
 	)
 
@@ -833,5 +1235,92 @@ func TestChatCompletionServiceStreamChatCompletionDoesNotFallbackAfterFirstChunk
 	}
 	if len(chunks) != 1 || chunks[0].Choices[0].Delta.Content != "partial" {
 		t.Fatalf("expected only partial chunk, got %#v", chunks)
+	}
+	if len(requestLog.createAttempts) != 1 {
+		t.Fatalf("expected only first attempt to be created, got %d", len(requestLog.createAttempts))
+	}
+	if len(requestLog.markAttemptFailedArgs) != 1 {
+		t.Fatalf("expected first attempt to fail once, got %d", len(requestLog.markAttemptFailedArgs))
+	}
+	if requestLog.markAttemptFailedArgs[0].ErrorCode != "stream_adapter_error" {
+		t.Fatalf("expected attempt error code %q, got %q", "stream_adapter_error", requestLog.markAttemptFailedArgs[0].ErrorCode)
+	}
+	if len(requestLog.markRequestFailedArgs) != 1 {
+		t.Fatalf("expected request to fail once after emitted stream error, got %d", len(requestLog.markRequestFailedArgs))
+	}
+	if requestLog.markRequestFailedArgs[0].ErrorCode != "stream_adapter_error_after_emit" {
+		t.Fatalf("expected request error code %q, got %q", "stream_adapter_error_after_emit", requestLog.markRequestFailedArgs[0].ErrorCode)
+	}
+	if len(requestLog.markAttemptSucceededArgs) != 0 {
+		t.Fatalf("expected no succeeded attempt after emitted stream error, got %d", len(requestLog.markAttemptSucceededArgs))
+	}
+	if len(requestLog.markRequestSucceededArgs) != 0 {
+		t.Fatalf("expected no succeeded request after emitted stream error, got %d", len(requestLog.markRequestSucceededArgs))
+	}
+}
+
+func TestChatCompletionServiceStreamChatCompletionMarksCanceledWithoutFallback(t *testing.T) {
+	firstAdapter := &fakeChatAdapter{streamErr: context.Canceled}
+	secondAdapter := &fakeChatAdapter{
+		streamResp: []adapter.ChatStreamChunk{
+			{
+				ID:      "chatcmpl_mock",
+				Model:   "gpt-4.1",
+				Role:    "assistant",
+				Content: "should not emit",
+			},
+		},
+	}
+	classifier := &fakeRetryClassifier{retryable: true}
+	requestLog := newFakeRequestLogService()
+	service := NewChatCompletionService(
+		&fakeChatRouter{plan: routePlan(
+			routeCandidate("openai-primary", 101, "gpt-4.1"),
+			routeCandidate("openai-secondary", 102, "gpt-4.1"),
+		)},
+		&fakeAdapterRegistry{
+			streamChatAdapters: map[string]adapter.StreamChatAdapter{
+				"openai-primary":   firstAdapter,
+				"openai-secondary": secondAdapter,
+			},
+		},
+		classifier,
+		requestLog,
+		newChatCompletionSettlementForTest(),
+	)
+
+	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk httpapi.ChatCompletionStreamResponse) error {
+		t.Fatalf("expected no stream chunk after client cancel, got %#v", chunk)
+		return nil
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context canceled error, got %v", err)
+	}
+	if firstAdapter.streamCalled != 1 {
+		t.Fatalf("expected first stream adapter to be called once, got %d", firstAdapter.streamCalled)
+	}
+	if secondAdapter.streamCalled != 0 {
+		t.Fatalf("expected second stream adapter not to be called, got %d", secondAdapter.streamCalled)
+	}
+	if classifier.called != 0 {
+		t.Fatalf("expected retry classifier not to be called after client cancel, got %d", classifier.called)
+	}
+	if len(requestLog.markAttemptCanceledArgs) != 1 {
+		t.Fatalf("expected 1 attempt canceled call, got %d", len(requestLog.markAttemptCanceledArgs))
+	}
+	if requestLog.markAttemptCanceledArgs[0].ErrorCode != "client_canceled" {
+		t.Fatalf("expected attempt canceled code %q, got %q", "client_canceled", requestLog.markAttemptCanceledArgs[0].ErrorCode)
+	}
+	if len(requestLog.markRequestCanceledArgs) != 1 {
+		t.Fatalf("expected 1 request canceled call, got %d", len(requestLog.markRequestCanceledArgs))
+	}
+	if requestLog.markRequestCanceledArgs[0].ErrorCode != "client_canceled" {
+		t.Fatalf("expected request canceled code %q, got %q", "client_canceled", requestLog.markRequestCanceledArgs[0].ErrorCode)
+	}
+	if len(requestLog.markAttemptFailedArgs) != 0 {
+		t.Fatalf("expected no attempt failed call, got %d", len(requestLog.markAttemptFailedArgs))
+	}
+	if len(requestLog.markRequestFailedArgs) != 0 {
+		t.Fatalf("expected no request failed call, got %d", len(requestLog.markRequestFailedArgs))
 	}
 }

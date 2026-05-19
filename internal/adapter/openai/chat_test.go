@@ -48,6 +48,14 @@ func TestAdapterChatCompletionsCallsUpstream(t *testing.T) {
 				PromptTokens:     11,
 				CompletionTokens: 12,
 				TotalTokens:      23,
+				PromptTokensDetails: chatPromptTokensDetails{
+					CachedTokens: 7,
+				},
+				CompletionTokensDetails: chatCompletionTokensDetails{
+					ReasoningTokens:          3,
+					AcceptedPredictionTokens: 2,
+					RejectedPredictionTokens: 1,
+				},
 			},
 		}); err != nil {
 			t.Fatalf("encode response: %v", err)
@@ -113,6 +121,12 @@ func TestAdapterChatCompletionsCallsUpstream(t *testing.T) {
 	}
 	if got.Usage.TotalTokens != 23 {
 		t.Fatalf("got total_tokens %d, want 23", got.Usage.TotalTokens)
+	}
+	if got.Usage.CachedTokens != 7 {
+		t.Fatalf("got cached_tokens %d, want 7", got.Usage.CachedTokens)
+	}
+	if got.Usage.ReasoningTokens != 3 {
+		t.Fatalf("got reasoning_tokens %d, want 3", got.Usage.ReasoningTokens)
 	}
 }
 
@@ -199,6 +213,12 @@ func TestAdapterStreamChatCompletionsParsesUpstreamSSE(t *testing.T) {
 		if !gotRequestBody.Stream {
 			t.Fatal("expected stream request body to be true")
 		}
+		if gotRequestBody.StreamOptions == nil {
+			t.Fatal("expected stream_options to be set")
+		}
+		if !gotRequestBody.StreamOptions.IncludeUsage {
+			t.Fatal("expected stream_options.include_usage to be true")
+		}
 
 		w.Header().Set("Content-Type", "text/event-stream")
 
@@ -240,6 +260,29 @@ func TestAdapterStreamChatCompletionsParsesUpstreamSSE(t *testing.T) {
 							Content: "world",
 						},
 						FinishReason: &stop,
+					},
+				},
+			},
+			{
+				ID:      "chatcmpl_stream_test",
+				Model:   "gpt-4.1",
+				Choices: []chatStreamChoice{},
+			},
+			{
+				ID:      "chatcmpl_stream_test",
+				Model:   "gpt-4.1",
+				Choices: []chatStreamChoice{},
+				Usage: &chatCompletionUsage{
+					PromptTokens:     11,
+					CompletionTokens: 12,
+					TotalTokens:      23,
+					PromptTokensDetails: chatPromptTokensDetails{
+						CachedTokens: 7,
+					},
+					CompletionTokensDetails: chatCompletionTokensDetails{
+						ReasoningTokens:          3,
+						AcceptedPredictionTokens: 2,
+						RejectedPredictionTokens: 1,
 					},
 				},
 			},
@@ -314,8 +357,8 @@ func TestAdapterStreamChatCompletionsParsesUpstreamSSE(t *testing.T) {
 		t.Fatalf("got content %q, want %q", gotRequestBody.Messages[0].Content, "hello")
 	}
 
-	if len(got) != 2 {
-		t.Fatalf("got %d chunks, want 2", len(got))
+	if len(got) != 3 {
+		t.Fatalf("got %d chunks, want 3", len(got))
 	}
 
 	if got[0].ID != "chatcmpl_stream_test" {
@@ -330,6 +373,9 @@ func TestAdapterStreamChatCompletionsParsesUpstreamSSE(t *testing.T) {
 	if got[0].Content != "hello " {
 		t.Fatalf("got content %q, want %q", got[0].Content, "hello ")
 	}
+	if got[0].Usage != nil {
+		t.Fatalf("got first chunk usage %+v, want nil", got[0].Usage)
+	}
 
 	if got[1].Content != "world" {
 		t.Fatalf("got content %q, want %q", got[1].Content, "world")
@@ -339,6 +385,43 @@ func TestAdapterStreamChatCompletionsParsesUpstreamSSE(t *testing.T) {
 	}
 	if *got[1].FinishReason != "stop" {
 		t.Fatalf("got finish reason %q, want %q", *got[1].FinishReason, "stop")
+	}
+	if got[1].Usage != nil {
+		t.Fatalf("got second chunk usage %+v, want nil", got[1].Usage)
+	}
+
+	if got[2].ID != "chatcmpl_stream_test" {
+		t.Fatalf("got usage chunk id %q, want %q", got[2].ID, "chatcmpl_stream_test")
+	}
+	if got[2].Model != "gpt-4.1" {
+		t.Fatalf("got usage chunk model %q, want %q", got[2].Model, "gpt-4.1")
+	}
+	if got[2].Role != "" {
+		t.Fatalf("got usage chunk role %q, want empty", got[2].Role)
+	}
+	if got[2].Content != "" {
+		t.Fatalf("got usage chunk content %q, want empty", got[2].Content)
+	}
+	if got[2].FinishReason != nil {
+		t.Fatalf("got usage chunk finish reason %+v, want nil", got[2].FinishReason)
+	}
+	if got[2].Usage == nil {
+		t.Fatal("got nil usage chunk usage, want usage")
+	}
+	if got[2].Usage.PromptTokens != 11 {
+		t.Fatalf("got prompt_tokens %d, want 11", got[2].Usage.PromptTokens)
+	}
+	if got[2].Usage.CompletionTokens != 12 {
+		t.Fatalf("got completion_tokens %d, want 12", got[2].Usage.CompletionTokens)
+	}
+	if got[2].Usage.TotalTokens != 23 {
+		t.Fatalf("got total_tokens %d, want 23", got[2].Usage.TotalTokens)
+	}
+	if got[2].Usage.CachedTokens != 7 {
+		t.Fatalf("got cached_tokens %d, want 7", got[2].Usage.CachedTokens)
+	}
+	if got[2].Usage.ReasoningTokens != 3 {
+		t.Fatalf("got reasoning_tokens %d, want 3", got[2].Usage.ReasoningTokens)
 	}
 }
 

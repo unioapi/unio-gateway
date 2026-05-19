@@ -29,6 +29,7 @@ func NewService(store Store) *Service {
 
 // ListAvailableModels 返回当前 project 可见的 OpenAI-compatible 模型。
 func (s *Service) ListAvailableModels(ctx context.Context, projectID int64) ([]Model, error) {
+	// TODO(阶段6/production): [GAP-6-006] /v1/models 当前只按全局 enabled channel/model 返回，未体现 project 级可见性、预算或禁用策略；开放后台项目配置前；与 routing 共用 project model/channel policy，保证“可见模型”和“可路由模型”一致。
 	rows, err := s.store.ListAvailableModelsForProject(ctx, projectID)
 	if err != nil {
 		return nil, err

@@ -51,6 +51,7 @@ RETURNING
     updated_at;
 
 -- name: MarkRequestRunning :one
+-- TODO(阶段7/production): [GAP-7-003] request/attempt 状态更新目前没有状态机守卫，补偿任务或并发重试可能覆盖 succeeded/canceled 等终态；引入异步补偿或重复 settlement 前；为 SQL 增加合法前置状态条件并让终态更新具备幂等语义。
 UPDATE request_records
 SET status = 'running',
     updated_at = now()

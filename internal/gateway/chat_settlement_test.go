@@ -290,20 +290,18 @@ func (d *chatSettlementDBDeps) params() ChatSettlementParams {
 			UpstreamModel:   d.attemptRecord.UpstreamModel,
 			Status:          requestlog.AttemptStatus(d.attemptRecord.Status),
 		},
-		Principal:       &auth.APIKeyPrincipal{UserID: d.userID, ProjectID: d.projectID, APIKeyID: d.apiKeyID},
-		ResponseModelID: "openai/gpt-4.1",
-		ModelDBID:       d.modelID,
-		FinalProviderID: d.providerID,
-		FinalChannelID:  d.channelID,
-		AdapterResp: &adapter.ChatResponse{
-			ID:      "chatcmpl_test",
-			Model:   "gpt-4.1",
-			Content: "hello",
-			Usage: adapter.ChatUsage{
-				PromptTokens:     10,
-				CompletionTokens: 5,
-				TotalTokens:      15,
-			},
+		Principal:             &auth.APIKeyPrincipal{UserID: d.userID, ProjectID: d.projectID, APIKeyID: d.apiKeyID},
+		ResponseModelID:       "openai/gpt-4.1",
+		ModelDBID:             d.modelID,
+		FinalProviderID:       d.providerID,
+		FinalChannelID:        d.channelID,
+		UpstreamResponseModel: "gpt-4.1",
+		Usage: adapter.ChatUsage{
+			PromptTokens:     10,
+			CompletionTokens: 5,
+			TotalTokens:      15,
+			CachedTokens:     3,
+			ReasoningTokens:  2,
 		},
 	}
 }
@@ -416,6 +414,9 @@ func TestChatSettlementSettlesSuccessfulChat(t *testing.T) {
 	if usageRecord.PromptTokens != 10 || usageRecord.CompletionTokens != 5 || usageRecord.TotalTokens != 15 {
 		t.Fatalf("expected usage 10/5/15, got %d/%d/%d", usageRecord.PromptTokens, usageRecord.CompletionTokens, usageRecord.TotalTokens)
 	}
+	if usageRecord.CachedTokens != 3 || usageRecord.ReasoningTokens != 2 {
+		t.Fatalf("expected cached/reasoning usage 3/2, got %d/%d", usageRecord.CachedTokens, usageRecord.ReasoningTokens)
+	}
 	if usageRecord.Source != "upstream_response" {
 		t.Fatalf("expected source upstream_response, got %q", usageRecord.Source)
 	}
@@ -448,6 +449,10 @@ func TestChatSettlementSettlesSuccessfulChat(t *testing.T) {
 
 	if len(billingCalculator.usages) != 1 || len(billingCalculator.prices) != 1 {
 		t.Fatalf("expected one billing calculation, got usages=%d prices=%d", len(billingCalculator.usages), len(billingCalculator.prices))
+	}
+	billingUsage := billingCalculator.usages[0]
+	if billingUsage.CachedTokens != 3 || billingUsage.ReasoningTokens != 2 {
+		t.Fatalf("expected billing cached/reasoning usage 3/2, got %d/%d", billingUsage.CachedTokens, billingUsage.ReasoningTokens)
 	}
 }
 

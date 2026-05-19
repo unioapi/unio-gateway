@@ -52,6 +52,7 @@ func NewService(store Store) *Service {
 
 // Create 创建新的 API Key。Plaintext 只能返回给调用方一次，不能保存到数据库。
 func (s *Service) Create(ctx context.Context, params CreateParams) (*CreatedKey, error) {
+	// TODO(阶段3/production): [GAP-3-007] API Key 创建服务当前只接收 project_id，缺少调用者身份校验和审计，接入后台接口时可能越权给其他 project 创建 key；开放 key 管理 API 前；传入 authenticated user/admin principal，校验 project 归属并写审计日志。
 	if params.ProjectID <= 0 {
 		return nil, ErrInvalidProjectID
 	}

@@ -25,7 +25,7 @@ func NewRedisStore(client redis.Cmdable) *RedisStore {
 func (s *RedisStore) Increment(ctx context.Context, key string, window time.Duration) (CountResult, error) {
 	redisKey := redisKeyForSubject(key)
 
-	// TODO(阶段3/production): 用 Lua 或 Redis transaction 保证 INCR + EXPIRE 原子性，避免首次计数成功但过期时间设置失败。
+	// TODO(阶段3/production): [GAP-3-004] 用 Lua 或 Redis transaction 保证 INCR + EXPIRE 原子性，避免首次计数成功但过期时间设置失败。
 	count, err := s.client.Incr(ctx, redisKey).Result()
 	if err != nil {
 		return CountResult{}, err
@@ -48,7 +48,7 @@ func (s *RedisStore) Increment(ctx context.Context, key string, window time.Dura
 	}, nil
 }
 
-// TODO(阶段3/production): 将 Redis key namespace 集中到部署配置或常量包用于环境隔离；项目级、模型级和 channel 级限流策略后续来自数据库。
+// TODO(阶段3/production): [GAP-3-005] 将 Redis key namespace 集中到部署配置或常量包用于环境隔离；项目级、模型级和 channel 级限流策略后续来自数据库。
 func redisKeyForSubject(subject string) string {
 	return "unio:ratelimit:" + subject
 }

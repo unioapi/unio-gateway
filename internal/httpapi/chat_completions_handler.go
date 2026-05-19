@@ -52,6 +52,7 @@ func (h *chatCompletionsHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// TODO(阶段4/production): [GAP-4-001] chat messages 目前只校验非空列表，未校验 role 合法性、content 空值策略和 stop/user 等字段边界；开放 OpenAI-compatible API 前；补齐请求 DTO 深度校验并保持 OpenAI-compatible 错误格式。
 	if req.Temperature != nil && (*req.Temperature < 0 || *req.Temperature > 2) {
 		_ = httpx.WriteOpenAIError(
 			w,
@@ -108,7 +109,7 @@ func (h *chatCompletionsHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 		})
 		if err != nil {
 			if streamStarted {
-				// TODO(阶段7/production): SSE 写出后错误缺少 request status 会影响结算和退款审计；接入 billing/request record 时；映射上游错误、客户端断开和解析错误并驱动 settle/refund。
+				// TODO(阶段7/production): [GAP-7-006] SSE 写出后无法再返回 OpenAI-compatible JSON error，客户端只能看到中断 stream；公开生产前；保留 request 状态和 final usage settlement 作为账务事实，并在后续错误事件/观测能力中暴露中断原因。
 				return
 			}
 

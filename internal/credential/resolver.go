@@ -12,7 +12,7 @@ type Resolver interface {
 }
 
 // StaticResolver 是开发期凭据解析器，通过内存映射解析 credential_ref。
-// TODO(阶段6/production): 静态凭据映射无法支持后台动态管理和安全轮换；接入 KMS/master key 或 secret manager 时；替换为安全凭据解析实现，并确保数据库只保存 credential_ref 或密文。
+// TODO(阶段6/production): [GAP-6-001] 静态凭据映射无法支持后台动态管理和安全轮换；接入 KMS/master key 或 secret manager 时；替换为安全凭据解析实现，并确保数据库只保存 credential_ref 或密文。
 type StaticResolver struct {
 	values map[string]string
 }

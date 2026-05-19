@@ -43,8 +43,8 @@ func main() {
 	startupCtx, startupCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer startupCancel()
 
-	// TODO(阶段1/production): 将启动超时、HTTP server timeout 和 shutdown timeout 纳入 config，并配合 readiness/metrics 暴露运行状态。
-	// TODO(阶段2/production): 启动前接入 migration runner（迁移执行器）或 schema 版本检查，避免服务连接到未迁移数据库。
+	// TODO(阶段1/production): [GAP-1-001] 将启动超时、HTTP server timeout 和 shutdown timeout 纳入 config，并配合 readiness/metrics 暴露运行状态。
+	// TODO(阶段2/production): [GAP-2-001] 启动前接入 migration runner（迁移执行器）或 schema 版本检查，避免服务连接到未迁移数据库。
 	// DB 启动期先检查数据库可用，避免服务带病启动。
 	pgPool, err := store.OpenPostgres(startupCtx, cfg.DB.URL)
 	if err != nil {
@@ -63,7 +63,7 @@ func main() {
 	defer redisClient.Close()
 	logger.Info("redis connected", "addr", cfg.Redis.Addr, "db", cfg.Redis.DB)
 
-	// TODO(阶段6/production): main 函数直接装配 credential、routing、adapter registry 和 gateway 会让启动逻辑膨胀；阶段 6 收口或进入后台管理装配前；抽出 server bootstrap/app wiring 组件，保持 main 只负责配置、生命周期和退出信号。
+	// TODO(阶段6/production): [GAP-6-002] main 函数直接装配 credential、routing、adapter registry 和 gateway 会让启动逻辑膨胀；阶段 6 收口或进入后台管理装配前；抽出 server bootstrap/app wiring 组件，保持 main 只负责配置、生命周期和退出信号。
 	queries := sqlc.New(pgPool)
 	apiKeyAuthenticator := auth.NewAPIKeyAuthenticator(queries)
 	modelCatalogService := modelcatalog.NewService(queries)
@@ -72,7 +72,7 @@ func main() {
 
 	chatRouter := routing.NewRouter(queries, credentialResolver, 30*time.Second)
 	openaiAdapter := openai.NewAdapter(http.DefaultClient)
-	// TODO(阶段6/production): provider.adapter 缺少启动/后台写入校验会导致运行时 registry miss；开放后台管理或启用真实 channel 前；在 provider 写入和启动 preflight 中校验 adapter key 必须存在于 adapter registry。
+	// TODO(阶段6/production): [GAP-6-003] provider.adapter 缺少启动/后台写入校验会导致运行时 registry miss；开放后台管理或启用真实 channel 前；在 provider 写入和启动 preflight 中校验 adapter key 必须存在于 adapter registry。
 	adapterRegistry, err := adapter.NewRegistry(adapter.Registration{
 		Key:        "openai",
 		Chat:       openaiAdapter,
@@ -107,7 +107,7 @@ func main() {
 		APIKeyAuthenticator: apiKeyAuthenticator,
 		RateLimiter:         rateLimiter,
 
-		// TODO(阶段3/production): 将默认 rate limit（限流）阈值和窗口迁入 config；项目级、模型级和 channel 级策略后续来自数据库。
+		// TODO(阶段3/production): [GAP-3-003] 将默认 rate limit（限流）阈值和窗口迁入 config；项目级、模型级和 channel 级策略后续来自数据库。
 		RateLimitLimit:  60,
 		RateLimitWindow: time.Minute,
 

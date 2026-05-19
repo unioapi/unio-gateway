@@ -88,11 +88,7 @@ func (a *Adapter) ChatCompletions(ctx context.Context, ch channel.Runtime, req a
 		ID:      upstreamRespBody.ID,
 		Model:   upstreamRespBody.Model,
 		Content: upstreamRespBody.Choices[0].Message.Content,
-		Usage: adapter.ChatUsage{
-			PromptTokens:     upstreamRespBody.Usage.PromptTokens,
-			CompletionTokens: upstreamRespBody.Usage.CompletionTokens,
-			TotalTokens:      upstreamRespBody.Usage.TotalTokens,
-		},
+		Usage:   chatUsageFromOpenAI(upstreamRespBody.Usage),
 	}, nil
 }
 
@@ -126,6 +122,9 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 		Model:    req.Model,
 		Messages: messages,
 		Stream:   true,
+		StreamOptions: &chatStreamOptions{
+			IncludeUsage: true,
+		},
 	}
 	buf := new(bytes.Buffer)
 	if err := json.NewEncoder(buf).Encode(upstreamReqBody); err != nil {
@@ -151,6 +150,7 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 	}
 
 	scanner := bufio.NewScanner(upstreamResp.Body)
+	// TODO(阶段5/production): [GAP-5-002] bufio.Scanner 仍受单个 SSE event 大小上限影响，遇到超长 delta/tool_calls 可能中断 stream；支持工具调用或大 chunk 上游前；改为基于 reader 的 SSE event parser，并显式处理 backpressure 和超限错误。
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
 	for scanner.Scan() {
@@ -171,6 +171,18 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 		}
 
 		if len(streamResp.Choices) == 0 {
+			if streamResp.Usage != nil {
+				usage := chatUsageFromOpenAI(*streamResp.Usage)
+
+				if err := emit(adapter.ChatStreamChunk{
+					ID:    streamResp.ID,
+					Model: streamResp.Model,
+					Usage: &usage,
+				}); err != nil {
+					return fmt.Errorf("openai adapter: send stream usage chunk: %w", err)
+				}
+			}
+
 			continue
 		}
 
@@ -200,4 +212,15 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 	}
 
 	return nil
+}
+
+// chatUsageFromOpenAI 将 OpenAI usage DTO 转成 adapter 内部 usage DTO。
+func chatUsageFromOpenAI(usage chatCompletionUsage) adapter.ChatUsage {
+	return adapter.ChatUsage{
+		PromptTokens:     usage.PromptTokens,
+		CompletionTokens: usage.CompletionTokens,
+		TotalTokens:      usage.TotalTokens,
+		CachedTokens:     usage.PromptTokensDetails.CachedTokens,
+		ReasoningTokens:  usage.CompletionTokensDetails.ReasoningTokens,
+	}
 }

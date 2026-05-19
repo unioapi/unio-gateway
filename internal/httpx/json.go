@@ -22,6 +22,7 @@ func DecodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
 
 	decoder := json.NewDecoder(r.Body)
 
+	// TODO(阶段4/production): [GAP-4-002] 当前 JSON 解码未校验 Content-Type 和尾随 JSON token，会让公网 API 接受模糊请求体；开放 OpenAI-compatible API 前；补齐严格 body 校验并把 body too large / malformed JSON 映射为稳定的 OpenAI-compatible error。
 	if err := decoder.Decode(dst); err != nil {
 		var maxBytesErr *http.MaxBytesError
 		if errors.As(err, &maxBytesErr) {

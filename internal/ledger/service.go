@@ -30,6 +30,8 @@ type Service struct {
 	queries *sqlc.Queries
 }
 
+// TODO(阶段7/production): [GAP-7-011] ledger 当前只有 credit/debit，缺少 pre-authorize、capture、refund 的冻结/释放语义，stream 长输出和无 final usage 中断无法生产级控损；公开计费 API 前；引入余额预授权表或 reservation ledger，并实现 settle/refund 补偿流程。
+
 // Entry 表示 ledger service 返回给调用方的账本流水。
 type Entry struct {
 	ID              int64
@@ -179,6 +181,7 @@ func (s *Service) Debit(ctx context.Context, params DebitParams) (Entry, error) 
 // DebitWithQueries 使用调用方传入的 queries 执行扣款。
 // queries 可以是普通 queries，也可以是 queries.WithTx(tx)。
 func (s *Service) DebitWithQueries(ctx context.Context, queries *sqlc.Queries, params DebitParams) (Entry, error) {
+	// TODO(阶段7/production): [GAP-7-012] 外部事务内并发使用同一 debit 幂等键时，CreateLedgerEntry 唯一冲突会使调用方事务失败且无法在当前事务内安全查询既有流水；引入并发 settlement/补偿任务前；使用请求级锁或 insert-first 幂等策略让外层事务可稳定重入。
 	return s.debitWithQueries(ctx, queries, params)
 }
 

@@ -2,9 +2,11 @@
 
 ## 重要提示
 - 需要后面实现的生产欠账必须加上 TODO，格式为：
-  `// TODO(阶段X/production): 风险；触发时机；未来替换方向。`
+  `// TODO(阶段X/production): [GAP-X-001] 风险；触发时机；未来替换方向。`
+- 每个 production TODO 必须同步登记到 `docs/production/TODO_REGISTER.md`，并链接到对应章节 `PLAN.md` 的具体任务锚点；代码 TODO 只负责标记实现位置，完整上下文以 TODO register 和章节文档为准。
 - 开始新章节前必须扫描 TODO：
-  `rg -n "TODO" AGENTS.md cmd internal migrations sql`
+  `rg -n "TODO|GAP-" AGENTS.md docs cmd internal migrations sql`
+- 开始新章节前必须阅读 `docs/PROJECT_STATUS.md`、当前章节 `docs/chapters/phase-xx-*/STATUS.md`、`ACCEPTANCE.md` 和 `docs/production/TODO_REGISTER.md`，确认当前阶段的完成状态、上线阻断项和 P0/P1 欠账。
 - 开始新章节前必须判断当前阶段相关 TODO 是否需要先实现；不能只根据用户举例局部复盘，必须按生产上线系统全盘检查。
 - TODO 必须区分生产欠账和教学说明；已完成测试不保留 TODO。
 - 代码里的 TODO 只标记当前阶段、已完成阶段欠账、下一阶段直接相关的内容；阶段 6 以后这类远期能力先留在路线和自检清单里，进入对应阶段前再落到代码 TODO，避免当前章节被远期噪音淹没。
@@ -26,6 +28,63 @@
   - 方法专属参数结构体必须紧贴对应方法实现，通常放在方法前面，避免远距离跳转。
   - 同一个结构体的方法默认不要拆散到多个文件；只有当拆分维度非常明确且能提升阅读性时，才按能力拆分。
   - 新增文件时优先让文件名表达业务对象或能力，例如 `chat_settlement.go`，避免泛化成容易膨胀的大杂烩文件。
+
+## 文档治理规则
+
+`AGENTS.md` 是项目总管文档，只记录长期稳定规则：
+
+- 产品概念
+- 架构边界
+- 技术栈
+- 用户学习和编码习惯
+- AI 行为规范
+- TODO 规则
+- 文档治理规则
+
+`AGENTS.md` 不记录动态进度。当前做到了哪里、哪些任务完成、哪些欠账阻断上线，必须进入 `docs/`：
+
+```text
+docs/PROJECT_STATUS.md
+= 全局当前状态、当前阶段、上线阻断和下一步。
+
+docs/chapters/phase-xx-*/PLAN.md
+= 章节详细规划、任务编号、任务锚点和实现边界。
+
+docs/chapters/phase-xx-*/STATUS.md
+= 章节任务状态，区分 done / partial / in_progress / todo / deferred。
+
+docs/chapters/phase-xx-*/ACCEPTANCE.md
+= 章节验收标准，区分功能、生产、测试和文档验收。
+
+docs/production/TODO_REGISTER.md
+= 全局生产欠账登记表，所有 production TODO 必须带 GAP 编号并链接到章节任务。
+
+docs/production/DECISIONS.md
+= 重大架构和商业语义决策记录。
+
+docs/production/THIRD_PARTY_POLICY.md
+= 第三方库选择原则，避免为了学习或惯性重复造轮子。
+```
+
+新增或关闭 production TODO 时，必须同步维护：
+
+1. 代码 TODO。
+2. `docs/production/TODO_REGISTER.md`。
+3. 对应章节的 `PLAN.md` 任务。
+4. 对应章节的 `STATUS.md`。
+5. 如果是上线阻断项，同步维护 `docs/production/RELEASE_BLOCKERS.md`。
+
+## 第三方库选择原则
+
+商业项目不以“少用第三方库”为目标。
+
+默认原则：
+
+- 业务核心自己写，保证可审计：billing、ledger、routing、settlement、request/attempt 状态机、price snapshot、adapter contract。
+- 通用基础设施优先评估成熟库：migration runner、JWT、argon2id、Prometheus、OpenTelemetry、decimal、UUID/ULID、SSE parser、Redis Lua/限流组件。
+- 安全、加密、金额精度和协议解析不要为了练习长期手写；如果临时自研，必须有 production TODO 或进入 `docs/production/TODO_REGISTER.md`。
+- 新增依赖前必须检查 license、维护状态、失败模式、测试替身能力，以及是否会把第三方类型泄漏到核心业务边界。
+- 具体检查清单以 `docs/production/THIRD_PARTY_POLICY.md` 为准。
 
 ## 核心产品边界
 

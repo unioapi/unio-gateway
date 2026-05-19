@@ -30,7 +30,7 @@ type ChatBillingCalculator interface {
 	Calculate(usage billing.Usage, price billing.PriceSnapshot) (billing.Settlement, error)
 }
 
-// ChatSettlementService 负责非流式 chat 请求成功后的 usage、price snapshot 和 ledger 结算。
+// ChatSettlementService 负责 chat 请求成功后的 usage、price snapshot 和 ledger 结算。
 type ChatSettlementService struct {
 	db                ChatTxBeginner
 	queries           *sqlc.Queries
@@ -62,18 +62,20 @@ func NewChatSettlementService(db ChatTxBeginner, queries *sqlc.Queries, billingC
 }
 
 // ChatSettlementParams 表示一次成功 chat 请求结算所需的事实。
+// 非流式 usage 来自 adapter.ChatResponse；流式 usage 来自 final usage stream chunk。
 type ChatSettlementParams struct {
-	RequestRecord   requestlog.RequestRecord
-	AttemptRecord   requestlog.AttemptRecord
-	Principal       *auth.APIKeyPrincipal
-	ResponseModelID string
-	ModelDBID       int64
-	FinalProviderID int64
-	FinalChannelID  int64
-	AdapterResp     *adapter.ChatResponse
+	RequestRecord         requestlog.RequestRecord
+	AttemptRecord         requestlog.AttemptRecord
+	Principal             *auth.APIKeyPrincipal
+	ResponseModelID       string
+	ModelDBID             int64
+	FinalProviderID       int64
+	FinalChannelID        int64
+	UpstreamResponseModel string
+	Usage                 adapter.ChatUsage
 }
 
-// SettleSuccessfulChat 对一次成功的非流式 chat 请求执行结算。
+// SettleSuccessfulChat 对一次成功的 chat 请求执行结算。
 func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params ChatSettlementParams) error {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
@@ -86,12 +88,13 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 	now := time.Now()
 	txQueries := s.queries.WithTx(tx)
 	txRequestLog := requestlog.NewStore(txQueries)
-	usage := params.AdapterResp.Usage
+	usage := params.Usage
 
-	// TODO(阶段8/production): adapter 成功响应缺少真实 upstream status/request id 会影响渠道审计精度；接入 provider error classification / adapter metadata 时；从 adapter response metadata 写入真实 upstream_status_code 和 upstream_request_id。
+	// TODO(阶段7/production): [GAP-7-007] settlement 缺少请求级幂等完成检测，重复补偿或并发 settlement 可能撞上 usage/price snapshot 唯一约束并把已成功请求误标失败；引入补偿任务或并发重试前；按 request_record_id 检测既有 usage/snapshot/ledger 并返回幂等成功。
+	// TODO(阶段8/production): [GAP-8-001] adapter 成功响应缺少真实 upstream status/request id 会影响渠道审计精度；接入 provider error classification / adapter metadata 时；从 adapter response metadata 写入真实 upstream_status_code 和 upstream_request_id。
 	_, err = txRequestLog.MarkAttemptSucceeded(ctx, requestlog.MarkAttemptSucceededParams{
 		ID:                    params.AttemptRecord.ID,
-		UpstreamResponseModel: params.AdapterResp.Model,
+		UpstreamResponseModel: params.UpstreamResponseModel,
 		UpstreamStatusCode:    200,
 		UpstreamRequestID:     nil,
 		CompletedAt:           now,
@@ -100,14 +103,14 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 		return err
 	}
 
-	// TODO(阶段7/production): adapter.ChatUsage 暂未携带 cached/reasoning 明细会低估或误分摊特殊 token 费用；接入 provider usage 明细映射前；扩展 adapter.ChatUsage 并由各 adapter 映射上游 cached/reasoning usage。
+	// TODO(阶段7/production): [GAP-7-008] usage_records.source 当前无法区分非流式 response 和 stream final usage，会降低账单审计与异常排查精度；收口 stream billing 报表前；在 ChatSettlementParams 中显式传入 usage source。
 	_, err = txQueries.CreateUsageRecord(ctx, sqlc.CreateUsageRecordParams{
 		RequestRecordID:  params.RequestRecord.ID,
 		PromptTokens:     int64(usage.PromptTokens),
 		CompletionTokens: int64(usage.CompletionTokens),
 		TotalTokens:      int64(usage.TotalTokens),
-		CachedTokens:     0,
-		ReasoningTokens:  0,
+		CachedTokens:     int64(usage.CachedTokens),
+		ReasoningTokens:  int64(usage.ReasoningTokens),
 		Source:           "upstream_response",
 	})
 	if err != nil {
@@ -144,8 +147,8 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 		PromptTokens:     int64(usage.PromptTokens),
 		CompletionTokens: int64(usage.CompletionTokens),
 		TotalTokens:      int64(usage.TotalTokens),
-		CachedTokens:     0,
-		ReasoningTokens:  0,
+		CachedTokens:     int64(usage.CachedTokens),
+		ReasoningTokens:  int64(usage.ReasoningTokens),
 	}, billing.PriceSnapshot{
 		Currency:             snapshot.Currency,
 		PricingUnit:          snapshot.PricingUnit,

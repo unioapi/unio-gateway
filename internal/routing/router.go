@@ -93,6 +93,7 @@ func (r *Router) PlanChat(ctx context.Context, req ChatRouteRequest) (ChatRouteP
 }
 
 func (r *Router) findCandidateRows(ctx context.Context, req ChatRouteRequest) ([]sqlc.FindRouteCandidatesRow, error) {
+	// TODO(阶段6/production): [GAP-6-005] routing 当前只校验 project_id 大于 0，尚未表达 project 级模型可见性、预算、禁用或专属 channel 策略；开放多项目客户配置前；引入 project_model/channel policy 查询并让 /v1/models 与 routing 共用同一可见性规则。
 	rows, err := r.store.FindRouteCandidates(ctx, sqlc.FindRouteCandidatesParams{
 		RequestedModelID: req.ModelID,
 		ProjectID:        req.ProjectID,
@@ -102,7 +103,7 @@ func (r *Router) findCandidateRows(ctx context.Context, req ChatRouteRequest) ([
 	}
 
 	if len(rows) == 0 {
-		// TODO(阶段6/production): 当前候选查询无法区分模型不存在和模型存在但无可用 channel，错误映射会不准确；实现 gateway 错误映射或后台模型可见性校验时；增加 ModelExists/GetEnabledModelByID 查询，并分别返回 ErrModelNotFound 与 ErrNoAvailableChannel。
+		// TODO(阶段6/production): [GAP-6-007] 当前候选查询无法区分模型不存在和模型存在但无可用 channel，错误映射会不准确；实现 gateway 错误映射或后台模型可见性校验时；增加 ModelExists/GetEnabledModelByID 查询，并分别返回 ErrModelNotFound 与 ErrNoAvailableChannel。
 		return nil, ErrNoAvailableChannel
 	}
 

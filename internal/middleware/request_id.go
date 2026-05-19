@@ -16,6 +16,7 @@ func RequestID(next http.Handler) http.Handler {
 			requestID = newRequestID()
 		}
 
+		// TODO(阶段1/production): [GAP-1-002] 直接信任客户端 X-Request-ID 会导致超长值或控制字符进入响应头和日志；开放公网 API 前；限制长度/字符集，非法时生成服务端 correlation id。
 		w.Header().Set(httpx.HeaderRequestID, requestID)
 
 		ctx := httpx.ContextWithRequestID(r.Context(), requestID)
