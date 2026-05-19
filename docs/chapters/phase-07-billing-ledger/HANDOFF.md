@@ -39,12 +39,11 @@
 
 必须先处理的 GAP：
 
-```text
-GAP-7-001
-GAP-7-002
-GAP-7-004
-GAP-7-011
-```
+- [GAP-7-001](../../production/TODO_REGISTER.md#gap-7-001)
+- [GAP-7-002](../../production/TODO_REGISTER.md#gap-7-002)
+- [GAP-7-004](../../production/TODO_REGISTER.md#gap-7-004)
+- [GAP-7-011](../../production/TODO_REGISTER.md#gap-7-011)
+
 
 相关文档：
 

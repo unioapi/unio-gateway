@@ -2,9 +2,28 @@
 
 ## 目标
 
-提供后台管理能力，让 user、project、API key、provider、channel、model、price、request logs、billing logs 可以被安全管理。
+提供后台管理能力，让 user、project、API key、provider、channel、model、price、request logs 和 billing logs 可以被安全管理。
 
-阶段 9 前置必须完成 credential resolver 生产化。
+阶段 9 不是“做几个 CRUD 页面”，而是把前面阶段的数据库业务数据真正变成可运营系统：
+
+1. 管理员可以管理用户和项目。
+2. 用户或管理员可以管理 API key。
+3. 管理员可以管理 provider、channel、model 和 price。
+4. channel credential 可以安全录入、轮换和审计。
+5. request、attempt、usage、ledger 可以按权限查询。
+6. 后台修改 provider/channel/model/price 后能影响 routing 和 `/v1/models`，不需要改 env 重启。
+
+## 涉及文件
+
+| 文件 | 作用 |
+| --- | --- |
+| [internal/auth](../../../internal/auth) | customer API key auth 已存在，后台 admin auth 需要独立设计。 |
+| [internal/apikey](../../../internal/apikey) | API key 管理 service。 |
+| [internal/credential/resolver.go](../../../internal/credential/resolver.go) | credential_ref 解析边界。 |
+| [internal/routing](../../../internal/routing) | 后台 channel/model 变更影响 routing。 |
+| [internal/modelcatalog](../../../internal/modelcatalog) | 后台模型可见性影响 `/v1/models`。 |
+| [internal/gateway](../../../internal/gateway) | request log 和 billing log 查询的事实来源。 |
+| [docs/production/DECISIONS.md](../../production/DECISIONS.md) | 关键商业语义决策。 |
 
 ## 任务
 
@@ -13,54 +32,131 @@
 
 状态：planned
 
-范围：
+目标：
 
-1. 后台登录。
-2. JWT。
-3. 管理员权限模型。
-4. 审计日志。
+```text
+建立后台登录、JWT、管理员权限和审计日志边界。
+```
+
+计划实现：
+
+1. 设计 admin user 或 admin role。
+2. 密码使用 argon2id。
+3. JWT 使用成熟库，固定算法白名单。
+4. access token 和 refresh token 策略分开。
+5. 后台敏感操作必须写 audit log。
+6. admin auth 不与 customer API key auth 混用。
+
+关键约束：
+
+1. 管理员权限不是客户 API 调用权限。
+2. customer API key 不能访问后台。
+3. 后台 JWT 不能用于 `/v1/chat/completions`。
 
 <a id="task-9-02-credential-management"></a>
 ### TASK-9.02 Credential 管理
 
 状态：planned
 
-范围：
+目标：
 
-1. 保存 credential_ref。
-2. 明文凭据不长期落库。
-3. KMS/master key 或 secret manager 解析。
-4. 凭据轮换和审计。
+```text
+让 channel credential 能安全录入、解析、轮换和审计。
+```
+
+计划实现：
+
+1. 设计 credential storage。
+2. `channels.credential_ref` 只保存引用。
+3. 明文 credential 不长期落库。
+4. 使用 KMS/master key 或 secret manager。
+5. resolver 根据 credential_ref 返回上游调用所需明文。
+6. credential 读取、更新、轮换写审计日志。
+7. adapter 只接收 `channel.Runtime.Credential`。
 
 关联 GAP：
 
-```text
-GAP-6-001
-```
+- [GAP-6-001](../../production/TODO_REGISTER.md#gap-6-001)
+
 
 <a id="task-9-03-provider-channel-admin"></a>
 ### TASK-9.03 Provider/channel/model/price 管理
 
 状态：planned
 
-范围：
+目标：
 
-1. 管理 provider。
-2. 管理 channel。
-3. 管理 model/channel_model。
-4. 管理 price 和生效窗口。
-5. 变更影响 routing 和 `/v1/models`，不要求重启。
+```text
+让 provider、channel、model、price 成为后台可管理的业务数据。
+```
+
+计划实现：
+
+1. provider CRUD，写入前校验 adapter key 是否存在。
+2. channel CRUD，支持 enabled、priority、base_url、credential_ref、health。
+3. model CRUD，支持 enabled、owned_by。
+4. channel_model CRUD，支持 upstream_model、enabled。
+5. price CRUD，支持 pricing_unit、currency、effective_from/to。
+6. price 修改时避免生效窗口重叠。
+7. 后台变更影响 routing 和 `/v1/models`。
+
+依赖：
+
+1. [TASK-6.03](../phase-06-model-channel-routing/PLAN.md#task-6-03-bootstrap-wiring)
+2. [TASK-6.04](../phase-06-model-channel-routing/PLAN.md#task-6-04-routing-policy)
+3. [TASK-7.22](../phase-07-billing-ledger/PLAN.md#task-7-22-price-effective-window)
 
 <a id="task-9-04-request-billing-dashboard"></a>
 ### TASK-9.04 Request 与 billing dashboard
 
 状态：planned
 
-范围：
+目标：
 
-1. 查看 request records。
-2. 查看 attempts。
-3. 查看 usage、price snapshot、ledger。
-4. 错误详情脱敏展示。
-5. 支持按 user/project/api_key/model/provider/channel 查询。
+```text
+让管理员和后续客户侧页面能查询请求、用量、账单和异常结算。
+```
+
+计划实现：
+
+1. request records 查询。
+2. attempt records 查询。
+3. usage records 查询。
+4. price snapshot 查询。
+5. ledger entries 查询。
+6. 按 user/project/api_key/model/provider/channel/status 时间范围过滤。
+7. 错误信息区分 safe_user_message 和 internal_error_detail。
+8. 默认脱敏 credential、API key 和上游敏感错误。
+
+依赖：
+
+1. [TASK-7.18](../phase-07-billing-ledger/PLAN.md#task-7-18-request-state-machine)
+2. [TASK-7.19](../phase-07-billing-ledger/PLAN.md#task-7-19-settlement-idempotency)
+3. [TASK-7.21](../phase-07-billing-ledger/PLAN.md#task-7-21-error-usage-audit)
+4. [TASK-8.02](../phase-08-observability-stability/PLAN.md#task-8-02-metrics)
+
+<a id="task-9-05-customer-project-billing-controls"></a>
+### TASK-9.05 客户、项目与预算控制
+
+状态：planned
+
+目标：
+
+```text
+为个人账户模式下的项目隔离、预算和用量归集建立后台入口。
+```
+
+计划实现：
+
+1. user 维度余额查询。
+2. project 用量统计。
+3. API key 用量统计。
+4. project 级模型可见性配置。
+5. project 级预算或用量上限。
+6. 后续团队/organization 模式迁移预留。
+
+依赖：
+
+1. [TASK-6.04](../phase-06-model-channel-routing/PLAN.md#task-6-04-routing-policy)
+2. [TASK-7.17](../phase-07-billing-ledger/PLAN.md#task-7-17-preauthorization)
 

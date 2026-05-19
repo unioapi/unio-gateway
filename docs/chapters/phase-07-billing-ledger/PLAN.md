@@ -33,10 +33,9 @@ ledger entry
 
 关联 GAP：
 
-```text
-GAP-7-009
-GAP-7-010
-```
+- [GAP-7-009](../../production/TODO_REGISTER.md#gap-7-009)
+- [GAP-7-010](../../production/TODO_REGISTER.md#gap-7-010)
+
 
 <a id="task-7-02-request-attempt-record"></a>
 ### TASK-7.02 Request record 与 attempt record
@@ -53,10 +52,9 @@ GAP-7-010
 
 关联 GAP：
 
-```text
-GAP-7-003
-GAP-7-005
-```
+- [GAP-7-003](../../production/TODO_REGISTER.md#gap-7-003)
+- [GAP-7-005](../../production/TODO_REGISTER.md#gap-7-005)
+
 
 <a id="task-7-03-usage-record"></a>
 ### TASK-7.03 Usage record
@@ -71,9 +69,8 @@ GAP-7-005
 
 关联 GAP：
 
-```text
-GAP-7-008
-```
+- [GAP-7-008](../../production/TODO_REGISTER.md#gap-7-008)
+
 
 <a id="task-7-04-ledger-debit"></a>
 ### TASK-7.04 Ledger debit
@@ -88,10 +85,9 @@ GAP-7-008
 
 关联 GAP：
 
-```text
-GAP-7-011
-GAP-7-012
-```
+- [GAP-7-011](../../production/TODO_REGISTER.md#gap-7-011)
+- [GAP-7-012](../../production/TODO_REGISTER.md#gap-7-012)
+
 
 <a id="task-7-05-non-stream-settlement"></a>
 ### TASK-7.05 非流式 settlement
@@ -108,11 +104,10 @@ GAP-7-012
 
 关联 GAP：
 
-```text
-GAP-7-001
-GAP-7-007
-GAP-7-012
-```
+- [GAP-7-001](../../production/TODO_REGISTER.md#gap-7-001)
+- [GAP-7-007](../../production/TODO_REGISTER.md#gap-7-007)
+- [GAP-7-012](../../production/TODO_REGISTER.md#gap-7-012)
+
 
 <a id="task-7-06-stream-final-usage"></a>
 ### TASK-7.06 OpenAI stream final usage
@@ -140,12 +135,11 @@ GAP-7-012
 
 关联 GAP：
 
-```text
-GAP-7-002
-GAP-7-004
-GAP-7-006
-GAP-7-011
-```
+- [GAP-7-002](../../production/TODO_REGISTER.md#gap-7-002)
+- [GAP-7-004](../../production/TODO_REGISTER.md#gap-7-004)
+- [GAP-7-006](../../production/TODO_REGISTER.md#gap-7-006)
+- [GAP-7-011](../../production/TODO_REGISTER.md#gap-7-011)
+
 
 ## 当前必须收口任务
 
@@ -172,12 +166,11 @@ stream 长输出和恶意断开也无法控损。
 
 关联 GAP：
 
-```text
-GAP-7-001
-GAP-7-002
-GAP-7-004
-GAP-7-011
-```
+- [GAP-7-001](../../production/TODO_REGISTER.md#gap-7-001)
+- [GAP-7-002](../../production/TODO_REGISTER.md#gap-7-002)
+- [GAP-7-004](../../production/TODO_REGISTER.md#gap-7-004)
+- [GAP-7-011](../../production/TODO_REGISTER.md#gap-7-011)
+
 
 <a id="task-7-18-request-state-machine"></a>
 ### TASK-7.18 Request/attempt 状态机守卫
@@ -193,9 +186,8 @@ GAP-7-011
 
 关联 GAP：
 
-```text
-GAP-7-003
-```
+- [GAP-7-003](../../production/TODO_REGISTER.md#gap-7-003)
+
 
 <a id="task-7-19-settlement-idempotency"></a>
 ### TASK-7.19 Settlement 幂等
@@ -211,10 +203,9 @@ GAP-7-003
 
 关联 GAP：
 
-```text
-GAP-7-007
-GAP-7-012
-```
+- [GAP-7-007](../../production/TODO_REGISTER.md#gap-7-007)
+- [GAP-7-012](../../production/TODO_REGISTER.md#gap-7-012)
+
 
 <a id="task-7-20-cost-snapshot"></a>
 ### TASK-7.20 成本价与毛利审计
@@ -229,9 +220,8 @@ GAP-7-012
 
 关联 GAP：
 
-```text
-GAP-7-009
-```
+- [GAP-7-009](../../production/TODO_REGISTER.md#gap-7-009)
+
 
 <a id="task-7-21-error-usage-audit"></a>
 ### TASK-7.21 错误与 usage 审计字段
@@ -246,10 +236,9 @@ GAP-7-009
 
 关联 GAP：
 
-```text
-GAP-7-005
-GAP-7-008
-```
+- [GAP-7-005](../../production/TODO_REGISTER.md#gap-7-005)
+- [GAP-7-008](../../production/TODO_REGISTER.md#gap-7-008)
+
 
 <a id="task-7-22-price-effective-window"></a>
 ### TASK-7.22 价格生效窗口约束
@@ -264,6 +253,5 @@ GAP-7-008
 
 关联 GAP：
 
-```text
-GAP-7-010
-```
+- [GAP-7-010](../../production/TODO_REGISTER.md#gap-7-010)
+

@@ -4,17 +4,17 @@
 
 ## 阶段目录
 
-| 阶段 | 目录 |
-| --- | --- |
-| 阶段 1 | [phase-01-go-web](phase-01-go-web/PLAN.md) |
-| 阶段 2 | [phase-02-infrastructure](phase-02-infrastructure/PLAN.md) |
-| 阶段 3 | [phase-03-identity-api-key](phase-03-identity-api-key/PLAN.md) |
-| 阶段 4 | [phase-04-openai-compatible-api](phase-04-openai-compatible-api/PLAN.md) |
-| 阶段 5 | [phase-05-adapter-boundary](phase-05-adapter-boundary/PLAN.md) |
-| 阶段 6 | [phase-06-model-channel-routing](phase-06-model-channel-routing/PLAN.md) |
-| 阶段 7 | [phase-07-billing-ledger](phase-07-billing-ledger/PLAN.md) |
-| 阶段 8 | [phase-08-observability-stability](phase-08-observability-stability/PLAN.md) |
-| 阶段 9 | [phase-09-admin](phase-09-admin/PLAN.md) |
+| 阶段 | 计划 | 状态 | 验收 |
+| --- | --- | --- | --- |
+| 阶段 1 | [PLAN](phase-01-go-web/PLAN.md) | [STATUS](phase-01-go-web/STATUS.md) | [ACCEPTANCE](phase-01-go-web/ACCEPTANCE.md) |
+| 阶段 2 | [PLAN](phase-02-infrastructure/PLAN.md) | [STATUS](phase-02-infrastructure/STATUS.md) | [ACCEPTANCE](phase-02-infrastructure/ACCEPTANCE.md) |
+| 阶段 3 | [PLAN](phase-03-identity-api-key/PLAN.md) | [STATUS](phase-03-identity-api-key/STATUS.md) | [ACCEPTANCE](phase-03-identity-api-key/ACCEPTANCE.md) |
+| 阶段 4 | [PLAN](phase-04-openai-compatible-api/PLAN.md) | [STATUS](phase-04-openai-compatible-api/STATUS.md) | [ACCEPTANCE](phase-04-openai-compatible-api/ACCEPTANCE.md) |
+| 阶段 5 | [PLAN](phase-05-adapter-boundary/PLAN.md) | [STATUS](phase-05-adapter-boundary/STATUS.md) | [ACCEPTANCE](phase-05-adapter-boundary/ACCEPTANCE.md) |
+| 阶段 6 | [PLAN](phase-06-model-channel-routing/PLAN.md) | [STATUS](phase-06-model-channel-routing/STATUS.md) | [ACCEPTANCE](phase-06-model-channel-routing/ACCEPTANCE.md) |
+| 阶段 7 | [PLAN](phase-07-billing-ledger/PLAN.md) | [STATUS](phase-07-billing-ledger/STATUS.md) | [ACCEPTANCE](phase-07-billing-ledger/ACCEPTANCE.md) |
+| 阶段 8 | [PLAN](phase-08-observability-stability/PLAN.md) | [STATUS](phase-08-observability-stability/STATUS.md) | [ACCEPTANCE](phase-08-observability-stability/ACCEPTANCE.md) |
+| 阶段 9 | [PLAN](phase-09-admin/PLAN.md) | [STATUS](phase-09-admin/STATUS.md) | [ACCEPTANCE](phase-09-admin/ACCEPTANCE.md) |
 
 ## 状态定义
 
@@ -26,4 +26,3 @@
 | todo | 当前阶段内必须处理，但尚未开始。 |
 | deferred | 已识别但推迟到后续阶段处理。 |
 | planned | 尚未正式进入。 |
-

@@ -2,9 +2,27 @@
 
 ## 目标
 
-建立 customer API 调用身份边界，包括 user、project、API key、认证 middleware 和基础限流。
+建立 customer API 的身份入口：user、project、API key、认证 middleware 和基础限流。
 
-本阶段不实现后台管理 UI，但必须保证未来暴露 key 管理接口时有清楚授权和审计边界。
+本阶段的商业边界：
+
+1. user 是当前个人账户模式下的付费主体。
+2. project 是用户下的应用空间，用于组织 API key、归集用量和未来预算。
+3. API key 是客户调用 OpenAI-compatible API 的身份凭据。
+4. API key 不能保存明文，只能保存 hash 和 prefix。
+5. 限流是保护平台的基础能力，但不能成为单点故障。
+
+## 涉及文件
+
+| 文件 | 作用 |
+| --- | --- |
+| [migrations/000002_create_identity_tables.up.sql](../../../migrations/000002_create_identity_tables.up.sql) | user/project/API key schema。 |
+| [sql/queries/identity.sql](../../../sql/queries/identity.sql) | identity 相关 SQL。 |
+| [internal/apikey](../../../internal/apikey) | API key 生成和创建服务。 |
+| [internal/auth](../../../internal/auth) | API key 认证和 request auth context。 |
+| [internal/middleware/api_key_auth.go](../../../internal/middleware/api_key_auth.go) | HTTP API key auth middleware。 |
+| [internal/ratelimit](../../../internal/ratelimit) | 限流器和 Redis store。 |
+| [internal/middleware/rate_limit.go](../../../internal/middleware/rate_limit.go) | HTTP 限流 middleware。 |
 
 ## 任务
 
@@ -13,67 +31,131 @@
 
 状态：done
 
-范围：
+目标：
 
-1. 建立 users、projects、api_keys。
-2. API key 只保存 hash 和 prefix。
-3. API key 归属 project，project 归属 user。
+```text
+建立客户身份、应用空间和 API key 的数据库事实。
+```
+
+已完成：
+
+1. user 表。
+2. project 表。
+3. api_key 表。
+4. API key prefix/hash 字段。
+5. project 到 user 的归属关系。
+
+关键约束：
+
+1. API key 创建后只展示一次完整明文。
+2. 数据库不能保存完整明文 API key。
+3. API key 属于 project，不直接承载余额。
+4. request 进入 gateway 后必须能追踪 user、project、api_key。
 
 <a id="task-3-02-api-key-auth"></a>
 ### TASK-3.02 API key 认证 middleware
 
 状态：partial
 
-范围：
+目标：
 
-1. 从请求读取 bearer key。
-2. hash 后查询数据库。
-3. 将 user_id、project_id、api_key_id 放入 request context。
-4. 控制 `last_used_at` 更新频率。
+```text
+把 HTTP 请求中的 opaque API key 转换成内部 AuthContext。
+```
+
+已完成：
+
+1. 从 Authorization header 读取 bearer key。
+2. 对 key 做 hash 后查询数据库。
+3. 验证 key 是否存在、是否可用。
+4. 将 user_id、project_id、api_key_id 放入 context。
+
+当前欠账：
+
+```text
+每次认证同步更新 last_used_at，未来高流量下会放大数据库写入。
+```
+
+计划实现：
+
+1. 评估节流更新，例如同一个 key 每 N 分钟最多更新一次。
+2. 评估异步批量更新。
+3. 后台展示 last used 时接受分钟级延迟。
 
 关联 GAP：
 
-```text
-GAP-3-001
-```
+- [GAP-3-001](../../production/TODO_REGISTER.md#gap-3-001)
+
 
 <a id="task-3-03-api-key-management"></a>
 ### TASK-3.03 API Key 管理、禁用与审计
 
 状态：todo
 
-范围：
+目标：
 
-1. 支持 revoke/disable/list。
-2. 创建 key 时校验调用者是否拥有 project。
-3. 后台操作写入审计日志。
-4. 创建后不再展示完整明文 key。
+```text
+让 API key 能被安全创建、查询、禁用、撤销，并能审计是谁操作。
+```
+
+计划实现：
+
+1. 创建 key 时传入 authenticated principal。
+2. 校验 principal 是否拥有目标 project，或是否具备 admin 权限。
+3. 支持 list key，只返回 prefix、name、状态、创建时间和最后使用时间。
+4. 支持 revoke/disable。
+5. 后台敏感操作写 audit log。
+6. 创建成功只返回一次明文 key。
+
+涉及文件：
+
+1. [internal/apikey/service.go](../../../internal/apikey/service.go)
+2. [internal/auth/apikey.go](../../../internal/auth/apikey.go)
+3. 未来后台 handler。
 
 关联 GAP：
 
-```text
-GAP-3-002
-GAP-3-007
-```
+- [GAP-3-002](../../production/TODO_REGISTER.md#gap-3-002)
+- [GAP-3-007](../../production/TODO_REGISTER.md#gap-3-007)
+
 
 <a id="task-3-04-rate-limit-production"></a>
 ### TASK-3.04 限流生产化
 
 状态：todo
 
-范围：
+目标：
 
-1. 默认限流阈值和窗口进入 config。
-2. 后续支持 project/model/channel 级策略。
-3. Redis INCR + EXPIRE 具备原子性。
-4. Redis 故障时 fail-open/fail-closed 策略可配置。
+```text
+让基础限流既能保护平台，又不会因为 Redis 故障把客户请求全部打死。
+```
+
+计划实现：
+
+1. 将默认限流窗口和阈值迁入 config。
+2. Redis key 使用统一 namespace。
+3. 用 Lua 或 Redis transaction 保证 `INCR + EXPIRE` 原子性。
+4. 明确 Redis 故障时 fail-open/fail-closed 策略。
+5. 为降级路径补 structured log 和 metrics。
+6. 后续支持 project/model/channel 级限流策略。
+
+涉及文件：
+
+1. [cmd/server/main.go](../../../cmd/server/main.go)
+2. [internal/ratelimit/redis_store.go](../../../internal/ratelimit/redis_store.go)
+3. [internal/middleware/rate_limit.go](../../../internal/middleware/rate_limit.go)
+
+验证方式：
+
+```bash
+go test ./internal/ratelimit ./internal/middleware
+```
 
 关联 GAP：
 
-```text
-GAP-3-003
-GAP-3-004
-GAP-3-005
-GAP-3-006
-```
+- [GAP-3-003](../../production/TODO_REGISTER.md#gap-3-003)
+- [GAP-3-004](../../production/TODO_REGISTER.md#gap-3-004)
+- [GAP-3-005](../../production/TODO_REGISTER.md#gap-3-005)
+- [GAP-3-006](../../production/TODO_REGISTER.md#gap-3-006)
+
 

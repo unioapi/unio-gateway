@@ -13,15 +13,15 @@
 
 | 阶段 | 名称 | 状态 | 当前判断 |
 | --- | --- | --- | --- |
-| 阶段 1 | Go Web 骨架 | partial | 基础骨架已完成，公网级 timeout/readiness/request id 输入约束仍是生产欠账。 |
-| 阶段 2 | 基础设施 | partial | PostgreSQL、Redis、migration、sqlc 基础能力已完成，migration runner、pool 参数和 schema 版本检查未生产化。 |
-| 阶段 3 | 用户与 API Key | partial | 用户、project、API key、认证、基础限流已完成，key 管理授权审计和限流降级策略未完成。 |
-| 阶段 4 | OpenAI-compatible API | partial | `/v1/models`、`/v1/chat/completions`、SSE 基础入口已完成，DTO 深度校验和严格 JSON 边界未完成。 |
-| 阶段 5 | Adapter 边界 | partial | adapter 接口、OpenAI 非流式/流式、usage 映射已完成，完整参数透传和更稳健 SSE parser 未完成。 |
-| 阶段 6 | 模型与渠道 | partial | provider/channel/model/routing/fallback 基础完成，project 可见性、credential 正式解析和装配治理未完成。 |
-| 阶段 7 | 计费与账本 | in_progress | request/attempt/usage/ledger/settlement 和 stream final usage 已完成，pre-authorize、状态机、幂等和成本快照是当前 P0/P1。 |
-| 阶段 8 | 可观测性与稳定性 | planned | 尚未正式进入。当前只有少量 adapter metadata 相关前置 TODO。 |
-| 阶段 9 | 后台管理 | planned | 尚未正式进入。进入前必须先处理 credential resolver 和后台管理边界。 |
+| 阶段 1 | [Go Web 骨架](chapters/phase-01-go-web/STATUS.md) | partial | 基础骨架已完成，公网级 timeout/readiness/request id 输入约束仍是生产欠账。 |
+| 阶段 2 | [基础设施](chapters/phase-02-infrastructure/STATUS.md) | partial | PostgreSQL、Redis、migration、sqlc 基础能力已完成，migration runner、pool 参数和 schema 版本检查未生产化。 |
+| 阶段 3 | [用户与 API Key](chapters/phase-03-identity-api-key/STATUS.md) | partial | 用户、project、API key、认证、基础限流已完成，key 管理授权审计和限流降级策略未完成。 |
+| 阶段 4 | [OpenAI-compatible API](chapters/phase-04-openai-compatible-api/STATUS.md) | partial | `/v1/models`、`/v1/chat/completions`、SSE 基础入口已完成，DTO 深度校验和严格 JSON 边界未完成。 |
+| 阶段 5 | [Adapter 边界](chapters/phase-05-adapter-boundary/STATUS.md) | partial | adapter 接口、OpenAI 非流式/流式、usage 映射已完成，完整参数透传和更稳健 SSE parser 未完成。 |
+| 阶段 6 | [模型与渠道](chapters/phase-06-model-channel-routing/STATUS.md) | partial | provider/channel/model/routing/fallback 基础完成，project 可见性、credential 正式解析和装配治理未完成。 |
+| 阶段 7 | [计费与账本](chapters/phase-07-billing-ledger/STATUS.md) | in_progress | request/attempt/usage/ledger/settlement 和 stream final usage 已完成，pre-authorize、状态机、幂等和成本快照是当前 P0/P1。 |
+| 阶段 8 | [可观测性与稳定性](chapters/phase-08-observability-stability/STATUS.md) | planned | 尚未正式进入。当前只有少量 adapter metadata 相关前置 TODO。 |
+| 阶段 9 | [后台管理](chapters/phase-09-admin/STATUS.md) | planned | 尚未正式进入。进入前必须先处理 credential resolver 和后台管理边界。 |
 
 ## 当前上线阻断
 
@@ -37,11 +37,7 @@
 
 ## 下一步
 
-优先进入：
-
-```text
-7.17 余额预检查与预授权最小闭环
-```
+优先进入：[7.17 余额预检查与预授权最小闭环](chapters/phase-07-billing-ledger/PLAN.md#task-7-17-preauthorization)
 
 本小节目标：
 
