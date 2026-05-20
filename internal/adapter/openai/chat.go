@@ -50,8 +50,15 @@ func (a *Adapter) ChatCompletions(ctx context.Context, ch channel.Runtime, req a
 	}
 
 	upstreamReqBody := chatCompletionRequest{
-		Model:    req.Model,
-		Messages: messages,
+		Model:            req.Model,
+		Messages:         messages,
+		Temperature:      req.Temperature,
+		TopP:             req.TopP,
+		MaxTokens:        req.MaxTokens,
+		PresencePenalty:  req.PresencePenalty,
+		FrequencyPenalty: req.FrequencyPenalty,
+		Stop:             req.Stop,
+		User:             req.User,
 	}
 	buf := new(bytes.Buffer)
 	if err := json.NewEncoder(buf).Encode(upstreamReqBody); err != nil {
@@ -119,9 +126,16 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 	}
 
 	upstreamReqBody := chatCompletionRequest{
-		Model:    req.Model,
-		Messages: messages,
-		Stream:   true,
+		Model:            req.Model,
+		Messages:         messages,
+		Stream:           true,
+		Temperature:      req.Temperature,
+		TopP:             req.TopP,
+		MaxTokens:        req.MaxTokens,
+		PresencePenalty:  req.PresencePenalty,
+		FrequencyPenalty: req.FrequencyPenalty,
+		Stop:             req.Stop,
+		User:             req.User,
 		StreamOptions: &chatStreamOptions{
 			IncludeUsage: true,
 		},

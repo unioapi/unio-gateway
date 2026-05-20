@@ -2,6 +2,7 @@ package ratelimit
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -9,46 +10,52 @@ import (
 
 // RedisStore 使用 Redis 保存固定窗口限流计数。
 type RedisStore struct {
-	client redis.Cmdable
-	now    func() time.Time
+	client       redis.Cmdable
+	keyNamespace string
+	now          func() time.Time
 }
 
 // NewRedisStore 创建 Redis 限流存储。
-func NewRedisStore(client redis.Cmdable) *RedisStore {
+func NewRedisStore(client redis.Cmdable, keyNamespace string) *RedisStore {
 	return &RedisStore{
-		client: client,
-		now:    time.Now,
+		client:       client,
+		keyNamespace: keyNamespace,
+		now:          time.Now,
 	}
 }
 
 // Increment 增加 subject 对应窗口内的请求计数，并返回当前计数和重置时间。
 func (s *RedisStore) Increment(ctx context.Context, key string, window time.Duration) (CountResult, error) {
-	redisKey := redisKeyForSubject(key)
+	redisKey := redisKeyForSubject(s.keyNamespace, key)
 
-	// TODO(阶段3/production): [GAP-3-004] 用 Lua 或 Redis transaction 保证 INCR + EXPIRE 原子性，避免首次计数成功但过期时间设置失败。
-	count, err := s.client.Incr(ctx, redisKey).Result()
-	if err != nil {
-		return CountResult{}, err
-	}
+	var countCmd *redis.IntCmd
+	var ttlCmd *redis.DurationCmd
 
-	if count == 1 {
-		if err := s.client.Expire(ctx, redisKey, window).Err(); err != nil {
-			return CountResult{}, err
-		}
-	}
+	_, err := s.client.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+		// 在 Redis MULTI/EXEC 中完成计数和 TTL 设置，避免 INCR 成功但 EXPIRE 失败留下永久 key。
+		countCmd = pipe.Incr(ctx, redisKey)
 
-	ttl, err := s.client.TTL(ctx, redisKey).Result()
+		// ExpireNX 只在 key 没有过期时间时设置 TTL，保证固定窗口不会被每次请求刷新。
+		pipe.ExpireNX(ctx, redisKey, window)
+
+		ttlCmd = pipe.TTL(ctx, redisKey)
+
+		return nil
+	})
 	if err != nil {
 		return CountResult{}, err
 	}
 
 	return CountResult{
-		Count:   count,
-		ResetAt: s.now().Add(ttl),
+		Count:   countCmd.Val(),
+		ResetAt: s.now().Add(ttlCmd.Val()),
 	}, nil
 }
 
-// TODO(阶段3/production): [GAP-3-005] 将 Redis key namespace 集中到部署配置或常量包用于环境隔离；项目级、模型级和 channel 级限流策略后续来自数据库。
-func redisKeyForSubject(subject string) string {
-	return "unio:ratelimit:" + subject
+func redisKeyForSubject(namespace string, subject string) string {
+	namespace = strings.Trim(namespace, ":")
+	if namespace == "" {
+		namespace = "unio"
+	}
+	return namespace + ":ratelimit:" + subject
 }

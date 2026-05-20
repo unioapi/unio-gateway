@@ -8,15 +8,16 @@ import (
 	"github.com/ThankCat/unio-api/internal/httpx"
 )
 
+const maxRequestIDLength = 128
+
 // RequestID 为每个请求补充请求 ID，并写入响应 header。
 func RequestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestID := r.Header.Get(httpx.HeaderRequestID)
-		if requestID == "" {
+		if !isSafeRequestID(requestID) {
 			requestID = newRequestID()
 		}
 
-		// TODO(阶段1/production): [GAP-1-002] 直接信任客户端 X-Request-ID 会导致超长值或控制字符进入响应头和日志；开放公网 API 前；限制长度/字符集，非法时生成服务端 correlation id。
 		w.Header().Set(httpx.HeaderRequestID, requestID)
 
 		ctx := httpx.ContextWithRequestID(r.Context(), requestID)
@@ -33,4 +34,24 @@ func newRequestID() string {
 	}
 
 	return hex.EncodeToString(b[:])
+}
+
+// isSafeRequestID 判断客户端传入的 correlation id 是否适合进入响应头、日志和 context。
+func isSafeRequestID(requestID string) bool {
+	if requestID == "" || len(requestID) > maxRequestIDLength {
+		return false
+	}
+
+	for _, c := range requestID {
+		switch {
+		case c >= 'a' && c <= 'z':
+		case c >= 'A' && c <= 'Z':
+		case c >= '0' && c <= '9':
+		case c == '.' || c == '_' || c == '-' || c == ':':
+		default:
+			return false
+		}
+	}
+
+	return true
 }

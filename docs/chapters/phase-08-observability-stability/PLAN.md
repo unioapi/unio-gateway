@@ -78,6 +78,7 @@
 5. Routing selected provider/channel/model count。
 6. Billing settlement success/failure count。
 7. Stream started/completed/canceled/missing_usage count。
+8. Rate limit decision、limited、Redis failure 和 fail-open count。
 
 label 约束：
 
@@ -144,4 +145,3 @@ curl /metrics
 2. timeout/5xx 可以按策略 retry/fallback。
 3. 429 可以按策略降权。
 4. 所有 retry/fallback 都写 attempt record。
-

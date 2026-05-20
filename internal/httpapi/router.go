@@ -13,13 +13,14 @@ import (
 
 // RouterDeps 保存构建 HTTP router 所需的外部依赖。
 type RouterDeps struct {
-	Logger                *slog.Logger
-	APIKeyAuthenticator   middleware.APIKeyAuthenticator
-	ChatCompletionService ChatCompletionService
-	RateLimiter           middleware.RateLimiter
-	RateLimitLimit        int64
-	RateLimitWindow       time.Duration
-	ModelCatalogService   ModelCatalogService
+	Logger                 *slog.Logger
+	APIKeyAuthenticator    middleware.APIKeyAuthenticator
+	ChatCompletionService  ChatCompletionService
+	RateLimiter            middleware.RateLimiter
+	RateLimitLimit         int64
+	RateLimitWindow        time.Duration
+	ModelCatalogService    ModelCatalogService
+	RateLimitFailurePolicy string
 }
 
 // NewRouter 创建 API server 使用的 HTTP handler。
@@ -55,7 +56,12 @@ func NewRouter(deps RouterDeps) http.Handler {
 
 	r.Route("/v1", func(r chi.Router) {
 		r.Use(middleware.APIKeyAuth(deps.APIKeyAuthenticator))
-		r.Use(middleware.RateLimit(deps.RateLimiter, deps.RateLimitLimit, deps.RateLimitWindow))
+		r.Use(middleware.RateLimit(deps.RateLimiter, middleware.RateLimitOptions{
+			Limit:         deps.RateLimitLimit,
+			Window:        deps.RateLimitWindow,
+			FailurePolicy: middleware.RateLimitFailurePolicy(deps.RateLimitFailurePolicy),
+			Logger:        deps.Logger,
+		}))
 
 		modelsHandler := &modelsHandler{
 			service: deps.ModelCatalogService,

@@ -62,7 +62,7 @@
 <a id="task-1-02-server-timeouts-readiness"></a>
 ### TASK-1.02 Server timeout 与 readiness
 
-状态：todo
+状态：partial
 
 目标：
 
@@ -73,14 +73,18 @@
 当前欠账：
 
 ```text
-server timeout、shutdown timeout 和 readiness 状态还没有配置化。
+HTTP server timeout 和 shutdown timeout 已配置化。
+startup timeout 仍硬编码，readiness 状态还没有独立。
 ```
 
-计划实现：
+已完成：
 
 1. 在 config 中增加 HTTP server timeout 字段。
 2. 明确 read、read header、write、idle timeout 默认值。
 3. 将 graceful shutdown timeout 从硬编码迁入 config。
+
+剩余计划：
+
 4. 增加 readiness 状态，而不是只依赖 `/healthz`。
 5. 后续 metrics 接入后，把 readiness 状态暴露给部署系统。
 
@@ -105,7 +109,7 @@ go test ./...
 <a id="task-1-03-correlation-id"></a>
 ### TASK-1.03 Correlation ID 输入约束
 
-状态：todo
+状态：done
 
 目标：
 
@@ -113,13 +117,15 @@ go test ./...
 让用户传入的 X-Request-ID 只能作为安全的日志关联 ID，不能污染响应头和日志。
 ```
 
-当前欠账：
+实现内容：
 
 ```text
-middleware 直接信任客户端 X-Request-ID。
+middleware 会校验客户端 X-Request-ID 的长度和字符集。
+非法 header 会被忽略并替换为服务端生成的 correlation id。
+日志字段、response header 和 context 中只保存清洗后的值。
 ```
 
-计划实现：
+已完成：
 
 1. 限制 `X-Request-ID` 最大长度。
 2. 限制字符集，只允许可打印且适合日志/响应头的字符。
@@ -149,5 +155,3 @@ go test ./internal/middleware ./internal/httpx ./internal/requestlog
 关联 GAP：
 
 - [GAP-1-002](../../production/TODO_REGISTER.md#gap-1-002)
-
-

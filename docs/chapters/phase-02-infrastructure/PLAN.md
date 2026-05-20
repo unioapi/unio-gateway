@@ -43,9 +43,8 @@
 
 当前欠账：
 
-1. PostgreSQL pool 细节还不完整。
-2. Redis timeout/pool/namespace 还不完整。
-3. provider/channel 相关临时配置需要逐步退出正式 config 边界。
+1. migration runner 和 schema version 启动校验还未收口。
+2. provider/channel 相关临时配置需要逐步退出正式 config 边界。
 
 设计约束：
 
@@ -63,7 +62,7 @@
 <a id="task-2-02-postgres-pool"></a>
 ### TASK-2.02 PostgreSQL pool 生产参数
 
-状态：todo
+状态：done
 
 目标：
 
@@ -71,11 +70,11 @@
 让 PostgreSQL 连接池在生产环境可控，避免默认参数在高并发或故障时放大问题。
 ```
 
-计划实现：
+已完成：
 
 1. 在 config 中增加 `MaxConns`、`MinConns`。
 2. 增加 `MaxConnLifetime`、`MaxConnIdleTime`。
-3. 增加连接健康检查 timeout。
+3. 增加连接池 health check period。
 4. 在 [internal/store/postgres.go](../../../internal/store/postgres.go) 中使用 `pgxpool.ParseConfig` 配置 pool。
 5. 启动阶段执行轻量 ping，失败时阻止服务启动。
 
@@ -95,7 +94,7 @@ go test ./internal/store/sqlc
 <a id="task-2-03-redis-pool-namespace"></a>
 ### TASK-2.03 Redis timeout、pool 与 namespace
 
-状态：todo
+状态：done
 
 目标：
 
@@ -103,13 +102,16 @@ go test ./internal/store/sqlc
 让 Redis 作为辅助基础设施时具备可配置的超时、连接池和 key 隔离。
 ```
 
-计划实现：
+已完成：
 
 1. 在 config 中增加 Redis dial/read/write timeout。
 2. 增加 Redis pool size。
-3. 增加全局 key namespace，例如 `unio:dev`、`unio:prod`。
-4. 限流、缓存等 Redis key 必须统一拼 namespace。
-5. Redis 故障降级策略由调用方显式决定，不在 client 内部偷偷吞错。
+3. 增加 Redis retry 参数。
+4. 在 [internal/redis/client.go](../../../internal/redis/client.go) 中使用 config 注入 Redis client 连接参数。
+5. 在 `.env.example` 中登记 Redis client 可配置项。
+6. 增加全局 key namespace，例如 `unio:dev`、`unio:prod`。
+7. rate limit Redis key 已统一拼接 namespace。
+8. Redis 限流故障降级策略已在阶段 3 [GAP-3-006](../../production/TODO_REGISTER.md#gap-3-006) 完成。
 
 涉及文件：
 
@@ -182,5 +184,3 @@ go test ./internal/store/sqlc
 关联 GAP：
 
 - [GAP-2-008](../../production/TODO_REGISTER.md#gap-2-008)
-
-

@@ -5,6 +5,14 @@ type chatCompletionRequest struct {
 	Messages      []chatMessage      `json:"messages"`
 	Stream        bool               `json:"stream,omitempty"`
 	StreamOptions *chatStreamOptions `json:"stream_options,omitempty"`
+
+	Temperature      *float64 `json:"temperature,omitempty"`
+	TopP             *float64 `json:"top_p,omitempty"`
+	MaxTokens        *int     `json:"max_tokens,omitempty"`
+	PresencePenalty  *float64 `json:"presence_penalty,omitempty"`
+	FrequencyPenalty *float64 `json:"frequency_penalty,omitempty"`
+	Stop             []string `json:"stop,omitempty"`
+	User             *string  `json:"user,omitempty"`
 }
 
 // chatStreamOptions 表示 OpenAI stream_options 请求参数。

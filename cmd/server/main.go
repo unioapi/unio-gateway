@@ -43,10 +43,10 @@ func main() {
 	startupCtx, startupCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer startupCancel()
 
-	// TODO(阶段1/production): [GAP-1-001] 将启动超时、HTTP server timeout 和 shutdown timeout 纳入 config，并配合 readiness/metrics 暴露运行状态。
+	// TODO(阶段1/production): [GAP-1-001] 启动超时仍硬编码且 readiness 尚未独立；公网部署前；将 startup timeout 纳入 config，并增加 readiness/metrics 暴露运行状态。
 	// TODO(阶段2/production): [GAP-2-001] 启动前接入 migration runner（迁移执行器）或 schema 版本检查，避免服务连接到未迁移数据库。
 	// DB 启动期先检查数据库可用，避免服务带病启动。
-	pgPool, err := store.OpenPostgres(startupCtx, cfg.DB.URL)
+	pgPool, err := store.OpenPostgres(startupCtx, cfg.DB)
 	if err != nil {
 		logger.Error("open postgres failed", "error", err)
 		os.Exit(1)
@@ -99,7 +99,7 @@ func main() {
 		chatSettlementService,
 	)
 
-	rateLimitStore := ratelimit.NewRedisStore(redisClient)
+	rateLimitStore := ratelimit.NewRedisStore(redisClient, cfg.Redis.KeyNamespace)
 	rateLimiter := ratelimit.NewLimiter(rateLimitStore)
 
 	handler := httpapi.NewRouter(httpapi.RouterDeps{
@@ -107,9 +107,9 @@ func main() {
 		APIKeyAuthenticator: apiKeyAuthenticator,
 		RateLimiter:         rateLimiter,
 
-		// TODO(阶段3/production): [GAP-3-003] 将默认 rate limit（限流）阈值和窗口迁入 config；项目级、模型级和 channel 级策略后续来自数据库。
-		RateLimitLimit:  60,
-		RateLimitWindow: time.Minute,
+		RateLimitLimit:         cfg.RateLimit.DefaultLimit,
+		RateLimitWindow:        cfg.RateLimit.DefaultWindow,
+		RateLimitFailurePolicy: cfg.RateLimit.FailurePolicy,
 
 		ChatCompletionService: chatCompletionService,
 		ModelCatalogService:   modelCatalogService,
@@ -119,9 +119,9 @@ func main() {
 		Addr:    cfg.HTTP.Addr,
 		Handler: handler,
 
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		ReadTimeout:  cfg.HTTP.ReadTimeout,
+		WriteTimeout: cfg.HTTP.WriteTimeout,
+		IdleTimeout:  cfg.HTTP.IdleTimeout,
 	}
 
 	errCh := make(chan error, 1)
@@ -152,8 +152,8 @@ func main() {
 		logger.Info("shutdown signal received", "signal", sig.String())
 	}
 
-	// 给服务最多 10 秒时间处理完正在进行的请求，然后再退出。
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// 给服务最多 cfg.HTTP.ShutdownTimeout 时间处理完正在进行的请求，然后再退出。
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.HTTP.ShutdownTimeout)
 	defer cancel()
 
 	// Shutdown 会停止接收新请求，并等待已有请求在 ctx 超时前完成。

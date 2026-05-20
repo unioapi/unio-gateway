@@ -10,11 +10,17 @@ import (
 
 // OpenRedis 创建 Redis client，并在启动期做一次 ping。
 func OpenRedis(ctx context.Context, cfg config.RedisConfig) (*redis.Client, error) {
-	// TODO(阶段2/production): [GAP-2-007] 将 Redis timeout、pool size 和 retry 策略从 config 传入，避免生产环境使用默认连接参数。
 	client := redis.NewClient(&redis.Options{
-		Addr:     cfg.Addr,
-		Password: cfg.Password,
-		DB:       cfg.DB,
+		Addr:            cfg.Addr,
+		Password:        cfg.Password,
+		DB:              cfg.DB,
+		DialTimeout:     cfg.DialTimeout,
+		ReadTimeout:     cfg.ReadTimeout,
+		WriteTimeout:    cfg.WriteTimeout,
+		PoolSize:        cfg.PoolSize,
+		MaxRetries:      cfg.MaxRetries,
+		MinRetryBackoff: cfg.MinRetryBackoff,
+		MaxRetryBackoff: cfg.MaxRetryBackoff,
 	})
 
 	if err := client.Ping(ctx).Err(); err != nil {

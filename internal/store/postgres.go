@@ -5,17 +5,28 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/ThankCat/unio-api/internal/config"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // OpenPostgres 创建 PostgreSQL 连接池，并在启动期做一次 ping。
-func OpenPostgres(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
-	if databaseURL == "" {
+func OpenPostgres(ctx context.Context, cfg config.DBConfig) (*pgxpool.Pool, error) {
+	if cfg.URL == "" {
 		return nil, errors.New("DATABASE_URL is required")
 	}
 
-	// TODO(阶段2/production): [GAP-2-005] 从 config 注入 pgxpool 参数，包括 max conns、min conns、max conn lifetime、idle time 和健康检查策略。
-	pool, err := pgxpool.New(ctx, databaseURL)
+	poolConfig, err := pgxpool.ParseConfig(cfg.URL)
+	if err != nil {
+		return nil, fmt.Errorf("parse postgres config: %w", err)
+	}
+
+	poolConfig.MaxConns = cfg.MaxConns
+	poolConfig.MinConns = cfg.MinConns
+	poolConfig.MaxConnLifetime = cfg.MaxConnLifetime
+	poolConfig.MaxConnIdleTime = cfg.MaxConnIdleTime
+	poolConfig.HealthCheckPeriod = cfg.HealthCheckPeriod
+
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		return nil, fmt.Errorf("create postgres pool: %w", err)
 	}

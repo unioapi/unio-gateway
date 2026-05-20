@@ -3,9 +3,20 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/ThankCat/unio-api/internal/httpx"
+)
+
+const (
+	// maxStopSequences 是 OpenAI-compatible stop 序列数量上限。
+	maxStopSequences = 4
+
+	// maxUserLength 是 user 字段的保守长度上限，避免审计/风控标识无限膨胀。
+	maxUserLength = 512
 )
 
 // ChatCompletionService 定义 chat completions handler 依赖的业务能力。
@@ -24,68 +35,12 @@ func (h *chatCompletionsHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 	var req ChatCompletionRequest
 
 	if err := httpx.DecodeJSON(w, r, &req); err != nil {
-		_ = httpx.WriteError(w, http.StatusBadRequest, "invalid_request", "invalid json body")
+		writeJSONDecodeError(w, err)
 		return
 	}
 
-	if req.Model == "" {
-		_ = httpx.WriteOpenAIError(
-			w,
-			http.StatusBadRequest,
-			"invalid_request",
-			"model is required",
-			"invalid_request_error",
-			stringPtr("model"),
-		)
-		return
-	}
-
-	if len(req.Messages) == 0 {
-		_ = httpx.WriteOpenAIError(
-			w,
-			http.StatusBadRequest,
-			"invalid_request",
-			"messages is required",
-			"invalid_request_error",
-			stringPtr("messages"),
-		)
-		return
-	}
-
-	// TODO(阶段4/production): [GAP-4-001] chat messages 目前只校验非空列表，未校验 role 合法性、content 空值策略和 stop/user 等字段边界；开放 OpenAI-compatible API 前；补齐请求 DTO 深度校验并保持 OpenAI-compatible 错误格式。
-	if req.Temperature != nil && (*req.Temperature < 0 || *req.Temperature > 2) {
-		_ = httpx.WriteOpenAIError(
-			w,
-			http.StatusBadRequest,
-			"invalid_request",
-			"temperature must be between 0 and 2",
-			"invalid_request_error",
-			stringPtr("temperature"),
-		)
-		return
-	}
-
-	if req.TopP != nil && (*req.TopP < 0 || *req.TopP > 1) {
-		_ = httpx.WriteOpenAIError(
-			w,
-			http.StatusBadRequest,
-			"invalid_request",
-			"top_p must be between 0 and 1",
-			"invalid_request_error",
-			stringPtr("top_p"),
-		)
-		return
-	}
-
-	if req.MaxTokens != nil && *req.MaxTokens <= 0 {
-		_ = httpx.WriteOpenAIError(
-			w,
-			http.StatusBadRequest,
-			"invalid_request",
-			"max_tokens must be greater than 0",
-			"invalid_request_error",
-			stringPtr("max_tokens"),
-		)
+	if validationErr := validateChatCompletionRequest(req); validationErr != nil {
+		writeChatValidationError(w, validationErr)
 		return
 	}
 
@@ -148,4 +103,137 @@ func (h *chatCompletionsHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 // stringPtr 返回字符串指针，用于构造 optional 字段。
 func stringPtr(v string) *string {
 	return &v
+}
+
+// writeJSONDecodeError 将 JSON decode 错误转换成 OpenAI-compatible 错误响应。
+func writeJSONDecodeError(w http.ResponseWriter, err error) {
+	status := http.StatusBadRequest
+	message := "invalid json body"
+
+	switch {
+	case errors.Is(err, httpx.ErrUnsupportedContentType):
+		status = http.StatusUnsupportedMediaType
+		message = "content type must be application/json"
+	case errors.Is(err, httpx.ErrRequestBodyTooLarge):
+		status = http.StatusRequestEntityTooLarge
+		message = "request body too large"
+	case errors.Is(err, httpx.ErrEmptyJSONBody):
+		message = "request body is required"
+	case errors.Is(err, httpx.ErrTrailingJSONToken):
+		message = "request body must contain a single JSON object"
+	}
+
+	_ = httpx.WriteOpenAIError(
+		w,
+		status,
+		"invalid_request",
+		message,
+		"invalid_request_error",
+		nil,
+	)
+}
+
+// chatValidationError 表示 chat request validation 失败后的用户可见错误。
+type chatValidationError struct {
+	param   string
+	message string
+}
+
+// validateChatCompletionRequest 校验 OpenAI-compatible chat request 的 HTTP DTO 边界。
+func validateChatCompletionRequest(req ChatCompletionRequest) *chatValidationError {
+	if strings.TrimSpace(req.Model) == "" {
+		return &chatValidationError{param: "model", message: "model is required"}
+	}
+
+	if len(req.Messages) == 0 {
+		return &chatValidationError{param: "messages", message: "messages is required"}
+	}
+
+	for i, msg := range req.Messages {
+		roleParam := fmt.Sprintf("messages.%d.role", i)
+		if strings.TrimSpace(msg.Role) == "" {
+			return &chatValidationError{param: roleParam, message: "message role is required"}
+		}
+
+		if !isSupportedChatRole(msg.Role) {
+			return &chatValidationError{
+				param:   roleParam,
+				message: "message role must be one of system, user, assistant",
+			}
+		}
+
+		if strings.TrimSpace(msg.Content) == "" {
+			return &chatValidationError{
+				param:   fmt.Sprintf("messages.%d.content", i),
+				message: "message content is required",
+			}
+		}
+	}
+
+	if req.Temperature != nil && (*req.Temperature < 0 || *req.Temperature > 2) {
+		return &chatValidationError{param: "temperature", message: "temperature must be between 0 and 2"}
+	}
+
+	if req.TopP != nil && (*req.TopP < 0 || *req.TopP > 1) {
+		return &chatValidationError{param: "top_p", message: "top_p must be between 0 and 1"}
+	}
+
+	if req.MaxTokens != nil && *req.MaxTokens <= 0 {
+		return &chatValidationError{param: "max_tokens", message: "max_tokens must be greater than 0"}
+	}
+
+	if req.PresencePenalty != nil && (*req.PresencePenalty < -2 || *req.PresencePenalty > 2) {
+		return &chatValidationError{param: "presence_penalty", message: "presence_penalty must be between -2 and 2"}
+	}
+
+	if req.FrequencyPenalty != nil && (*req.FrequencyPenalty < -2 || *req.FrequencyPenalty > 2) {
+		return &chatValidationError{param: "frequency_penalty", message: "frequency_penalty must be between -2 and 2"}
+	}
+
+	if len(req.Stop) > maxStopSequences {
+		return &chatValidationError{param: "stop", message: "stop must contain at most 4 sequences"}
+	}
+
+	for i, stop := range req.Stop {
+		if strings.TrimSpace(stop) == "" {
+			return &chatValidationError{
+				param:   fmt.Sprintf("stop.%d", i),
+				message: "stop sequence must not be empty",
+			}
+		}
+	}
+
+	if req.User != nil {
+		if strings.TrimSpace(*req.User) == "" {
+			return &chatValidationError{param: "user", message: "user must not be empty"}
+		}
+
+		if len(*req.User) > maxUserLength {
+			return &chatValidationError{param: "user", message: "user must be at most 512 characters"}
+		}
+	}
+
+	return nil
+}
+
+// isSupportedChatRole 判断当前 text-only MVP 支持的 chat role。
+func isSupportedChatRole(role string) bool {
+	switch role {
+	case "system", "user", "assistant":
+		return true
+	default:
+		return false
+	}
+}
+
+// writeChatValidationError 将 chat validation 错误写成 OpenAI-compatible error。
+func writeChatValidationError(w http.ResponseWriter, validationErr *chatValidationError) {
+	_ = httpx.WriteOpenAIError(
+		w,
+		http.StatusBadRequest,
+		"invalid_request",
+		validationErr.message,
+		"invalid_request_error",
+		stringPtr(validationErr.param),
+	)
 }

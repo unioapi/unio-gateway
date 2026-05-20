@@ -130,6 +130,101 @@ func TestRouterV1ChatCompletionWithInvalidBody(t *testing.T) {
 	}
 }
 
+func TestRouterV1ChatCompletionWithUnsupportedContentType(t *testing.T) {
+	assertChatCompletionDecodeError(
+		t,
+		`{"model":"openai/gpt-4.1","messages":[{"role":"user","content":"Hello"}]}`,
+		"text/plain",
+		http.StatusUnsupportedMediaType,
+		"content type must be application/json",
+	)
+}
+
+func TestRouterV1ChatCompletionWithEmptyBody(t *testing.T) {
+	assertChatCompletionDecodeError(
+		t,
+		"",
+		httpx.ContentTypeJSON,
+		http.StatusBadRequest,
+		"request body is required",
+	)
+}
+
+func TestRouterV1ChatCompletionWithTrailingJSONToken(t *testing.T) {
+	assertChatCompletionDecodeError(
+		t,
+		`{"model":"openai/gpt-4.1","messages":[{"role":"user","content":"Hello"}]} {"extra":true}`,
+		httpx.ContentTypeJSON,
+		http.StatusBadRequest,
+		"request body must contain a single JSON object",
+	)
+}
+
+func TestRouterV1ChatCompletionWithTooLargeBody(t *testing.T) {
+	largeContent := strings.Repeat("a", int(httpx.DefaultMaxJSONBodyBytes)+1)
+	body := `{"model":"openai/gpt-4.1","messages":[{"role":"user","content":"` + largeContent + `"}]}`
+
+	assertChatCompletionDecodeError(
+		t,
+		body,
+		httpx.ContentTypeJSON,
+		http.StatusRequestEntityTooLarge,
+		"request body too large",
+	)
+}
+
+func assertChatCompletionDecodeError(t *testing.T, reqBody string, contentType string, wantStatus int, wantMessage string) {
+	t.Helper()
+
+	authenticator := &fakeAPIKeyAuthenticator{
+		principal: &auth.APIKeyPrincipal{
+			APIKeyID:  1,
+			ProjectID: 1,
+			KeyPrefix: "unio_sk_test",
+		},
+	}
+	service := &fakeChatCompletionService{}
+	handler := newTestRouter(authenticator, service, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(reqBody))
+	req.Header.Set("Authorization", "Bearer unio_sk_test")
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != wantStatus {
+		t.Fatalf("expected status %d, got %d", wantStatus, rec.Code)
+	}
+
+	if service.createCalled {
+		t.Fatal("expected chat completion service not to be called")
+	}
+
+	if service.streamCalled {
+		t.Fatal("expected stream chat completion service not to be called")
+	}
+
+	var body httpx.ErrorResponse
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response body: %v", err)
+	}
+
+	if body.Error.Code != "invalid_request" {
+		t.Fatalf("expected error code %q, got %q", "invalid_request", body.Error.Code)
+	}
+
+	if body.Error.Type != "invalid_request_error" {
+		t.Fatalf("expected error type %q, got %q", "invalid_request_error", body.Error.Type)
+	}
+
+	if body.Error.Message != wantMessage {
+		t.Fatalf("expected message %q, got %q", wantMessage, body.Error.Message)
+	}
+}
+
 func TestRouterV1ChatCompletionWithMissingModel(t *testing.T) {
 	authenticator := &fakeAPIKeyAuthenticator{
 		principal: &auth.APIKeyPrincipal{
@@ -421,6 +516,122 @@ func TestRouterV1ChatCompletionWithInvalidMaxTokens(t *testing.T) {
 	assertChatCompletionInvalidRequest(t, reqBody, "max_tokens must be greater than 0", "max_tokens")
 }
 
+func TestRouterV1ChatCompletionWithWhitespaceModel(t *testing.T) {
+	reqBody := ChatCompletionRequest{
+		Model: "   ",
+		Messages: []ChatMessage{
+			{Role: "user", Content: "Hello"},
+		},
+	}
+
+	assertChatCompletionInvalidRequest(t, reqBody, "model is required", "model")
+}
+
+func TestRouterV1ChatCompletionWithMissingMessageRole(t *testing.T) {
+	reqBody := ChatCompletionRequest{
+		Model: "openai/gpt-4.1",
+		Messages: []ChatMessage{
+			{Content: "Hello"},
+		},
+	}
+
+	assertChatCompletionInvalidRequest(t, reqBody, "message role is required", "messages.0.role")
+}
+
+func TestRouterV1ChatCompletionWithUnsupportedMessageRole(t *testing.T) {
+	reqBody := ChatCompletionRequest{
+		Model: "openai/gpt-4.1",
+		Messages: []ChatMessage{
+			{Role: "tool", Content: "Hello"},
+		},
+	}
+
+	assertChatCompletionInvalidRequest(t, reqBody, "message role must be one of system, user, assistant", "messages.0.role")
+}
+
+func TestRouterV1ChatCompletionWithEmptyMessageContent(t *testing.T) {
+	reqBody := ChatCompletionRequest{
+		Model: "openai/gpt-4.1",
+		Messages: []ChatMessage{
+			{Role: "user", Content: "   "},
+		},
+	}
+
+	assertChatCompletionInvalidRequest(t, reqBody, "message content is required", "messages.0.content")
+}
+
+func TestRouterV1ChatCompletionWithInvalidPresencePenalty(t *testing.T) {
+	reqBody := ChatCompletionRequest{
+		Model: "openai/gpt-4.1",
+		Messages: []ChatMessage{
+			{Role: "user", Content: "Hello"},
+		},
+		PresencePenalty: float64Ptr(2.1),
+	}
+
+	assertChatCompletionInvalidRequest(t, reqBody, "presence_penalty must be between -2 and 2", "presence_penalty")
+}
+
+func TestRouterV1ChatCompletionWithInvalidFrequencyPenalty(t *testing.T) {
+	reqBody := ChatCompletionRequest{
+		Model: "openai/gpt-4.1",
+		Messages: []ChatMessage{
+			{Role: "user", Content: "Hello"},
+		},
+		FrequencyPenalty: float64Ptr(-2.1),
+	}
+
+	assertChatCompletionInvalidRequest(t, reqBody, "frequency_penalty must be between -2 and 2", "frequency_penalty")
+}
+
+func TestRouterV1ChatCompletionWithTooManyStopSequences(t *testing.T) {
+	reqBody := ChatCompletionRequest{
+		Model: "openai/gpt-4.1",
+		Messages: []ChatMessage{
+			{Role: "user", Content: "Hello"},
+		},
+		Stop: []string{"a", "b", "c", "d", "e"},
+	}
+
+	assertChatCompletionInvalidRequest(t, reqBody, "stop must contain at most 4 sequences", "stop")
+}
+
+func TestRouterV1ChatCompletionWithEmptyStopSequence(t *testing.T) {
+	reqBody := ChatCompletionRequest{
+		Model: "openai/gpt-4.1",
+		Messages: []ChatMessage{
+			{Role: "user", Content: "Hello"},
+		},
+		Stop: []string{"END", "   "},
+	}
+
+	assertChatCompletionInvalidRequest(t, reqBody, "stop sequence must not be empty", "stop.1")
+}
+
+func TestRouterV1ChatCompletionWithEmptyUser(t *testing.T) {
+	reqBody := ChatCompletionRequest{
+		Model: "openai/gpt-4.1",
+		Messages: []ChatMessage{
+			{Role: "user", Content: "Hello"},
+		},
+		User: stringPtr("   "),
+	}
+
+	assertChatCompletionInvalidRequest(t, reqBody, "user must not be empty", "user")
+}
+
+func TestRouterV1ChatCompletionWithTooLongUser(t *testing.T) {
+	reqBody := ChatCompletionRequest{
+		Model: "openai/gpt-4.1",
+		Messages: []ChatMessage{
+			{Role: "user", Content: "Hello"},
+		},
+		User: stringPtr(strings.Repeat("a", maxUserLength+1)),
+	}
+
+	assertChatCompletionInvalidRequest(t, reqBody, "user must be at most 512 characters", "user")
+}
+
 func assertChatCompletionInvalidRequest(t *testing.T, reqBody ChatCompletionRequest, wantMessage string, wantParam string) {
 	t.Helper()
 
@@ -451,6 +662,10 @@ func assertChatCompletionInvalidRequest(t *testing.T, reqBody ChatCompletionRequ
 
 	if service.createCalled {
 		t.Fatal("expected chat completion service not to be called")
+	}
+
+	if service.streamCalled {
+		t.Fatal("expected stream chat completion service not to be called")
 	}
 
 	var body httpx.ErrorResponse

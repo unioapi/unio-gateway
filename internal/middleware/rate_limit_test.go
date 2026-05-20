@@ -1,12 +1,15 @@
 package middleware
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -49,7 +52,7 @@ func TestRateLimitAllowsRequest(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	handler := RateLimit(limiter, 60, time.Minute)(next)
+	handler := RateLimit(limiter, testRateLimitOptions(nil))(next)
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	req = req.WithContext(auth.ContextWithAPIKeyPrincipal(req.Context(), &auth.APIKeyPrincipal{
 		APIKeyID:  123,
@@ -99,7 +102,7 @@ func TestRateLimitRejectsRequest(t *testing.T) {
 		nextCalled = true
 	})
 
-	handler := RateLimit(limiter, 60, time.Minute)(next)
+	handler := RateLimit(limiter, testRateLimitOptions(nil))(next)
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	req = req.WithContext(auth.ContextWithAPIKeyPrincipal(req.Context(), &auth.APIKeyPrincipal{
 		APIKeyID:  123,
@@ -137,7 +140,7 @@ func TestRateLimitMissingPrincipal(t *testing.T) {
 		nextCalled = true
 	})
 
-	handler := RateLimit(limiter, 60, time.Minute)(next)
+	handler := RateLimit(limiter, testRateLimitOptions(nil))(next)
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	rec := httptest.NewRecorder()
 
@@ -165,7 +168,7 @@ func TestRateLimitLimiterError(t *testing.T) {
 		nextCalled = true
 	})
 
-	handler := RateLimit(limiter, 60, time.Minute)(next)
+	handler := RateLimit(limiter, testRateLimitOptions(nil))(next)
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	req = req.WithContext(auth.ContextWithAPIKeyPrincipal(req.Context(), &auth.APIKeyPrincipal{
 		APIKeyID:  123,
@@ -186,6 +189,49 @@ func TestRateLimitLimiterError(t *testing.T) {
 
 	if limiter.subject != "api_key:123" {
 		t.Fatalf("want subject %q, got %q", "api_key:123", limiter.subject)
+	}
+}
+
+func TestRateLimitLimiterErrorFailOpen(t *testing.T) {
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
+	limiter := &fakeRateLimiter{
+		err: errors.New("rate limit failed"),
+	}
+	nextCalled := false
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		nextCalled = true
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	opts := testRateLimitOptions(logger)
+	opts.FailurePolicy = RateLimitFailurePolicyFailOpen
+
+	handler := RateLimit(limiter, opts)(next)
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req = req.WithContext(auth.ContextWithAPIKeyPrincipal(req.Context(), &auth.APIKeyPrincipal{
+		APIKeyID:  123,
+		ProjectID: 456,
+		KeyPrefix: "unio_sk_test",
+	}))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if !nextCalled {
+		t.Fatal("want next handler to be called")
+	}
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("want status %d, got %d", http.StatusNoContent, rec.Code)
+	}
+
+	logLine := logBuf.String()
+	if !strings.Contains(logLine, "failure_policy=fail_open") {
+		t.Fatalf("want log to contain fail_open policy, got %q", logLine)
+	}
+	if !strings.Contains(logLine, "api_key_prefix=unio_sk_test") {
+		t.Fatalf("want log to contain api key prefix, got %q", logLine)
 	}
 }
 
@@ -218,4 +264,14 @@ func assertRateLimitHeaders(t *testing.T, rec *httptest.ResponseRecorder, limit 
 // strconvFormatUnix 返回时间的 Unix 秒字符串，避免测试里重复格式化逻辑。
 func strconvFormatUnix(t time.Time) string {
 	return strconv.FormatInt(t.Unix(), 10)
+}
+
+// testRateLimitOptions 返回 RateLimit middleware 测试使用的默认运行参数。
+func testRateLimitOptions(logger *slog.Logger) RateLimitOptions {
+	return RateLimitOptions{
+		Limit:         60,
+		Window:        time.Minute,
+		FailurePolicy: RateLimitFailurePolicyFailClosed,
+		Logger:        logger,
+	}
 }

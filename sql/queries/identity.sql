@@ -30,3 +30,10 @@ LIMIT 1;
 UPDATE api_keys
 SET last_used_at = sqlc.arg(last_used_at), updated_at = now()
 where id = sqlc.arg(id);
+
+-- name: GetProjectForUser :one
+SELECT id, user_id, name, created_at, updated_at
+FROM projects
+WHERE id = sqlc.arg(project_id)
+AND user_id = sqlc.arg(user_id)
+LIMIT 1;

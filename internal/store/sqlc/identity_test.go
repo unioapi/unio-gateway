@@ -64,6 +64,20 @@ func TestIdentityQueries(t *testing.T) {
 		t.Fatalf("create project: %v", err)
 	}
 
+	gotProject, err := queries.GetProjectForUser(ctx, sqlc.GetProjectForUserParams{
+		ProjectID: project.ID,
+		UserID:    user.ID,
+	})
+	if err != nil {
+		t.Fatalf("get project for user: %v", err)
+	}
+	if gotProject.ID != project.ID {
+		t.Fatalf("expected project id %d, got %d", project.ID, gotProject.ID)
+	}
+	if gotProject.UserID != user.ID {
+		t.Fatalf("expected project user id %d, got %d", user.ID, gotProject.UserID)
+	}
+
 	key, err := apikey.Generate()
 	if err != nil {
 		t.Fatalf("generate api key: %v", err)

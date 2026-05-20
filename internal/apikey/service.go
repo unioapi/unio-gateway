@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ThankCat/unio-api/internal/store/sqlc"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -16,11 +17,15 @@ var (
 
 	// ErrInvalidName 表示创建 API Key 时 name 为空。
 	ErrInvalidName = errors.New("invalid api key name")
+
+	// ErrUnauthorizedProject 表示调用者无权操作目标 project。
+	ErrUnauthorizedProject = errors.New("unauthorized project")
 )
 
 // Store 定义 API Key 创建服务需要的数据库能力。
 type Store interface {
 	CreateAPIKey(ctx context.Context, arg sqlc.CreateAPIKeyParams) (sqlc.ApiKey, error)
+	GetProjectForUser(ctx context.Context, arg sqlc.GetProjectForUserParams) (sqlc.Project, error)
 }
 
 // Service 负责 API Key 的业务创建流程。
@@ -28,11 +33,9 @@ type Service struct {
 	store Store
 }
 
-// CreateParams 表示创建 API Key 需要的业务参数。
-type CreateParams struct {
-	ProjectID int64
-	Name      string
-	ExpiresAt *time.Time
+// NewService 创建 API Key service。
+func NewService(store Store) *Service {
+	return &Service{store: store}
 }
 
 // CreatedKey 表示创建成功后返回给调用方的一次性结果。
@@ -45,16 +48,34 @@ type CreatedKey struct {
 	ExpiresAt *time.Time
 }
 
-// NewService 创建 API Key service。
-func NewService(store Store) *Service {
-	return &Service{store: store}
+// CreateParams 表示创建 API Key 需要的业务参数。
+type CreateParams struct {
+	ProjectID   int64
+	Name        string
+	ExpiresAt   *time.Time
+	ActorUserID int64
 }
 
 // Create 创建新的 API Key。Plaintext 只能返回给调用方一次，不能保存到数据库。
 func (s *Service) Create(ctx context.Context, params CreateParams) (*CreatedKey, error) {
-	// TODO(阶段3/production): [GAP-3-007] API Key 创建服务当前只接收 project_id，缺少调用者身份校验和审计，接入后台接口时可能越权给其他 project 创建 key；开放 key 管理 API 前；传入 authenticated user/admin principal，校验 project 归属并写审计日志。
+	// TODO(阶段3/production): [GAP-3-007] API Key 创建缺少审计日志；开放 key 管理 API 前；接入 audit log 记录 actor、project、api_key 和操作结果。
 	if params.ProjectID <= 0 {
 		return nil, ErrInvalidProjectID
+	}
+
+	if params.ActorUserID <= 0 {
+		return nil, ErrUnauthorizedProject
+	}
+
+	if _, err := s.store.GetProjectForUser(ctx, sqlc.GetProjectForUserParams{
+		ProjectID: params.ProjectID,
+		UserID:    params.ActorUserID,
+	}); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrUnauthorizedProject
+		}
+
+		return nil, err
 	}
 
 	name := strings.TrimSpace(params.Name)

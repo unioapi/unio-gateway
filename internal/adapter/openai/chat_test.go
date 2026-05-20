@@ -14,6 +14,57 @@ import (
 	"github.com/ThankCat/unio-api/internal/channel"
 )
 
+// adapterChatRequestWithParams 创建带可透传 OpenAI-compatible 参数的 adapter 请求。
+func adapterChatRequestWithParams() adapter.ChatRequest {
+	temperature := 0.0
+	topP := 0.8
+	maxTokens := 128
+	presencePenalty := 0.5
+	frequencyPenalty := 0.25
+	user := "end-user-1"
+
+	return adapter.ChatRequest{
+		Model: "gpt-4.1",
+		Messages: []adapter.ChatMessage{
+			{Role: "user", Content: "hello"},
+		},
+		Temperature:      &temperature,
+		TopP:             &topP,
+		MaxTokens:        &maxTokens,
+		PresencePenalty:  &presencePenalty,
+		FrequencyPenalty: &frequencyPenalty,
+		Stop:             []string{"END", "STOP"},
+		User:             &user,
+	}
+}
+
+// assertUpstreamChatRequestParams 断言 OpenAI wire DTO 带上 adapter contract 中的可透传参数。
+func assertUpstreamChatRequestParams(t *testing.T, req chatCompletionRequest) {
+	t.Helper()
+
+	if req.Temperature == nil || *req.Temperature != 0 {
+		t.Fatalf("expected temperature 0, got %v", req.Temperature)
+	}
+	if req.TopP == nil || *req.TopP != 0.8 {
+		t.Fatalf("expected top_p 0.8, got %v", req.TopP)
+	}
+	if req.MaxTokens == nil || *req.MaxTokens != 128 {
+		t.Fatalf("expected max_tokens 128, got %v", req.MaxTokens)
+	}
+	if req.PresencePenalty == nil || *req.PresencePenalty != 0.5 {
+		t.Fatalf("expected presence_penalty 0.5, got %v", req.PresencePenalty)
+	}
+	if req.FrequencyPenalty == nil || *req.FrequencyPenalty != 0.25 {
+		t.Fatalf("expected frequency_penalty 0.25, got %v", req.FrequencyPenalty)
+	}
+	if len(req.Stop) != 2 || req.Stop[0] != "END" || req.Stop[1] != "STOP" {
+		t.Fatalf("expected stop [END STOP], got %#v", req.Stop)
+	}
+	if req.User == nil || *req.User != "end-user-1" {
+		t.Fatalf("expected user end-user-1, got %v", req.User)
+	}
+}
+
 func TestAdapterChatCompletionsCallsUpstream(t *testing.T) {
 	var gotAuthorization string
 	var gotContentType string
@@ -72,12 +123,7 @@ func TestAdapterChatCompletionsCallsUpstream(t *testing.T) {
 		Timeout: 30 * time.Second,
 	}
 
-	got, err := openAIAdapter.ChatCompletions(context.Background(), selectedChannel, adapter.ChatRequest{
-		Model: "gpt-4.1",
-		Messages: []adapter.ChatMessage{
-			{Role: "user", Content: "hello"},
-		},
-	})
+	got, err := openAIAdapter.ChatCompletions(context.Background(), selectedChannel, adapterChatRequestWithParams())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -100,6 +146,7 @@ func TestAdapterChatCompletionsCallsUpstream(t *testing.T) {
 	if gotRequestBody.Messages[0].Content != "hello" {
 		t.Fatalf("got %q, want %q", gotRequestBody.Messages[0].Content, "hello")
 	}
+	assertUpstreamChatRequestParams(t, gotRequestBody)
 
 	if got.ID != "chatcmpl_test" {
 		t.Fatalf("expected id %q, got %q", "chatcmpl_test", got.ID)
@@ -316,12 +363,7 @@ func TestAdapterStreamChatCompletionsParsesUpstreamSSE(t *testing.T) {
 	}
 
 	got := make([]adapter.ChatStreamChunk, 0)
-	err := openAIAdapter.StreamChatCompletions(context.Background(), selectedChannel, adapter.ChatRequest{
-		Model: "gpt-4.1",
-		Messages: []adapter.ChatMessage{
-			{Role: "user", Content: "hello"},
-		},
-	}, func(chunk adapter.ChatStreamChunk) error {
+	err := openAIAdapter.StreamChatCompletions(context.Background(), selectedChannel, adapterChatRequestWithParams(), func(chunk adapter.ChatStreamChunk) error {
 		got = append(got, chunk)
 		return nil
 	})
@@ -356,6 +398,7 @@ func TestAdapterStreamChatCompletionsParsesUpstreamSSE(t *testing.T) {
 	if gotRequestBody.Messages[0].Content != "hello" {
 		t.Fatalf("got content %q, want %q", gotRequestBody.Messages[0].Content, "hello")
 	}
+	assertUpstreamChatRequestParams(t, gotRequestBody)
 
 	if len(got) != 3 {
 		t.Fatalf("got %d chunks, want 3", len(got))

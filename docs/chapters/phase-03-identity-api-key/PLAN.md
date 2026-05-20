@@ -90,7 +90,7 @@
 <a id="task-3-03-api-key-management"></a>
 ### TASK-3.03 API Key 管理、禁用与审计
 
-状态：todo
+状态：partial
 
 目标：
 
@@ -98,14 +98,18 @@
 让 API key 能被安全创建、查询、禁用、撤销，并能审计是谁操作。
 ```
 
-计划实现：
+已完成：
 
 1. 创建 key 时传入 authenticated principal。
-2. 校验 principal 是否拥有目标 project，或是否具备 admin 权限。
-3. 支持 list key，只返回 prefix、name、状态、创建时间和最后使用时间。
-4. 支持 revoke/disable。
-5. 后台敏感操作写 audit log。
-6. 创建成功只返回一次明文 key。
+2. 校验 principal 是否拥有目标 project。
+3. 创建成功只返回一次明文 key。
+
+剩余计划：
+
+1. 支持 list key，只返回 prefix、name、状态、创建时间和最后使用时间。
+2. 支持 revoke/disable。
+3. 后台敏感操作写 audit log。
+4. 后续进入后台 admin 权限后，再扩展 admin principal 跨用户管理能力。
 
 涉及文件：
 
@@ -122,7 +126,7 @@
 <a id="task-3-04-rate-limit-production"></a>
 ### TASK-3.04 限流生产化
 
-状态：todo
+状态：done
 
 目标：
 
@@ -130,14 +134,19 @@
 让基础限流既能保护平台，又不会因为 Redis 故障把客户请求全部打死。
 ```
 
-计划实现：
+已完成：
 
 1. 将默认限流窗口和阈值迁入 config。
 2. Redis key 使用统一 namespace。
-3. 用 Lua 或 Redis transaction 保证 `INCR + EXPIRE` 原子性。
-4. 明确 Redis 故障时 fail-open/fail-closed 策略。
-5. 为降级路径补 structured log 和 metrics。
-6. 后续支持 project/model/channel 级限流策略。
+3. `.env.example` 已登记默认限流和 Redis key namespace 配置。
+4. Redis 限流计数使用 `TxPipelined + ExpireNX + TTL`，避免 `INCR` 成功但过期时间设置失败留下永久 key。
+5. Redis 限流故障策略支持 `fail_closed` / `fail_open` 配置。
+6. 降级路径记录脱敏 structured log，只记录 API key prefix，不记录完整 key。
+
+后续能力：
+
+1. Prometheus metrics 在阶段 8 [TASK-8.02](../phase-08-observability-stability/PLAN.md#task-8-02-metrics) 统一实现。
+2. project/model/channel 级限流策略在后台策略能力进入后再扩展。
 
 涉及文件：
 
@@ -157,5 +166,3 @@ go test ./internal/ratelimit ./internal/middleware
 - [GAP-3-004](../../production/TODO_REGISTER.md#gap-3-004)
 - [GAP-3-005](../../production/TODO_REGISTER.md#gap-3-005)
 - [GAP-3-006](../../production/TODO_REGISTER.md#gap-3-006)
-
-

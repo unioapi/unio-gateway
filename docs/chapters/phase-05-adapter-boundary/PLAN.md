@@ -36,7 +36,7 @@ adapter 不负责：
 <a id="task-5-01-chat-parameter-contract"></a>
 ### TASK-5.01 Chat 参数 contract
 
-状态：todo
+状态：done
 
 目标：
 
@@ -44,25 +44,25 @@ adapter 不负责：
 避免用户传入的 OpenAI-compatible 参数在 HTTP 层被接收，却在 adapter 层被静默丢弃。
 ```
 
-当前欠账：
+已完成：
 
-1. HTTP DTO 已经接收部分参数。
-2. `adapter.ChatRequest` 没有完整承载这些字段。
-3. OpenAI wire DTO 也没有完整映射所有已支持字段。
+1. 盘点 [internal/httpapi/openai_dto.go](../../../internal/httpapi/openai_dto.go) 中 chat request 当前已接收字段。
+2. 将 `temperature`、`top_p`、`max_tokens`、`presence_penalty`、`frequency_penalty`、`stop`、`user` 加入 [internal/adapter/chat.go](../../../internal/adapter/chat.go)。
+3. 将这些可透传字段映射到 [internal/adapter/openai/dto.go](../../../internal/adapter/openai/dto.go)。
+4. 非流式和流式 OpenAI adapter 均会把可透传字段写入上游请求 body。
+5. optional scalar 使用指针保留显式零值。
 
-计划实现：
+验证方式：
 
-1. 盘点 [internal/httpapi/openai_dto.go](../../../internal/httpapi/openai_dto.go) 中所有 chat request 字段。
-2. 将支持字段加入 [internal/adapter/chat.go](../../../internal/adapter/chat.go)。
-3. 将支持字段映射到 [internal/adapter/openai/dto.go](../../../internal/adapter/openai/dto.go)。
-4. 对不支持字段在 HTTP validation 阶段显式拒绝。
-5. 为每个字段写清楚谁创建、谁消费、何时使用。
+```bash
+go test ./internal/adapter ./internal/adapter/openai ./internal/gateway ./internal/httpapi
+```
 
 完成标准：
 
 1. 已支持参数不会丢。
-2. 不支持参数不会假装支持。
-3. optional scalar 使用指针保留显式零值。
+2. optional scalar 使用指针保留显式零值。
+3. Chat DTO 的 role/content/参数值深度校验继续由阶段 4 [TASK-4.03](../phase-04-openai-compatible-api/PLAN.md#task-4-03-chat-dto-validation) 收口。
 
 关联 GAP：
 
@@ -155,5 +155,4 @@ stream parser 仍基于 bufio.Scanner，受单个 event 大小限制。
 关联 GAP：
 
 - [GAP-8-001](../../production/TODO_REGISTER.md#gap-8-001)
-
 

@@ -7,12 +7,16 @@ import (
 	"time"
 
 	"github.com/ThankCat/unio-api/internal/store/sqlc"
+	"github.com/jackc/pgx/v5"
 )
 
 type fakeStore struct {
-	arg    sqlc.CreateAPIKeyParams
-	called bool
-	err    error
+	arg           sqlc.CreateAPIKeyParams
+	called        bool
+	err           error
+	projectArg    sqlc.GetProjectForUserParams
+	projectCalled bool
+	projectErr    error
 }
 
 func (s *fakeStore) CreateAPIKey(ctx context.Context, arg sqlc.CreateAPIKeyParams) (sqlc.ApiKey, error) {
@@ -31,6 +35,20 @@ func (s *fakeStore) CreateAPIKey(ctx context.Context, arg sqlc.CreateAPIKeyParam
 	}, nil
 }
 
+func (s *fakeStore) GetProjectForUser(ctx context.Context, arg sqlc.GetProjectForUserParams) (sqlc.Project, error) {
+	s.projectArg = arg
+	s.projectCalled = true
+	if s.projectErr != nil {
+		return sqlc.Project{}, s.projectErr
+	}
+
+	return sqlc.Project{
+		ID:     arg.ProjectID,
+		UserID: arg.UserID,
+		Name:   "test project",
+	}, nil
+}
+
 func TestServiceCreateSuccess(t *testing.T) {
 	store := &fakeStore{}
 	service := NewService(store)
@@ -38,12 +56,25 @@ func TestServiceCreateSuccess(t *testing.T) {
 	expiresAt := time.Now().UTC()
 
 	created, err := service.Create(context.Background(), CreateParams{
-		ProjectID: 1,
-		Name:      "test",
-		ExpiresAt: &expiresAt,
+		ProjectID:   1,
+		Name:        "test",
+		ExpiresAt:   &expiresAt,
+		ActorUserID: 10,
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+
+	if !store.projectCalled {
+		t.Fatal("project ownership check was not called")
+	}
+
+	if store.projectArg.ProjectID != 1 {
+		t.Fatalf("want checked project_id 1, got %d", store.projectArg.ProjectID)
+	}
+
+	if store.projectArg.UserID != 10 {
+		t.Fatalf("want checked user_id 10, got %d", store.projectArg.UserID)
 	}
 
 	if !store.called {
@@ -104,8 +135,9 @@ func TestServiceCreateInvalidProjectID(t *testing.T) {
 	service := NewService(store)
 
 	created, err := service.Create(context.Background(), CreateParams{
-		ProjectID: -1,
-		Name:      "test",
+		ProjectID:   -1,
+		Name:        "test",
+		ActorUserID: 10,
 	})
 
 	if created != nil {
@@ -114,6 +146,96 @@ func TestServiceCreateInvalidProjectID(t *testing.T) {
 
 	if !errors.Is(err, ErrInvalidProjectID) {
 		t.Fatalf("want ErrInvalidProjectID, got %v", err)
+	}
+
+	if store.projectCalled {
+		t.Fatal("want project ownership check not to be called")
+	}
+
+	if store.called {
+		t.Fatal("want store not to be called")
+	}
+}
+
+func TestServiceCreateInvalidActorUserID(t *testing.T) {
+	store := &fakeStore{}
+	service := NewService(store)
+
+	created, err := service.Create(context.Background(), CreateParams{
+		ProjectID:   1,
+		Name:        "test",
+		ActorUserID: 0,
+	})
+
+	if created != nil {
+		t.Fatal("want created key to be nil")
+	}
+
+	if !errors.Is(err, ErrUnauthorizedProject) {
+		t.Fatalf("want ErrUnauthorizedProject, got %v", err)
+	}
+
+	if store.projectCalled {
+		t.Fatal("want project ownership check not to be called")
+	}
+
+	if store.called {
+		t.Fatal("want store not to be called")
+	}
+}
+
+func TestServiceCreateUnauthorizedProject(t *testing.T) {
+	store := &fakeStore{
+		projectErr: pgx.ErrNoRows,
+	}
+	service := NewService(store)
+
+	created, err := service.Create(context.Background(), CreateParams{
+		ProjectID:   1,
+		Name:        "test",
+		ActorUserID: 10,
+	})
+
+	if created != nil {
+		t.Fatal("want created key to be nil")
+	}
+
+	if !errors.Is(err, ErrUnauthorizedProject) {
+		t.Fatalf("want ErrUnauthorizedProject, got %v", err)
+	}
+
+	if !store.projectCalled {
+		t.Fatal("want project ownership check to be called")
+	}
+
+	if store.called {
+		t.Fatal("want store not to be called")
+	}
+}
+
+func TestServiceCreateProjectCheckStoreError(t *testing.T) {
+	storeErr := errors.New("select project failed")
+	store := &fakeStore{
+		projectErr: storeErr,
+	}
+	service := NewService(store)
+
+	created, err := service.Create(context.Background(), CreateParams{
+		ProjectID:   1,
+		Name:        "test",
+		ActorUserID: 10,
+	})
+
+	if created != nil {
+		t.Fatal("want created key to be nil")
+	}
+
+	if !errors.Is(err, storeErr) {
+		t.Fatalf("want store error, got %v", err)
+	}
+
+	if !store.projectCalled {
+		t.Fatal("want project ownership check to be called")
 	}
 
 	if store.called {
@@ -126,8 +248,9 @@ func TestServiceCreateInvalidName(t *testing.T) {
 	service := NewService(store)
 
 	created, err := service.Create(context.Background(), CreateParams{
-		ProjectID: 1,
-		Name:      "   ",
+		ProjectID:   1,
+		Name:        "   ",
+		ActorUserID: 10,
 	})
 
 	if created != nil {
@@ -136,6 +259,10 @@ func TestServiceCreateInvalidName(t *testing.T) {
 
 	if !errors.Is(err, ErrInvalidName) {
 		t.Fatalf("want ErrInvalidName, got %v", err)
+	}
+
+	if !store.projectCalled {
+		t.Fatal("want project ownership check to be called")
 	}
 
 	if store.called {
@@ -150,8 +277,9 @@ func TestServiceCreateStoreError(t *testing.T) {
 	service := NewService(store)
 
 	created, err := service.Create(context.Background(), CreateParams{
-		ProjectID: 1,
-		Name:      "test",
+		ProjectID:   1,
+		Name:        "test",
+		ActorUserID: 10,
 	})
 
 	if created != nil {
@@ -172,9 +300,10 @@ func TestServiceCreateWithoutExpiresAt(t *testing.T) {
 	service := NewService(store)
 
 	created, err := service.Create(context.Background(), CreateParams{
-		ProjectID: 1,
-		Name:      "test",
-		ExpiresAt: nil,
+		ProjectID:   1,
+		Name:        "test",
+		ExpiresAt:   nil,
+		ActorUserID: 10,
 	})
 	if err != nil {
 		t.Fatalf("create api key: %v", err)

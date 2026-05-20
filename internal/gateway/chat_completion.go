@@ -64,8 +64,15 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ht
 
 		// TODO(阶段7/production): [GAP-7-001] 非流式请求调用上游前没有余额预检或预授权，余额不足用户可能先产生平台上游成本再在 settlement 阶段失败；公开计费 API 前；引入余额 preflight 或 pre-authorize，并在 settlement 成功后确认扣费。
 		adapterResp, err := chatAdapter.ChatCompletions(ctx, candidate.Channel, adapter.ChatRequest{
-			Model:    candidate.UpstreamModel,
-			Messages: messages,
+			Model:            candidate.UpstreamModel,
+			Messages:         messages,
+			Temperature:      req.Temperature,
+			TopP:             req.TopP,
+			MaxTokens:        req.MaxTokens,
+			PresencePenalty:  req.PresencePenalty,
+			FrequencyPenalty: req.FrequencyPenalty,
+			Stop:             req.Stop,
+			User:             req.User,
 		})
 		if err != nil {
 			// 客户端取消不是上游失败，也不应该触发 fallback。

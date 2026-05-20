@@ -161,7 +161,7 @@ P2
 
 ---
 
-### 2. API Key 创建缺少调用者授权
+### 2. API Key 创建缺少审计日志
 
 位置：
 
@@ -169,17 +169,17 @@ P2
 internal/apikey/service.go:55
 ```
 
-新增 TODO：
+当前 TODO：
 
 ```go
-// TODO(阶段3/production): [GAP-3-007] API Key 创建服务当前只接收 project_id，缺少调用者身份校验和审计，接入后台接口时可能越权给其他 project 创建 key；开放 key 管理 API 前；传入 authenticated user/admin principal，校验 project 归属并写审计日志。
+// TODO(阶段3/production): [GAP-3-007] API Key 创建缺少审计日志；开放 key 管理 API 前；接入 audit log 记录 actor、project、api_key 和操作结果。
 ```
 
 风险：
 
 ```text
-当前 service 只根据 project_id 创建 key。
-未来如果直接暴露后台接口，调用者可能越权为不属于自己的 project 创建 API Key。
+API key 创建已传入 ActorUserID，并校验 actor/project 归属。
+当前剩余风险是敏感操作没有审计记录，未来后台排查、合规和越权追责缺少事实来源。
 ```
 
 计划完善时机：
@@ -204,10 +204,10 @@ P1
 internal/middleware/rate_limit.go:39
 ```
 
-新增 TODO：
+关闭记录：
 
-```go
-// TODO(阶段3/production): [GAP-3-006] Redis 限流故障当前会让客户请求全部失败，可能形成单点不可用；生产部署前；将 fail-open/fail-closed 策略配置化，并补充降级日志/metrics。
+```text
+GAP-3-006 已于 2026-05-20 关闭。Redis 限流故障策略已支持 fail_closed / fail_open 配置，并记录脱敏 structured log；Prometheus metrics 进入阶段 8 TASK-8.02 统一实现。
 ```
 
 风险：
@@ -217,10 +217,10 @@ Redis 故障会导致所有受限流保护的请求失败。
 商业 API 需要明确限流故障时是 fail-open 还是 fail-closed。
 ```
 
-计划完善时机：
+实际处理时间：
 
 ```text
-生产部署前。
+2026-05-20 已完成。
 ```
 
 建议优先级：
@@ -239,23 +239,23 @@ P2
 internal/httpx/json.go:25
 ```
 
-新增 TODO：
+关闭记录：
 
-```go
-// TODO(阶段4/production): [GAP-4-002] 当前 JSON 解码未校验 Content-Type 和尾随 JSON token，会让公网 API 接受模糊请求体；开放 OpenAI-compatible API 前；补齐严格 body 校验并把 body too large / malformed JSON 映射为稳定的 OpenAI-compatible error。
+```text
+GAP-4-002 已于 2026-05-20 关闭。DecodeJSON 已校验 Content-Type、空 body、超大 body 和尾随 JSON token，chat completions handler 已映射为稳定 OpenAI-compatible error。
 ```
 
 风险：
 
 ```text
-当前 DecodeJSON 只 Decode 一次。
-没有校验 Content-Type，也没有校验 body 后是否还有多余 JSON token。
+已通过严格 JSON decode 收口。
+后续如果新增其他 JSON endpoint，应复用 httpx.DecodeJSON，避免重新引入宽松解析。
 ```
 
-计划完善时机：
+实际处理时间：
 
 ```text
-开放 OpenAI-compatible API 前。
+2026-05-20 已完成。
 ```
 
 建议优先级：
@@ -274,23 +274,23 @@ P2
 internal/httpapi/chat_completions_handler.go:55
 ```
 
-新增 TODO：
+关闭记录：
 
-```go
-// TODO(阶段4/production): [GAP-4-001] chat messages 目前只校验非空列表，未校验 role 合法性、content 空值策略和 stop/user 等字段边界；开放 OpenAI-compatible API 前；补齐请求 DTO 深度校验并保持 OpenAI-compatible 错误格式。
+```text
+GAP-4-001 已于 2026-05-20 关闭。Chat DTO 已校验 model、message role/content、temperature/top_p/max_tokens、presence/frequency penalty、stop 和 user 边界，并保持 OpenAI-compatible error 格式。
 ```
 
 风险：
 
 ```text
-messages 只校验非空。
-role、content、stop、user 等字段边界不清，会导致无效请求进入 gateway 或上游。
+text-only MVP 的 chat request 深度校验已收口。
+tool/function/developer role 与 multimodal content 尚未进入 DTO 和 adapter contract，因此当前不会被假支持。
 ```
 
-计划完善时机：
+实际处理时间：
 
 ```text
-开放 OpenAI-compatible API 前。
+2026-05-20 已完成。
 ```
 
 建议优先级：
@@ -309,24 +309,23 @@ P1
 internal/adapter/chat.go:20
 ```
 
-新增 TODO：
+关闭记录：
 
-```go
-// TODO(阶段5/production): [GAP-5-001] HTTP DTO 已接收 temperature/top_p/max_tokens/stop/user 等参数但 adapter contract 未承载，用户传参会被静默丢弃；开放 OpenAI-compatible chat API 前；扩展 adapter.ChatRequest 和各 provider wire DTO，或显式拒绝暂不支持的参数。
+```text
+GAP-5-001 已于 2026-05-20 关闭。adapter.ChatRequest、OpenAI wire DTO、非流式和流式上游请求均已承载 HTTP DTO 当前可透传参数，并有 gateway 与 OpenAI adapter 测试覆盖。
 ```
 
 风险：
 
 ```text
-HTTP DTO 接收了 temperature/top_p/max_tokens/stop/user。
-但 gateway 转成 adapter.ChatRequest 时只传 model/messages。
-用户以为参数生效，实际被静默丢弃。
+静默丢参风险已通过 adapter contract 参数穿透收口。
+role/content/参数值深度校验已由 GAP-4-001 收口。
 ```
 
-计划完善时机：
+实际处理时间：
 
 ```text
-开放 OpenAI-compatible chat API 前。
+2026-05-20 已完成。
 ```
 
 建议优先级：

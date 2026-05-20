@@ -6,8 +6,6 @@
 
 | ID | GAP | 阶段 | 阻断原因 | 关联任务 |
 | --- | --- | --- | --- | --- |
-| RB-001 | [GAP-4-001](TODO_REGISTER.md#gap-4-001) | 阶段 4 | chat request 深度校验不足，公开 API 可能接受非法 role/content/参数边界。 | [TASK-4.03](../chapters/phase-04-openai-compatible-api/PLAN.md#task-4-03-chat-dto-validation) |
-| RB-002 | [GAP-5-001](TODO_REGISTER.md#gap-5-001) | 阶段 5 | 用户已传入的部分 OpenAI-compatible 参数未进入 adapter contract，存在静默丢参风险。 | [TASK-5.01](../chapters/phase-05-adapter-boundary/PLAN.md#task-5-01-chat-parameter-contract) |
 | RB-003 | [GAP-7-001](TODO_REGISTER.md#gap-7-001) | 阶段 7 | 非流式没有余额预检或预授权，余额不足用户可能先产生上游成本。 | [TASK-7.17](../chapters/phase-07-billing-ledger/PLAN.md#task-7-17-preauthorization) |
 | RB-004 | [GAP-7-002](TODO_REGISTER.md#gap-7-002) | 阶段 7 | stream 没有预授权，长输出和恶意断开无法控损。 | [TASK-7.17](../chapters/phase-07-billing-ledger/PLAN.md#task-7-17-preauthorization) |
 | RB-005 | [GAP-7-003](TODO_REGISTER.md#gap-7-003) | 阶段 7 | request/attempt 终态缺少状态机守卫，并发更新可能覆盖账务事实。 | [TASK-7.18](../chapters/phase-07-billing-ledger/PLAN.md#task-7-18-request-state-machine) |

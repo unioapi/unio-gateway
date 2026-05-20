@@ -87,7 +87,7 @@
 <a id="task-4-03-chat-dto-validation"></a>
 ### TASK-4.03 Chat DTO 深度校验
 
-状态：todo
+状态：done
 
 目标：
 
@@ -95,21 +95,21 @@
 公开 API 前，明确哪些 OpenAI-compatible 参数被支持、哪些被拒绝、哪些会透传。
 ```
 
-当前欠账：
+已完成：
 
-1. message 只校验了非空列表。
-2. role 合法性未完整校验。
-3. content 空值策略未定义。
-4. `temperature`、`top_p`、`max_tokens`、`stop`、`user` 等参数边界未完整校验。
-5. 部分已接收字段没有进入 adapter contract，存在静默丢参。
+1. `model` 必须非空且不能只有空白字符。
+2. `messages` 必须非空。
+3. message role 只支持当前 text-only MVP 的 `system`、`user`、`assistant`。
+4. message content 必须非空且不能只有空白字符。
+5. `temperature`、`top_p`、`max_tokens`、`presence_penalty`、`frequency_penalty` 已校验取值边界。
+6. `stop` 最多 4 个，且每个 stop sequence 不能为空。
+7. `user` 如果传入，不能为空且长度最多 512。
 
-计划实现：
+当前边界：
 
-1. 明确支持的 role 集合。
-2. 明确 text-only MVP 是否拒绝 tool/function/multimodal content。
-3. 对 optional scalar 使用指针保留显式零值。
-4. 对暂不支持字段返回 OpenAI-compatible error。
-5. 与 [TASK-5.01](../phase-05-adapter-boundary/PLAN.md#task-5-01-chat-parameter-contract) 同步推进，防止 HTTP 层接受但 adapter 丢弃。
+1. 暂不支持 tool/function/developer role。
+2. 暂不支持 multimodal content。
+3. 已透传字段继续保持与 [TASK-5.01](../phase-05-adapter-boundary/PLAN.md#task-5-01-chat-parameter-contract) 的 adapter contract 一致。
 
 验证方式：
 
@@ -120,13 +120,12 @@ go test ./internal/httpapi
 关联 GAP：
 
 - [GAP-4-001](../../production/TODO_REGISTER.md#gap-4-001)
-- [GAP-5-001](../../production/TODO_REGISTER.md#gap-5-001)
 
 
 <a id="task-4-04-strict-json-error"></a>
 ### TASK-4.04 严格 JSON decode 与错误格式
 
-状态：todo
+状态：done
 
 目标：
 
@@ -134,13 +133,19 @@ go test ./internal/httpapi
 让公网 API 对 malformed request body 的响应稳定、可预期、OpenAI-compatible。
 ```
 
-计划实现：
+已完成：
 
 1. 校验 `Content-Type`。
 2. 拒绝尾随 JSON token。
 3. 区分 empty body、malformed JSON、body too large。
 4. 将 decode 错误映射成安全的 OpenAI-compatible error。
 5. 不把 Go 原始 decode 错误直接暴露给用户。
+
+验证方式：
+
+```bash
+go test ./internal/httpx ./internal/httpapi
+```
 
 涉及文件：
 
@@ -186,5 +191,3 @@ go test ./internal/httpapi
 关联 GAP：
 
 - [GAP-7-006](../../production/TODO_REGISTER.md#gap-7-006)
-
-

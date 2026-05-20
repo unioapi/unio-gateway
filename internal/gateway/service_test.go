@@ -273,6 +273,54 @@ func chatRequest() httpapi.ChatCompletionRequest {
 	}
 }
 
+// chatRequestWithParams 创建带 OpenAI-compatible 可透传参数的测试请求。
+func chatRequestWithParams() httpapi.ChatCompletionRequest {
+	temperature := 0.0
+	topP := 0.8
+	maxTokens := 128
+	presencePenalty := 0.5
+	frequencyPenalty := 0.25
+	user := "end-user-1"
+
+	req := chatRequest()
+	req.Temperature = &temperature
+	req.TopP = &topP
+	req.MaxTokens = &maxTokens
+	req.PresencePenalty = &presencePenalty
+	req.FrequencyPenalty = &frequencyPenalty
+	req.Stop = []string{"END", "STOP"}
+	req.User = &user
+
+	return req
+}
+
+// assertAdapterChatRequestParams 断言 gateway 没有丢弃 HTTP DTO 中的可透传参数。
+func assertAdapterChatRequestParams(t *testing.T, req adapter.ChatRequest) {
+	t.Helper()
+
+	if req.Temperature == nil || *req.Temperature != 0 {
+		t.Fatalf("expected temperature 0, got %v", req.Temperature)
+	}
+	if req.TopP == nil || *req.TopP != 0.8 {
+		t.Fatalf("expected top_p 0.8, got %v", req.TopP)
+	}
+	if req.MaxTokens == nil || *req.MaxTokens != 128 {
+		t.Fatalf("expected max_tokens 128, got %v", req.MaxTokens)
+	}
+	if req.PresencePenalty == nil || *req.PresencePenalty != 0.5 {
+		t.Fatalf("expected presence_penalty 0.5, got %v", req.PresencePenalty)
+	}
+	if req.FrequencyPenalty == nil || *req.FrequencyPenalty != 0.25 {
+		t.Fatalf("expected frequency_penalty 0.25, got %v", req.FrequencyPenalty)
+	}
+	if len(req.Stop) != 2 || req.Stop[0] != "END" || req.Stop[1] != "STOP" {
+		t.Fatalf("expected stop [END STOP], got %#v", req.Stop)
+	}
+	if req.User == nil || *req.User != "end-user-1" {
+		t.Fatalf("expected user end-user-1, got %v", req.User)
+	}
+}
+
 // routePlan 创建测试用同模型 route plan。
 func routePlan(candidates ...routing.ChatRouteCandidate) routing.ChatRoutePlan {
 	return routing.ChatRoutePlan{
@@ -347,7 +395,7 @@ func TestChatCompletionServiceCreateChatCompletionRoutesAndCallsAdapter(t *testi
 	settlement := newChatCompletionSettlementForTest()
 	service := NewChatCompletionService(router, registry, nil, requestLog, settlement)
 
-	got, err := service.CreateChatCompletion(contextWithPrincipal(42), chatRequest())
+	got, err := service.CreateChatCompletion(contextWithPrincipal(42), chatRequestWithParams())
 	if err != nil {
 		t.Fatalf("CreateChatCompletion returned err: %v", err)
 	}
@@ -376,6 +424,7 @@ func TestChatCompletionServiceCreateChatCompletionRoutesAndCallsAdapter(t *testi
 	if fakeAdapter.chatReq.Messages[0].Content != "hello" {
 		t.Fatalf("expected message content %q, got %q", "hello", fakeAdapter.chatReq.Messages[0].Content)
 	}
+	assertAdapterChatRequestParams(t, fakeAdapter.chatReq)
 	if got.Model != "openai/gpt-4.1" {
 		t.Fatalf("expected response model %q, got %q", "openai/gpt-4.1", got.Model)
 	}
@@ -759,7 +808,7 @@ func TestChatCompletionServiceStreamChatCompletionRoutesAndCallsAdapter(t *testi
 	service := NewChatCompletionService(router, registry, nil, requestLog, settlement)
 
 	chunks := make([]httpapi.ChatCompletionStreamResponse, 0)
-	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk httpapi.ChatCompletionStreamResponse) error {
+	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequestWithParams(), func(chunk httpapi.ChatCompletionStreamResponse) error {
 		chunks = append(chunks, chunk)
 		return nil
 	})
@@ -779,6 +828,7 @@ func TestChatCompletionServiceStreamChatCompletionRoutesAndCallsAdapter(t *testi
 	if fakeAdapter.streamReq.Model != "gpt-4.1" {
 		t.Fatalf("expected upstream model %q, got %q", "gpt-4.1", fakeAdapter.streamReq.Model)
 	}
+	assertAdapterChatRequestParams(t, fakeAdapter.streamReq)
 	if fakeAdapter.ch.ID != 123 {
 		t.Fatalf("expected channel id %d, got %d", int64(123), fakeAdapter.ch.ID)
 	}

@@ -143,6 +143,32 @@ func (q *Queries) GetAPIKeyByHash(ctx context.Context, keyHash string) (GetAPIKe
 	return i, err
 }
 
+const getProjectForUser = `-- name: GetProjectForUser :one
+SELECT id, user_id, name, created_at, updated_at
+FROM projects
+WHERE id = $1
+AND user_id = $2
+LIMIT 1
+`
+
+type GetProjectForUserParams struct {
+	ProjectID int64
+	UserID    int64
+}
+
+func (q *Queries) GetProjectForUser(ctx context.Context, arg GetProjectForUserParams) (Project, error) {
+	row := q.db.QueryRow(ctx, getProjectForUser, arg.ProjectID, arg.UserID)
+	var i Project
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Name,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getUserByEmail = `-- name: GetUserByEmail :one
 SELECT id, email, password_hash, display_name, created_at, updated_at
 FROM users

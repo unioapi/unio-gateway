@@ -104,8 +104,15 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ht
 
 		// TODO(阶段7/production): [GAP-7-002] 流式请求调用上游前没有预授权，长输出或恶意断开可能让平台先承担上游成本；公开 stream 计费 API 前；基于 max_tokens/模型价格冻结余额，拿到 final usage 后 settle，多余部分 refund。
 		err = streamAdapter.StreamChatCompletions(ctx, candidate.Channel, adapter.ChatRequest{
-			Model:    candidate.UpstreamModel,
-			Messages: messages,
+			Model:            candidate.UpstreamModel,
+			Messages:         messages,
+			Temperature:      req.Temperature,
+			TopP:             req.TopP,
+			MaxTokens:        req.MaxTokens,
+			PresencePenalty:  req.PresencePenalty,
+			FrequencyPenalty: req.FrequencyPenalty,
+			Stop:             req.Stop,
+			User:             req.User,
 		}, func(chunk adapter.ChatStreamChunk) error {
 			if chunk.Usage != nil {
 				// usage chunk 是 adapter 给 gateway 的内部控制事件，不是用户可见内容。

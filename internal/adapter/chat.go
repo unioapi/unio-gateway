@@ -17,10 +17,30 @@ type StreamChatAdapter interface {
 }
 
 // ChatRequest 是 gateway 传给聊天补全 adapter 的内部请求 DTO。
-// TODO(阶段5/production): [GAP-5-001] HTTP DTO 已接收 temperature/top_p/max_tokens/stop/user 等参数但 adapter contract 未承载，用户传参会被静默丢弃；开放 OpenAI-compatible chat API 前；扩展 adapter.ChatRequest 和各 provider wire DTO，或显式拒绝暂不支持的参数。
 type ChatRequest struct {
 	Model    string
 	Messages []ChatMessage
+
+	// Temperature 控制输出随机性；nil 表示调用方没有传该参数。
+	Temperature *float64
+
+	// TopP 控制 nucleus sampling；nil 表示调用方没有传该参数。
+	TopP *float64
+
+	// MaxTokens 控制最大输出 token 数；nil 表示调用方没有传该参数。
+	MaxTokens *int
+
+	// PresencePenalty 降低重复主题倾向；nil 表示调用方没有传该参数。
+	PresencePenalty *float64
+
+	// FrequencyPenalty 降低重复词语倾向；nil 表示调用方没有传该参数。
+	FrequencyPenalty *float64
+
+	// Stop 是停止序列；nil 表示调用方没有传该参数。
+	Stop []string
+
+	// User 是终端用户标识，用于上游审计或风控；nil 表示调用方没有传该参数。
+	User *string
 }
 
 // ChatMessage 表示 adapter 层的单条聊天消息。
