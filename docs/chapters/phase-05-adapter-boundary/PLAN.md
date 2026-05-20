@@ -27,6 +27,7 @@ adapter 不负责：
 | --- | --- |
 | [internal/adapter/chat.go](../../../internal/adapter/chat.go) | 内部 chat adapter contract。 |
 | [internal/adapter/registry.go](../../../internal/adapter/registry.go) | adapter registry。 |
+| [internal/adapter/sse/reader.go](../../../internal/adapter/sse/reader.go) | 项目级 SSE event reader。 |
 | [internal/adapter/openai/dto.go](../../../internal/adapter/openai/dto.go) | OpenAI 上游 wire DTO。 |
 | [internal/adapter/openai/chat.go](../../../internal/adapter/openai/chat.go) | OpenAI adapter 实现。 |
 | [internal/channel/runtime.go](../../../internal/channel/runtime.go) | gateway/routing 传给 adapter 的运行时 channel 参数。 |
@@ -99,7 +100,7 @@ go test ./internal/adapter ./internal/adapter/openai ./internal/gateway ./intern
 <a id="task-5-03-openai-stream-adapter"></a>
 ### TASK-5.03 OpenAI stream adapter
 
-状态：partial
+状态：done
 
 目标：
 
@@ -113,20 +114,16 @@ go test ./internal/adapter ./internal/adapter/openai ./internal/gateway ./intern
 2. 解析普通 delta chunk。
 3. 解析 usage-only final chunk。
 4. 将 final usage 放入 `adapter.ChatStreamChunk.Usage`。
+5. 评估成熟 SSE parser 后，选择自研项目级 `internal/adapter/sse` event reader，避免第三方错误类型污染 adapter/gateway 契约。
+6. OpenAI stream adapter 已按 SSE event 边界解析上游响应，而不是逐行解析 `data:`。
+7. SSE reader 支持多行 `data:` 聚合、comment 忽略、`event`/`id`/`retry` 字段、CRLF/LF/CR 行结束、line/event size 上限和稳定错误。
+8. 流式测试已覆盖 final usage、多行 data、大 event、bad JSON、emit backpressure 和 `[DONE]`。
 
-当前欠账：
+收口结果：
 
 ```text
-stream parser 仍基于 bufio.Scanner，受单个 event 大小限制。
+GAP-5-002 已关闭；后续 tool_calls / multimodal 属于新的 HTTP DTO、adapter contract、billing 和 fallback 语义设计，不再由 Scanner parser 欠账阻塞。
 ```
-
-计划实现：
-
-1. 评估成熟 SSE parser，遵循 [THIRD_PARTY_POLICY.md](../../production/THIRD_PARTY_POLICY.md)。
-2. 如果继续自研，改为基于 reader 的 event parser。
-3. 明确 max event size。
-4. 显式处理 `[DONE]`、空行、多行 data、异常 JSON。
-5. 为 tool_calls、大 chunk、backpressure 增加测试。
 
 关联 GAP：
 
@@ -155,4 +152,3 @@ stream parser 仍基于 bufio.Scanner，受单个 event 大小限制。
 关联 GAP：
 
 - [GAP-8-001](../../production/TODO_REGISTER.md#gap-8-001)
-

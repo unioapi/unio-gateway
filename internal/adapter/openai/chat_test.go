@@ -468,6 +468,177 @@ func TestAdapterStreamChatCompletionsParsesUpstreamSSE(t *testing.T) {
 	}
 }
 
+func TestAdapterStreamChatCompletionsParsesMultilineSSEEvent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+
+		// 一个合法 SSE event 可以包含多行 data；parser 必须先按 event 聚合，再 JSON decode。
+		if _, err := w.Write([]byte("data: {\"id\":\"chatcmpl_multiline\",\"model\":\"gpt-4.1\",\n")); err != nil {
+			t.Fatalf("write stream chunk first line: %v", err)
+		}
+		if _, err := w.Write([]byte("data: \"choices\":[{\"delta\":{\"content\":\"hello\"},\"finish_reason\":null}]}\n\n")); err != nil {
+			t.Fatalf("write stream chunk second line: %v", err)
+		}
+		if _, err := w.Write([]byte("data: [DONE]\n\n")); err != nil {
+			t.Fatalf("write done chunk: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	openAIAdapter := NewAdapter(server.Client())
+
+	got := make([]adapter.ChatStreamChunk, 0)
+	err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
+		BaseURL: server.URL + "/v1",
+		APIKey:  "test-secret",
+		Timeout: 30 * time.Second,
+	}, adapter.ChatRequest{
+		Model: "gpt-4.1",
+		Messages: []adapter.ChatMessage{
+			{Role: "user", Content: "hello"},
+		},
+	}, func(chunk adapter.ChatStreamChunk) error {
+		got = append(got, chunk)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(got) != 1 {
+		t.Fatalf("got %d chunks, want 1", len(got))
+	}
+	if got[0].Content != "hello" {
+		t.Fatalf("got content %q, want hello", got[0].Content)
+	}
+}
+
+func TestAdapterStreamChatCompletionsParsesOpenAIRawSSEFixture(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+
+		rawEvents := []string{
+			`data: {"id":"chatcmpl-fixture","object":"chat.completion.chunk","created":1710000000,"model":"gpt-4.1","system_fingerprint":"fp_fixture","choices":[{"index":0,"delta":{"role":"assistant","content":""},"logprobs":null,"finish_reason":null}],"usage":null}` + "\n\n",
+			`data: {"id":"chatcmpl-fixture","object":"chat.completion.chunk","created":1710000001,"model":"gpt-4.1","choices":[{"index":0,"delta":{"content":"hello"},"logprobs":null,"finish_reason":null}],"usage":null}` + "\n\n",
+			`data: {"id":"chatcmpl-fixture","object":"chat.completion.chunk","created":1710000002,"model":"gpt-4.1","choices":[{"index":0,"delta":{},"logprobs":null,"finish_reason":"stop"}],"usage":null}` + "\n\n",
+			`data: {"id":"chatcmpl-fixture","object":"chat.completion.chunk","created":1710000003,"model":"gpt-4.1","choices":[],"usage":{"prompt_tokens":5,"completion_tokens":6,"total_tokens":11,"prompt_tokens_details":{"cached_tokens":2},"completion_tokens_details":{"reasoning_tokens":1}}}` + "\n\n",
+			"data: [DONE]\n\n",
+		}
+
+		for _, event := range rawEvents {
+			if _, err := w.Write([]byte(event)); err != nil {
+				t.Fatalf("write raw fixture event: %v", err)
+			}
+		}
+	}))
+	defer server.Close()
+
+	openAIAdapter := NewAdapter(server.Client())
+
+	got := make([]adapter.ChatStreamChunk, 0)
+	err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
+		BaseURL: server.URL + "/v1",
+		APIKey:  "test-secret",
+		Timeout: 30 * time.Second,
+	}, adapter.ChatRequest{
+		Model: "gpt-4.1",
+		Messages: []adapter.ChatMessage{
+			{Role: "user", Content: "hello"},
+		},
+	}, func(chunk adapter.ChatStreamChunk) error {
+		got = append(got, chunk)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(got) != 4 {
+		t.Fatalf("got %d chunks, want 4", len(got))
+	}
+	if got[0].Role != "assistant" {
+		t.Fatalf("got role %q, want assistant", got[0].Role)
+	}
+	if got[1].Content != "hello" {
+		t.Fatalf("got content %q, want hello", got[1].Content)
+	}
+	if got[2].FinishReason == nil || *got[2].FinishReason != "stop" {
+		t.Fatalf("got finish reason %+v, want stop", got[2].FinishReason)
+	}
+	if got[3].Usage == nil {
+		t.Fatal("got nil usage, want final usage")
+	}
+	if got[3].Usage.PromptTokens != 5 {
+		t.Fatalf("got prompt tokens %d, want 5", got[3].Usage.PromptTokens)
+	}
+	if got[3].Usage.CompletionTokens != 6 {
+		t.Fatalf("got completion tokens %d, want 6", got[3].Usage.CompletionTokens)
+	}
+	if got[3].Usage.TotalTokens != 11 {
+		t.Fatalf("got total tokens %d, want 11", got[3].Usage.TotalTokens)
+	}
+	if got[3].Usage.CachedTokens != 2 {
+		t.Fatalf("got cached tokens %d, want 2", got[3].Usage.CachedTokens)
+	}
+	if got[3].Usage.ReasoningTokens != 1 {
+		t.Fatalf("got reasoning tokens %d, want 1", got[3].Usage.ReasoningTokens)
+	}
+}
+
+func TestAdapterStreamChatCompletionsParsesLargeSSEEvent(t *testing.T) {
+	largeContent := strings.Repeat("x", 1024*1024+128)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+
+		chunk := chatCompletionStreamResponse{
+			ID:    "chatcmpl_large",
+			Model: "gpt-4.1",
+			Choices: []chatStreamChoice{
+				{Delta: chatStreamDelta{Content: largeContent}},
+			},
+		}
+		payload, err := json.Marshal(chunk)
+		if err != nil {
+			t.Fatalf("marshal large chunk: %v", err)
+		}
+		if _, err := w.Write([]byte("data: " + string(payload) + "\n\n")); err != nil {
+			t.Fatalf("write large stream chunk: %v", err)
+		}
+		if _, err := w.Write([]byte("data: [DONE]\n\n")); err != nil {
+			t.Fatalf("write done chunk: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	openAIAdapter := NewAdapter(server.Client())
+
+	got := make([]adapter.ChatStreamChunk, 0)
+	err := openAIAdapter.StreamChatCompletions(context.Background(), channel.Runtime{
+		BaseURL: server.URL + "/v1",
+		APIKey:  "test-secret",
+		Timeout: 30 * time.Second,
+	}, adapter.ChatRequest{
+		Model: "gpt-4.1",
+		Messages: []adapter.ChatMessage{
+			{Role: "user", Content: "hello"},
+		},
+	}, func(chunk adapter.ChatStreamChunk) error {
+		got = append(got, chunk)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(got) != 1 {
+		t.Fatalf("got %d chunks, want 1", len(got))
+	}
+	if got[0].Content != largeContent {
+		t.Fatalf("got large content length %d, want %d", len(got[0].Content), len(largeContent))
+	}
+}
+
 func TestAdapterStreamChatCompletionsReturnsErrorForUpstreamStatus(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "upstream stream failed", http.StatusBadGateway)

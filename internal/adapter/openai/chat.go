@@ -1,7 +1,6 @@
 package openai
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -10,7 +9,13 @@ import (
 	"strings"
 
 	"github.com/ThankCat/unio-api/internal/adapter"
+	adaptersse "github.com/ThankCat/unio-api/internal/adapter/sse"
 	"github.com/ThankCat/unio-api/internal/channel"
+)
+
+const (
+	// maxOpenAIStreamEventBytes 是单个上游 OpenAI-compatible SSE event 的读取上限。
+	maxOpenAIStreamEventBytes = 4 * 1024 * 1024
 )
 
 // Adapter 调用 OpenAI-compatible 上游接口。
@@ -163,24 +168,19 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 		return fmt.Errorf("openai adapter: upstream stream status %d", upstreamResp.StatusCode)
 	}
 
-	scanner := bufio.NewScanner(upstreamResp.Body)
-	// TODO(阶段5/production): [GAP-5-002] bufio.Scanner 仍受单个 SSE event 大小上限影响，遇到超长 delta/tool_calls 可能中断 stream；支持工具调用或大 chunk 上游前；改为基于 reader 的 SSE event parser，并显式处理 backpressure 和超限错误。
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	streamReader := adaptersse.NewReader(upstreamResp.Body, adaptersse.Config{
+		MaxLineBytes:  maxOpenAIStreamEventBytes,
+		MaxEventBytes: maxOpenAIStreamEventBytes,
+	})
 
-	for scanner.Scan() {
-		line := scanner.Text()
-
-		if line == "" || !strings.HasPrefix(line, "data:") {
-			continue
-		}
-
-		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if payload == "[DONE]" {
+	for streamReader.Next() {
+		payload := bytes.TrimSpace(streamReader.Event().Data)
+		if bytes.Equal(payload, []byte("[DONE]")) {
 			break
 		}
 
 		var streamResp chatCompletionStreamResponse
-		if err := json.Unmarshal([]byte(payload), &streamResp); err != nil {
+		if err := json.Unmarshal(payload, &streamResp); err != nil {
 			return fmt.Errorf("openai adapter: decode stream chunk: %w", err)
 		}
 
@@ -221,8 +221,8 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 		}
 	}
 
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("openai adapter: scan stream chunk: %w", err)
+	if err := streamReader.Err(); err != nil {
+		return fmt.Errorf("openai adapter: read stream event: %w", err)
 	}
 
 	return nil
