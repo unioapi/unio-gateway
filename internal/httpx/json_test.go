@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/ThankCat/unio-api/internal/failure"
 )
 
 // decodeJSONTestBody 是 DecodeJSON 测试使用的请求体结构。
@@ -52,6 +54,7 @@ func TestDecodeJSONReturnsErrorForUnsupportedContentType(t *testing.T) {
 	if !errors.Is(err, ErrUnsupportedContentType) {
 		t.Fatalf("expected ErrUnsupportedContentType, got %v", err)
 	}
+	assertDecodeJSONFailure(t, err, failure.CodeHTTPUnsupportedContentType)
 }
 
 func TestDecodeJSONReturnsErrorForEmptyBody(t *testing.T) {
@@ -63,6 +66,7 @@ func TestDecodeJSONReturnsErrorForEmptyBody(t *testing.T) {
 	if !errors.Is(err, ErrEmptyJSONBody) {
 		t.Fatalf("expected ErrEmptyJSONBody, got %v", err)
 	}
+	assertDecodeJSONFailure(t, err, failure.CodeHTTPEmptyJSONBody)
 }
 
 func TestDecodeJSONReturnsErrorForInvalidJSON(t *testing.T) {
@@ -74,6 +78,7 @@ func TestDecodeJSONReturnsErrorForInvalidJSON(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected decode error, got nil")
 	}
+	assertDecodeJSONFailure(t, err, failure.CodeHTTPInvalidJSONBody)
 }
 
 func TestDecodeJSONReturnsErrorForTrailingJSONToken(t *testing.T) {
@@ -85,6 +90,7 @@ func TestDecodeJSONReturnsErrorForTrailingJSONToken(t *testing.T) {
 	if !errors.Is(err, ErrTrailingJSONToken) {
 		t.Fatalf("expected ErrTrailingJSONToken, got %v", err)
 	}
+	assertDecodeJSONFailure(t, err, failure.CodeHTTPTrailingJSONToken)
 }
 
 func TestDecodeJSONReturnsErrorForTooLargeBody(t *testing.T) {
@@ -97,5 +103,20 @@ func TestDecodeJSONReturnsErrorForTooLargeBody(t *testing.T) {
 	err := DecodeJSON(rec, req, &body)
 	if !errors.Is(err, ErrRequestBodyTooLarge) {
 		t.Fatalf("expected ErrRequestBodyTooLarge, got %v", err)
+	}
+	assertDecodeJSONFailure(t, err, failure.CodeHTTPRequestBodyTooLarge)
+}
+
+func assertDecodeJSONFailure(t *testing.T, err error, wantCode failure.Code) {
+	t.Helper()
+
+	if failure.CodeOf(err) != wantCode {
+		t.Fatalf("expected failure code %q, got %q", wantCode, failure.CodeOf(err))
+	}
+	if failure.CategoryOf(err) != failure.CategoryHTTP {
+		t.Fatalf("expected failure category %q, got %q", failure.CategoryHTTP, failure.CategoryOf(err))
+	}
+	if fields := failure.FieldsOf(err); len(fields) != 0 {
+		t.Fatalf("expected no failure fields, got %#v", fields)
 	}
 }

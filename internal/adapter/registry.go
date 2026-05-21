@@ -3,6 +3,8 @@ package adapter
 import (
 	"errors"
 	"fmt"
+
+	"github.com/ThankCat/unio-api/internal/failure"
 )
 
 var (
@@ -34,11 +36,19 @@ func NewRegistry(registrations ...Registration) (*Registry, error) {
 
 	for _, reg := range registrations {
 		if reg.Key == "" {
-			return nil, fmt.Errorf("%w: empty key", ErrInvalidAdapterRegistration)
+			return nil, failure.Wrap(
+				failure.CodeAdapterInvalidRegistration,
+				ErrInvalidAdapterRegistration,
+				failure.WithMessage("adapter registration key is empty"),
+			)
 		}
 
 		if reg.Chat == nil && reg.StreamChat == nil {
-			return nil, fmt.Errorf("%w: %s has no capability", ErrInvalidAdapterRegistration, reg.Key)
+			return nil, failure.Wrap(
+				failure.CodeAdapterInvalidRegistration,
+				ErrInvalidAdapterRegistration,
+				failure.WithMessage(fmt.Sprintf("adapter %q has no capability", reg.Key)),
+			)
 		}
 
 		if err := registerCapabilities(reg, r); err != nil {
@@ -52,14 +62,22 @@ func NewRegistry(registrations ...Registration) (*Registry, error) {
 func registerCapabilities(reg Registration, r *Registry) error {
 	if reg.Chat != nil {
 		if _, exists := r.chat[reg.Key]; exists {
-			return fmt.Errorf("%w: chat %s", ErrDuplicateAdapterKey, reg.Key)
+			return failure.Wrap(
+				failure.CodeAdapterDuplicateKey,
+				ErrDuplicateAdapterKey,
+				failure.WithMessage(fmt.Sprintf("duplicate chat adapter key %q", reg.Key)),
+			)
 		}
 		r.chat[reg.Key] = reg.Chat
 	}
 
 	if reg.StreamChat != nil {
 		if _, exists := r.streamChat[reg.Key]; exists {
-			return fmt.Errorf("%w: stream %s", ErrDuplicateAdapterKey, reg.Key)
+			return failure.Wrap(
+				failure.CodeAdapterDuplicateKey,
+				ErrDuplicateAdapterKey,
+				failure.WithMessage(fmt.Sprintf("duplicate stream adapter key %q", reg.Key)),
+			)
 		}
 		r.streamChat[reg.Key] = reg.StreamChat
 	}

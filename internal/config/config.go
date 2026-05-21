@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ThankCat/unio-api/internal/failure"
 )
 
 // Config 保存服务启动所需的全部配置。
@@ -231,7 +233,11 @@ func getEnvInt(key string, fallback int) (int, error) {
 
 	n, err := strconv.Atoi(value)
 	if err != nil {
-		return 0, fmt.Errorf("parse %s as int: %w", key, err)
+		return 0, failure.Wrap(
+			failure.CodeConfigInvalid,
+			err,
+			failure.WithMessage(fmt.Sprintf("parse %s as int", key)),
+		)
 	}
 
 	return n, nil
@@ -246,7 +252,11 @@ func getEnvInt32(key string, fallback int32) (int32, error) {
 
 	n, err := strconv.ParseInt(value, 10, 32)
 	if err != nil {
-		return 0, fmt.Errorf("parse %s as int32: %w", key, err)
+		return 0, failure.Wrap(
+			failure.CodeConfigInvalid,
+			err,
+			failure.WithMessage(fmt.Sprintf("parse %s as int32", key)),
+		)
 	}
 
 	return int32(n), nil
@@ -261,7 +271,11 @@ func getEnvInt64(key string, fallback int64) (int64, error) {
 
 	n, err := strconv.ParseInt(value, 10, 64)
 	if err != nil {
-		return 0, fmt.Errorf("parse %s as int64: %w", key, err)
+		return 0, failure.Wrap(
+			failure.CodeConfigInvalid,
+			err,
+			failure.WithMessage(fmt.Sprintf("parse %s as int64", key)),
+		)
 	}
 
 	return n, nil
@@ -279,7 +293,10 @@ func parseLogLevel(value string) (slog.Level, error) {
 	case "error":
 		return slog.LevelError, nil
 	default:
-		return slog.LevelInfo, fmt.Errorf("parse LOG_LEVEL: unsupported level %q", value)
+		return slog.LevelInfo, failure.New(
+			failure.CodeConfigUnsupported,
+			failure.WithMessage(fmt.Sprintf("parse LOG_LEVEL: unsupported level %q", value)),
+		)
 	}
 }
 
@@ -292,7 +309,11 @@ func getEnvDuration(key string, fallback time.Duration) (time.Duration, error) {
 
 	d, err := time.ParseDuration(value)
 	if err != nil {
-		return 0, fmt.Errorf("parse %s as duration: %w", key, err)
+		return 0, failure.Wrap(
+			failure.CodeConfigInvalid,
+			err,
+			failure.WithMessage(fmt.Sprintf("parse %s as duration", key)),
+		)
 	}
 
 	return d, nil
@@ -306,6 +327,9 @@ func parseRateLimitFailurePolicy(value string) (string, error) {
 	case "fail_open":
 		return "fail_open", nil
 	default:
-		return "", fmt.Errorf("parse RATE_LIMIT_FAILURE_POLICY: unsupported policy %q", value)
+		return "", failure.New(
+			failure.CodeConfigUnsupported,
+			failure.WithMessage(fmt.Sprintf("parse RATE_LIMIT_FAILURE_POLICY: unsupported policy %q", value)),
+		)
 	}
 }

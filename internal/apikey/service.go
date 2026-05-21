@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ThankCat/unio-api/internal/failure"
 	"github.com/ThankCat/unio-api/internal/store/sqlc"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -60,11 +61,19 @@ type CreateParams struct {
 func (s *Service) Create(ctx context.Context, params CreateParams) (*CreatedKey, error) {
 	// TODO(阶段3/production): [GAP-3-007] API Key 创建缺少审计日志；开放 key 管理 API 前；接入 audit log 记录 actor、project、api_key 和操作结果。
 	if params.ProjectID <= 0 {
-		return nil, ErrInvalidProjectID
+		return nil, failure.Wrap(
+			failure.CodeAPIKeyInvalidProjectID,
+			ErrInvalidProjectID,
+			failure.WithMessage(ErrInvalidProjectID.Error()),
+		)
 	}
 
 	if params.ActorUserID <= 0 {
-		return nil, ErrUnauthorizedProject
+		return nil, failure.Wrap(
+			failure.CodeAPIKeyUnauthorizedProject,
+			ErrUnauthorizedProject,
+			failure.WithMessage(ErrUnauthorizedProject.Error()),
+		)
 	}
 
 	if _, err := s.store.GetProjectForUser(ctx, sqlc.GetProjectForUserParams{
@@ -72,20 +81,36 @@ func (s *Service) Create(ctx context.Context, params CreateParams) (*CreatedKey,
 		UserID:    params.ActorUserID,
 	}); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, ErrUnauthorizedProject
+			return nil, failure.Wrap(
+				failure.CodeAPIKeyUnauthorizedProject,
+				ErrUnauthorizedProject,
+				failure.WithMessage(ErrUnauthorizedProject.Error()),
+			)
 		}
 
-		return nil, err
+		return nil, failure.Wrap(
+			failure.CodeAPIKeyStoreFailed,
+			err,
+			failure.WithMessage("lookup project for api key"),
+		)
 	}
 
 	name := strings.TrimSpace(params.Name)
 	if name == "" {
-		return nil, ErrInvalidName
+		return nil, failure.Wrap(
+			failure.CodeAPIKeyInvalidName,
+			ErrInvalidName,
+			failure.WithMessage(ErrInvalidName.Error()),
+		)
 	}
 
 	generatedKey, err := Generate()
 	if err != nil {
-		return nil, err
+		return nil, failure.Wrap(
+			failure.CodeAPIKeyGenerateFailed,
+			err,
+			failure.WithMessage("generate api key"),
+		)
 	}
 
 	expiresAt := pgtype.Timestamptz{Valid: false}
@@ -102,7 +127,11 @@ func (s *Service) Create(ctx context.Context, params CreateParams) (*CreatedKey,
 	}
 	storedKey, err := s.store.CreateAPIKey(ctx, storeParams)
 	if err != nil {
-		return nil, err
+		return nil, failure.Wrap(
+			failure.CodeAPIKeyStoreFailed,
+			err,
+			failure.WithMessage("create api key"),
+		)
 	}
 
 	var createdExpiresAt *time.Time

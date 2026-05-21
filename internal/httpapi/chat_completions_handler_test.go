@@ -11,6 +11,7 @@ import (
 
 	"github.com/ThankCat/unio-api/internal/auth"
 	"github.com/ThankCat/unio-api/internal/httpx"
+	"github.com/ThankCat/unio-api/internal/routing"
 )
 
 // fakeAPIKeyAuthenticator 是 chat completions 测试使用的 API Key 认证器。
@@ -414,6 +415,99 @@ func TestRouterV1ChatCompletionCallsService(t *testing.T) {
 
 	if recBody.Model != service.createResp.Model {
 		t.Fatalf("expected response model %q, got %q", service.createResp.Model, recBody.Model)
+	}
+}
+
+func TestRouterV1ChatCompletionMapsRoutingErrors(t *testing.T) {
+	cases := []struct {
+		name        string
+		err         error
+		wantStatus  int
+		wantCode    string
+		wantType    string
+		wantMessage string
+		wantParam   string
+	}{
+		{
+			name:        "model not found",
+			err:         routing.ErrModelNotFound,
+			wantStatus:  http.StatusNotFound,
+			wantCode:    "model_not_found",
+			wantType:    "invalid_request_error",
+			wantMessage: "The model \"openai/gpt-4.1\" does not exist or you do not have access to it.",
+			wantParam:   "model",
+		},
+		{
+			name:        "model not available",
+			err:         routing.ErrModelNotAvailable,
+			wantStatus:  http.StatusNotFound,
+			wantCode:    "model_not_found",
+			wantType:    "invalid_request_error",
+			wantMessage: "The model \"openai/gpt-4.1\" does not exist or you do not have access to it.",
+			wantParam:   "model",
+		},
+		{
+			name:        "no available channel",
+			err:         routing.ErrNoAvailableChannel,
+			wantStatus:  http.StatusServiceUnavailable,
+			wantCode:    "model_unavailable",
+			wantType:    "api_error",
+			wantMessage: "The model \"openai/gpt-4.1\" is temporarily unavailable.",
+			wantParam:   "model",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			authenticator := &fakeAPIKeyAuthenticator{
+				principal: &auth.APIKeyPrincipal{
+					APIKeyID:  1,
+					ProjectID: 1,
+					KeyPrefix: "unio_sk_test",
+				},
+			}
+			service := &fakeChatCompletionService{err: tc.err}
+			handler := newTestRouter(authenticator, service, nil)
+
+			buf := new(bytes.Buffer)
+			reqBody := ChatCompletionRequest{
+				Model: "openai/gpt-4.1",
+				Messages: []ChatMessage{
+					{Role: "user", Content: "Hello"},
+				},
+			}
+			if err := json.NewEncoder(buf).Encode(reqBody); err != nil {
+				t.Fatalf("encode request body: %v", err)
+			}
+
+			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", buf)
+			req.Header.Set("Authorization", "Bearer unio_sk_test")
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("expected status %d, got %d", tc.wantStatus, rec.Code)
+			}
+
+			var body httpx.ErrorResponse
+			if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+				t.Fatalf("decode response body: %v", err)
+			}
+
+			if body.Error.Code != tc.wantCode {
+				t.Fatalf("expected error code %q, got %q", tc.wantCode, body.Error.Code)
+			}
+			if body.Error.Type != tc.wantType {
+				t.Fatalf("expected error type %q, got %q", tc.wantType, body.Error.Type)
+			}
+			if body.Error.Message != tc.wantMessage {
+				t.Fatalf("expected error message %q, got %q", tc.wantMessage, body.Error.Message)
+			}
+			if body.Error.Param == nil || *body.Error.Param != tc.wantParam {
+				t.Fatalf("expected error param %q, got %#v", tc.wantParam, body.Error.Param)
+			}
+		})
 	}
 }
 
@@ -977,6 +1071,58 @@ func TestRouterV1ChatCompletionStreamReturnsJSONErrorBeforeFirstChunk(t *testing
 
 	if service.createCalled {
 		t.Fatal("expected create service not to be called")
+	}
+}
+
+func TestRouterV1ChatCompletionStreamMapsRoutingErrorBeforeFirstChunk(t *testing.T) {
+	service := &fakeChatCompletionService{
+		err: routing.ErrNoAvailableChannel,
+	}
+	router := newTestRouter(&fakeAPIKeyAuthenticator{
+		principal: &auth.APIKeyPrincipal{
+			APIKeyID:  1,
+			ProjectID: 1,
+			KeyPrefix: "unio_sk_test",
+		},
+	}, service, nil)
+
+	stream := true
+	reqBody := ChatCompletionRequest{
+		Model: "openai/gpt-4.1",
+		Messages: []ChatMessage{
+			{Role: "user", Content: "Hello"},
+		},
+		Stream: &stream,
+	}
+	reqBuf := new(bytes.Buffer)
+	if err := json.NewEncoder(reqBuf).Encode(reqBody); err != nil {
+		t.Fatalf("encode request body: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", reqBuf)
+	req.Header.Set("Authorization", "Bearer unio_sk_test")
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected status %d, got %d", http.StatusServiceUnavailable, rec.Code)
+	}
+
+	gotBody := rec.Body.String()
+	if strings.Contains(gotBody, "data:") {
+		t.Fatalf("expected body not to contain %q, got %q", "data:", gotBody)
+	}
+
+	var body httpx.ErrorResponse
+	if err := json.NewDecoder(strings.NewReader(gotBody)).Decode(&body); err != nil {
+		t.Fatalf("decode response body: %v", err)
+	}
+
+	if body.Error.Code != "model_unavailable" {
+		t.Fatalf("expected error code %q, got %q", "model_unavailable", body.Error.Code)
+	}
+	if body.Error.Param == nil || *body.Error.Param != "model" {
+		t.Fatalf("expected error param %q, got %#v", "model", body.Error.Param)
 	}
 }
 

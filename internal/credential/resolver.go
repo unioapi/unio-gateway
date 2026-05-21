@@ -2,8 +2,19 @@ package credential
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/ThankCat/unio-api/internal/failure"
+)
+
+var (
+	// ErrCredentialRefMissing 表示 credential_ref 为空。
+	ErrCredentialRefMissing = errors.New("credential ref is empty")
+
+	// ErrCredentialNotFound 表示 credential_ref 没有对应凭据。
+	ErrCredentialNotFound = errors.New("credential not found")
 )
 
 // Resolver 根据凭据引用解析上游调用所需的明文凭据。
@@ -30,12 +41,20 @@ func NewStaticResolver(values map[string]string) *StaticResolver {
 // Resolve 根据 credential_ref 返回对应上游 API key。
 func (r *StaticResolver) Resolve(ctx context.Context, credentialRef string) (string, error) {
 	if strings.TrimSpace(credentialRef) == "" {
-		return "", fmt.Errorf("credential: credential ref is empty")
+		return "", failure.Wrap(
+			failure.CodeCredentialRefMissing,
+			ErrCredentialRefMissing,
+			failure.WithMessage(ErrCredentialRefMissing.Error()),
+		)
 	}
 
 	value, ok := r.values[credentialRef]
 	if !ok {
-		return "", fmt.Errorf("credential: credential ref %q not found", credentialRef)
+		return "", failure.Wrap(
+			failure.CodeCredentialNotFound,
+			ErrCredentialNotFound,
+			failure.WithMessage(fmt.Sprintf("credential ref %q not found", credentialRef)),
+		)
 	}
 
 	return value, nil

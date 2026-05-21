@@ -4,6 +4,7 @@ import (
 	"errors"
 	"math/big"
 
+	"github.com/ThankCat/unio-api/internal/failure"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -62,27 +63,51 @@ type Service struct{}
 // Calculate 根据 usage 和 price snapshot 计算本次请求应扣金额。
 func (s Service) Calculate(usage Usage, price PriceSnapshot) (Settlement, error) {
 	if usage.PromptTokens < 0 || usage.CompletionTokens < 0 || usage.TotalTokens < 0 || usage.CachedTokens < 0 || usage.ReasoningTokens < 0 {
-		return Settlement{}, ErrInvalidUsage
+		return Settlement{}, failure.Wrap(
+			failure.CodeBillingInvalidUsage,
+			ErrInvalidUsage,
+			failure.WithMessage(ErrInvalidUsage.Error()),
+		)
 	}
 
 	if usage.TotalTokens != usage.PromptTokens+usage.CompletionTokens {
-		return Settlement{}, ErrInvalidUsage
+		return Settlement{}, failure.Wrap(
+			failure.CodeBillingInvalidUsage,
+			ErrInvalidUsage,
+			failure.WithMessage(ErrInvalidUsage.Error()),
+		)
 	}
 
 	if usage.CachedTokens > usage.PromptTokens {
-		return Settlement{}, ErrInvalidUsage
+		return Settlement{}, failure.Wrap(
+			failure.CodeBillingInvalidUsage,
+			ErrInvalidUsage,
+			failure.WithMessage(ErrInvalidUsage.Error()),
+		)
 	}
 
 	if usage.ReasoningTokens > usage.CompletionTokens {
-		return Settlement{}, ErrInvalidUsage
+		return Settlement{}, failure.Wrap(
+			failure.CodeBillingInvalidUsage,
+			ErrInvalidUsage,
+			failure.WithMessage(ErrInvalidUsage.Error()),
+		)
 	}
 
 	if price.PricingUnit != PricingUnitPer1MTokens {
-		return Settlement{}, ErrUnsupportedPricingUnit
+		return Settlement{}, failure.Wrap(
+			failure.CodeBillingUnsupportedPricingUnit,
+			ErrUnsupportedPricingUnit,
+			failure.WithMessage(ErrUnsupportedPricingUnit.Error()),
+		)
 	}
 
 	if price.Currency == "" {
-		return Settlement{}, ErrInvalidPrice
+		return Settlement{}, failure.Wrap(
+			failure.CodeBillingInvalidPrice,
+			ErrInvalidPrice,
+			failure.WithMessage(ErrInvalidPrice.Error()),
+		)
 	}
 
 	formulaVersion := price.FormulaVersion
@@ -90,7 +115,11 @@ func (s Service) Calculate(usage Usage, price PriceSnapshot) (Settlement, error)
 		formulaVersion = FormulaVersionV1
 	}
 	if formulaVersion != FormulaVersionV1 {
-		return Settlement{}, ErrUnsupportedFormula
+		return Settlement{}, failure.Wrap(
+			failure.CodeBillingUnsupportedFormula,
+			ErrUnsupportedFormula,
+			failure.WithMessage(ErrUnsupportedFormula.Error()),
+		)
 	}
 
 	inputPrice, err := requiredNonNegativeNumeric(price.InputPrice)
@@ -144,7 +173,11 @@ func requiredNonNegativeNumeric(value pgtype.Numeric) (*big.Rat, error) {
 	}
 
 	if rat.Sign() < 0 {
-		return nil, ErrInvalidPrice
+		return nil, failure.Wrap(
+			failure.CodeBillingInvalidPrice,
+			ErrInvalidPrice,
+			failure.WithMessage(ErrInvalidPrice.Error()),
+		)
 	}
 
 	return rat, nil
@@ -153,7 +186,11 @@ func requiredNonNegativeNumeric(value pgtype.Numeric) (*big.Rat, error) {
 // numericToRat 将 pgtype.Numeric 转成 big.Rat，避免 float64 精度损失。
 func numericToRat(value pgtype.Numeric) (*big.Rat, error) {
 	if !value.Valid || value.NaN || value.InfinityModifier != pgtype.Finite {
-		return nil, ErrInvalidPrice
+		return nil, failure.Wrap(
+			failure.CodeBillingInvalidPrice,
+			ErrInvalidPrice,
+			failure.WithMessage(ErrInvalidPrice.Error()),
+		)
 	}
 	if value.Int == nil {
 		return new(big.Rat), nil

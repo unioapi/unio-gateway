@@ -12,6 +12,14 @@ import (
 const listAvailableModelsForProject = `-- name: ListAvailableModelsForProject :many
 WITH project_scope AS (
     SELECT $1::BIGINT AS project_id
+),
+project_policy_mode AS (
+    SELECT EXISTS (
+        SELECT 1
+        FROM project_model_policies pmp
+        JOIN project_scope ps ON ps.project_id = pmp.project_id
+        WHERE pmp.visibility = 'allowed'
+    ) AS has_allow_list
 )
 SELECT DISTINCT
     m.id,
@@ -27,6 +35,23 @@ WHERE m.status = 'enabled'
     AND cm.status = 'enabled'
     AND c.status = 'enabled'
     AND p.status = 'enabled'
+    AND NOT EXISTS (
+        SELECT 1
+        FROM project_model_policies denied
+        JOIN project_scope ps ON ps.project_id = denied.project_id
+        WHERE denied.model_id = m.id
+            AND denied.visibility = 'denied'
+    )
+    AND (
+        NOT (SELECT has_allow_list FROM project_policy_mode)
+        OR EXISTS (
+            SELECT 1
+            FROM project_model_policies allowed
+            JOIN project_scope ps ON ps.project_id = allowed.project_id
+            WHERE allowed.model_id = m.id
+                AND allowed.visibility = 'allowed'
+        )
+    )
 ORDER BY m.model_id ASC
 `
 

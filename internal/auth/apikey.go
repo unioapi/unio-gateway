@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ThankCat/unio-api/internal/apikey"
+	"github.com/ThankCat/unio-api/internal/failure"
 	"github.com/ThankCat/unio-api/internal/store/sqlc"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -55,7 +56,11 @@ func NewAPIKeyAuthenticator(store APIKeyStore) *APIKeyAuthenticator {
 // AuthenticateAPIKey 校验明文 API Key，并返回认证后的请求身份。
 func (a *APIKeyAuthenticator) AuthenticateAPIKey(ctx context.Context, plaintext string) (*APIKeyPrincipal, error) {
 	if plaintext == "" {
-		return nil, ErrMissingAPIKey
+		return nil, failure.Wrap(
+			failure.CodeAuthMissingAPIKey,
+			ErrMissingAPIKey,
+			failure.WithMessage(ErrMissingAPIKey.Error()),
+		)
 	}
 
 	keyHash := apikey.Hash(plaintext)
@@ -63,21 +68,41 @@ func (a *APIKeyAuthenticator) AuthenticateAPIKey(ctx context.Context, plaintext 
 	key, err := a.store.GetAPIKeyByHash(ctx, keyHash)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, ErrInvalidAPIKey
+			return nil, failure.Wrap(
+				failure.CodeAuthInvalidAPIKey,
+				ErrInvalidAPIKey,
+				failure.WithMessage(ErrInvalidAPIKey.Error()),
+			)
 		}
-		return nil, err
+		return nil, failure.Wrap(
+			failure.CodeAuthStoreFailed,
+			err,
+			failure.WithMessage("lookup api key"),
+		)
 	}
 
 	if key.RevokedAt.Valid {
-		return nil, ErrAPIKeyRevoked
+		return nil, failure.Wrap(
+			failure.CodeAuthAPIKeyRevoked,
+			ErrAPIKeyRevoked,
+			failure.WithMessage(ErrAPIKeyRevoked.Error()),
+		)
 	}
 
 	if key.DisabledAt.Valid {
-		return nil, ErrAPIKeyDisabled
+		return nil, failure.Wrap(
+			failure.CodeAuthAPIKeyDisabled,
+			ErrAPIKeyDisabled,
+			failure.WithMessage(ErrAPIKeyDisabled.Error()),
+		)
 	}
 
 	if key.ExpiresAt.Valid && !key.ExpiresAt.Time.After(a.now()) {
-		return nil, ErrAPIKeyExpired
+		return nil, failure.Wrap(
+			failure.CodeAuthAPIKeyExpired,
+			ErrAPIKeyExpired,
+			failure.WithMessage(ErrAPIKeyExpired.Error()),
+		)
 	}
 
 	// TODO(阶段3/production): [GAP-3-001] 每次认证同步更新 last_used_at 会放大数据库写入；后续评估节流、异步或批量更新策略。
@@ -87,7 +112,11 @@ func (a *APIKeyAuthenticator) AuthenticateAPIKey(ctx context.Context, plaintext 
 		LastUsedAt: pgtype.Timestamptz{Time: usedAt, Valid: true},
 		ID:         key.ID,
 	}); err != nil {
-		return nil, err
+		return nil, failure.Wrap(
+			failure.CodeAuthStoreFailed,
+			err,
+			failure.WithMessage("update api key last used at"),
+		)
 	}
 
 	return &APIKeyPrincipal{

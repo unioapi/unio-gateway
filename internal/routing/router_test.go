@@ -12,15 +12,33 @@ import (
 
 // fakeStore 是 routing 测试使用的候选 channel 存储替身。
 type fakeStore struct {
-	params sqlc.FindRouteCandidatesParams
-	rows   []sqlc.FindRouteCandidatesRow
-	err    error
+	params              sqlc.FindRouteCandidatesParams
+	rows                []sqlc.FindRouteCandidatesRow
+	err                 error
+	modelExistsID       string
+	modelExists         bool
+	modelExistsErr      error
+	projectCanUseParams sqlc.ProjectCanUseModelParams
+	projectCanUse       bool
+	projectCanUseErr    error
 }
 
 // FindRouteCandidates 记录查询参数，并返回测试预设候选结果。
 func (s *fakeStore) FindRouteCandidates(ctx context.Context, arg sqlc.FindRouteCandidatesParams) ([]sqlc.FindRouteCandidatesRow, error) {
 	s.params = arg
 	return s.rows, s.err
+}
+
+// ModelExistsByID 记录模型存在性诊断参数，并返回测试预设结果。
+func (s *fakeStore) ModelExistsByID(ctx context.Context, requestedModelID string) (bool, error) {
+	s.modelExistsID = requestedModelID
+	return s.modelExists, s.modelExistsErr
+}
+
+// ProjectCanUseModel 记录 project 模型可用性诊断参数，并返回测试预设结果。
+func (s *fakeStore) ProjectCanUseModel(ctx context.Context, arg sqlc.ProjectCanUseModelParams) (bool, error) {
+	s.projectCanUseParams = arg
+	return s.projectCanUse, s.projectCanUseErr
 }
 
 // fakeCredentialResolver 是 routing 测试使用的凭据解析器替身。
@@ -156,14 +174,59 @@ func TestNewRouterUsesFallbackDefaultTimeout(t *testing.T) {
 }
 
 func TestRouterPlanChatReturnsNoAvailableChannel(t *testing.T) {
-	router := NewRouter(&fakeStore{}, &fakeCredentialResolver{apiKey: "resolved-secret"}, 30*time.Second)
+	store := &fakeStore{
+		modelExists:   true,
+		projectCanUse: true,
+	}
+	router := NewRouter(store, &fakeCredentialResolver{apiKey: "resolved-secret"}, 30*time.Second)
+
+	_, err := router.PlanChat(context.Background(), ChatRouteRequest{
+		ProjectID: 42,
+		ModelID:   "openai/gpt-4.1",
+	})
+	if !errors.Is(err, ErrNoAvailableChannel) {
+		t.Fatalf("expected ErrNoAvailableChannel, got %v", err)
+	}
+	if store.modelExistsID != "openai/gpt-4.1" {
+		t.Fatalf("expected model exists check for %q, got %q", "openai/gpt-4.1", store.modelExistsID)
+	}
+	if store.projectCanUseParams.ProjectID != 42 {
+		t.Fatalf("expected project can use check for project %d, got %d", int64(42), store.projectCanUseParams.ProjectID)
+	}
+	if store.projectCanUseParams.RequestedModelID != "openai/gpt-4.1" {
+		t.Fatalf("expected project can use check for model %q, got %q", "openai/gpt-4.1", store.projectCanUseParams.RequestedModelID)
+	}
+}
+
+func TestRouterPlanChatReturnsModelNotFound(t *testing.T) {
+	store := &fakeStore{modelExists: false}
+	router := NewRouter(store, &fakeCredentialResolver{apiKey: "resolved-secret"}, 30*time.Second)
 
 	_, err := router.PlanChat(context.Background(), ChatRouteRequest{
 		ProjectID: 42,
 		ModelID:   "openai/missing",
 	})
-	if !errors.Is(err, ErrNoAvailableChannel) {
-		t.Fatalf("expected ErrNoAvailableChannel, got %v", err)
+	if !errors.Is(err, ErrModelNotFound) {
+		t.Fatalf("expected ErrModelNotFound, got %v", err)
+	}
+	if store.projectCanUseParams.ProjectID != 0 {
+		t.Fatalf("expected project policy check to be skipped, got %#v", store.projectCanUseParams)
+	}
+}
+
+func TestRouterPlanChatReturnsModelNotAvailable(t *testing.T) {
+	store := &fakeStore{
+		modelExists:   true,
+		projectCanUse: false,
+	}
+	router := NewRouter(store, &fakeCredentialResolver{apiKey: "resolved-secret"}, 30*time.Second)
+
+	_, err := router.PlanChat(context.Background(), ChatRouteRequest{
+		ProjectID: 42,
+		ModelID:   "openai/gpt-4.1",
+	})
+	if !errors.Is(err, ErrModelNotAvailable) {
+		t.Fatalf("expected ErrModelNotAvailable, got %v", err)
 	}
 }
 

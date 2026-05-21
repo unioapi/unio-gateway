@@ -3,10 +3,10 @@ package routing
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/ThankCat/unio-api/internal/channel"
+	"github.com/ThankCat/unio-api/internal/failure"
 	"github.com/ThankCat/unio-api/internal/store/sqlc"
 )
 
@@ -15,8 +15,12 @@ const defaultChannelTimeout = 30 * time.Second
 var (
 	// ErrModelNotFound 表示请求的模型不存在或没有启用。
 	ErrModelNotFound = errors.New("model not found")
+
 	// ErrNoAvailableChannel 表示模型存在但当前没有可用渠道。
 	ErrNoAvailableChannel = errors.New("no available channel")
+
+	// ErrModelNotAvailable 表示模型存在但当前 project 不允许使用。
+	ErrModelNotAvailable = errors.New("model not available for project")
 )
 
 // ChatRouteRequest 表示一次 routing 选择所需上下文。
@@ -42,6 +46,8 @@ type ChatRoutePlan struct {
 
 // Store 定义 routing 查询候选渠道所需的最小数据库能力。
 type Store interface {
+	ModelExistsByID(ctx context.Context, requestedModelID string) (bool, error)
+	ProjectCanUseModel(ctx context.Context, arg sqlc.ProjectCanUseModelParams) (bool, error)
 	FindRouteCandidates(ctx context.Context, arg sqlc.FindRouteCandidatesParams) ([]sqlc.FindRouteCandidatesRow, error)
 }
 
@@ -93,27 +99,79 @@ func (r *Router) PlanChat(ctx context.Context, req ChatRouteRequest) (ChatRouteP
 }
 
 func (r *Router) findCandidateRows(ctx context.Context, req ChatRouteRequest) ([]sqlc.FindRouteCandidatesRow, error) {
-	// TODO(阶段6/production): [GAP-6-005] routing 当前只校验 project_id 大于 0，尚未表达 project 级模型可见性、预算、禁用或专属 channel 策略；开放多项目客户配置前；引入 project_model/channel policy 查询并让 /v1/models 与 routing 共用同一可见性规则。
+	// TODO(阶段6/production): [GAP-6-005] routing 已支持 project_model_policies 模型 allow-list/deny-list，但尚未表达 project 禁用、预算约束或专属 channel 策略；开放后台项目配置/预算策略前；引入 project 状态、preauthorization 和 project_channel policy 参与 routing。
 	rows, err := r.store.FindRouteCandidates(ctx, sqlc.FindRouteCandidatesParams{
 		RequestedModelID: req.ModelID,
 		ProjectID:        req.ProjectID,
 	})
 	if err != nil {
-		return nil, err
+		return nil, failure.Wrap(
+			failure.CodeRoutingStoreFailed,
+			err,
+			failure.WithMessage("find route candidates"),
+		)
 	}
 
-	if len(rows) == 0 {
-		// TODO(阶段6/production): [GAP-6-007] 当前候选查询无法区分模型不存在和模型存在但无可用 channel，错误映射会不准确；实现 gateway 错误映射或后台模型可见性校验时；增加 ModelExists/GetEnabledModelByID 查询，并分别返回 ErrModelNotFound 与 ErrNoAvailableChannel。
-		return nil, ErrNoAvailableChannel
+	// 1 有候选 channel，正常返回。
+	if len(rows) > 0 {
+		return rows, nil
 	}
 
-	return rows, nil
+	// 2.1 没候选，先问模型是否存在。
+	exists, err := r.store.ModelExistsByID(ctx, req.ModelID)
+	if err != nil {
+		return nil, failure.Wrap(
+			failure.CodeRoutingStoreFailed,
+			err,
+			failure.WithMessage("check model exists"),
+		)
+	}
+	// 2.2 模型不存在，返回 ErrModelNotFound。
+	if !exists {
+		return nil, failure.Wrap(
+			failure.CodeRoutingModelNotFound,
+			ErrModelNotFound,
+			failure.WithMessage(ErrModelNotFound.Error()),
+		)
+	}
+
+	// 3.1 模型存在，再问 project 是否允许
+	allowed, err := r.store.ProjectCanUseModel(ctx, sqlc.ProjectCanUseModelParams{
+		ProjectID:        req.ProjectID,
+		RequestedModelID: req.ModelID,
+	})
+	if err != nil {
+		return nil, failure.Wrap(
+			failure.CodeRoutingStoreFailed,
+			err,
+			failure.WithMessage("check project model policy"),
+		)
+	}
+	// 3.2 project 不允许，返回 ErrModelNotAvailable。
+	if !allowed {
+		return nil, failure.Wrap(
+			failure.CodeRoutingModelNotAvailable,
+			ErrModelNotAvailable,
+			failure.WithMessage(ErrModelNotAvailable.Error()),
+		)
+	}
+
+	// 4 都没问题但还是没候选，才是 ErrNoAvailableChannel。
+	return nil, failure.Wrap(
+		failure.CodeRoutingNoAvailableChannel,
+		ErrNoAvailableChannel,
+		failure.WithMessage(ErrNoAvailableChannel.Error()),
+	)
 }
 
 func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindRouteCandidatesRow) (ChatRouteCandidate, error) {
 	apiKey, err := r.credentialResolver.Resolve(ctx, row.CredentialRef)
 	if err != nil {
-		return ChatRouteCandidate{}, fmt.Errorf("resolve channel credential: %w", err)
+		return ChatRouteCandidate{}, failure.Wrap(
+			failure.CodeRoutingCredentialResolveFailed,
+			err,
+			failure.WithMessage("resolve channel credential"),
+		)
 	}
 
 	timeout := r.defaultTimeout

@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/ThankCat/unio-api/internal/failure"
 	"github.com/ThankCat/unio-api/internal/store/sqlc"
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -37,7 +38,7 @@ func (s *Store) CreateRequest(ctx context.Context, params CreateRequestParams) (
 		CompletedAt:      pgtype.Timestamptz{Valid: false},
 	})
 	if err != nil {
-		return RequestRecord{}, err
+		return RequestRecord{}, requestLogStoreFailure(err, "create request record")
 	}
 
 	return requestRecordFromSQLC(row), nil
@@ -47,7 +48,7 @@ func (s *Store) CreateRequest(ctx context.Context, params CreateRequestParams) (
 func (s *Store) MarkRequestRunning(ctx context.Context, id int64) (RequestRecord, error) {
 	row, err := s.queries.MarkRequestRunning(ctx, id)
 	if err != nil {
-		return RequestRecord{}, err
+		return RequestRecord{}, requestLogStoreFailure(err, "mark request running")
 	}
 
 	return requestRecordFromSQLC(row), nil
@@ -63,7 +64,7 @@ func (s *Store) MarkRequestSucceeded(ctx context.Context, params MarkRequestSucc
 		ID:              params.ID,
 	})
 	if err != nil {
-		return RequestRecord{}, err
+		return RequestRecord{}, requestLogStoreFailure(err, "mark request succeeded")
 	}
 
 	return requestRecordFromSQLC(row), nil
@@ -78,7 +79,7 @@ func (s *Store) MarkRequestFailed(ctx context.Context, params MarkRequestFailedP
 		ID:           params.ID,
 	})
 	if err != nil {
-		return RequestRecord{}, err
+		return RequestRecord{}, requestLogStoreFailure(err, "mark request failed")
 	}
 
 	return requestRecordFromSQLC(row), nil
@@ -93,7 +94,7 @@ func (s *Store) MarkRequestCanceled(ctx context.Context, params MarkRequestCance
 		ID:           params.ID,
 	})
 	if err != nil {
-		return RequestRecord{}, err
+		return RequestRecord{}, requestLogStoreFailure(err, "mark request canceled")
 	}
 
 	return requestRecordFromSQLC(row), nil
@@ -118,7 +119,7 @@ func (s *Store) CreateAttempt(ctx context.Context, params CreateAttemptParams) (
 		CompletedAt:           pgtype.Timestamptz{Valid: false},
 	})
 	if err != nil {
-		return AttemptRecord{}, err
+		return AttemptRecord{}, requestLogStoreFailure(err, "create request attempt")
 	}
 
 	return attemptRecordFromSQLC(row), nil
@@ -134,7 +135,7 @@ func (s *Store) MarkAttemptSucceeded(ctx context.Context, params MarkAttemptSucc
 		ID:                    params.ID,
 	})
 	if err != nil {
-		return AttemptRecord{}, err
+		return AttemptRecord{}, requestLogStoreFailure(err, "mark request attempt succeeded")
 	}
 
 	return attemptRecordFromSQLC(row), nil
@@ -151,7 +152,7 @@ func (s *Store) MarkAttemptFailed(ctx context.Context, params MarkAttemptFailedP
 		ID:                 params.ID,
 	})
 	if err != nil {
-		return AttemptRecord{}, err
+		return AttemptRecord{}, requestLogStoreFailure(err, "mark request attempt failed")
 	}
 
 	return attemptRecordFromSQLC(row), nil
@@ -166,7 +167,7 @@ func (s *Store) MarkAttemptCanceled(ctx context.Context, params MarkAttemptCance
 		ID:           params.ID,
 	})
 	if err != nil {
-		return AttemptRecord{}, err
+		return AttemptRecord{}, requestLogStoreFailure(err, "mark request attempt canceled")
 	}
 
 	return attemptRecordFromSQLC(row), nil
@@ -235,6 +236,14 @@ func optionalInt4(value *int) pgtype.Int4 {
 	}
 
 	return pgtype.Int4{Int32: int32(*value), Valid: true}
+}
+
+func requestLogStoreFailure(err error, message string) error {
+	return failure.Wrap(
+		failure.CodeRequestLogStoreFailed,
+		err,
+		failure.WithMessage(message),
+	)
 }
 
 // textPtr 将 pgtype.Text 转成可选字符串。

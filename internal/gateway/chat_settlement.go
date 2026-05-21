@@ -8,6 +8,7 @@ import (
 	"github.com/ThankCat/unio-api/internal/adapter"
 	"github.com/ThankCat/unio-api/internal/auth"
 	"github.com/ThankCat/unio-api/internal/billing"
+	"github.com/ThankCat/unio-api/internal/failure"
 	"github.com/ThankCat/unio-api/internal/ledger"
 	"github.com/ThankCat/unio-api/internal/requestlog"
 	"github.com/ThankCat/unio-api/internal/store/sqlc"
@@ -79,7 +80,11 @@ type ChatSettlementParams struct {
 func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params ChatSettlementParams) error {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
-		return err
+		return failure.Wrap(
+			failure.CodeGatewayChatSettlementFailed,
+			err,
+			failure.WithMessage("begin chat settlement transaction"),
+		)
 	}
 	defer func() {
 		_ = tx.Rollback(ctx)
@@ -100,7 +105,11 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 		CompletedAt:           now,
 	})
 	if err != nil {
-		return err
+		return failure.Wrap(
+			failure.CodeGatewayChatSettlementFailed,
+			err,
+			failure.WithMessage("create usage record"),
+		)
 	}
 
 	// TODO(阶段7/production): [GAP-7-008] usage_records.source 当前无法区分非流式 response 和 stream final usage，会降低账单审计与异常排查精度；收口 stream billing 报表前；在 ChatSettlementParams 中显式传入 usage source。
@@ -114,7 +123,11 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 		Source:           "upstream_response",
 	})
 	if err != nil {
-		return err
+		return failure.Wrap(
+			failure.CodeGatewayChatSettlementFailed,
+			err,
+			failure.WithMessage("find active price for model"),
+		)
 	}
 
 	// 按 routing 选中的模型数据库主键查询当前生效售卖价；不能用对外 model_id 字符串直接查价格。
@@ -123,7 +136,11 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 		AtTime:  pgtype.Timestamptz{Time: now, Valid: true},
 	})
 	if err != nil {
-		return err
+		return failure.Wrap(
+			failure.CodeGatewayChatSettlementFailed,
+			err,
+			failure.WithMessage("create price snapshot"),
+		)
 	}
 
 	// 将当前价格复制成请求级快照，保证后续价格调整不会改变历史请求的结算依据。
@@ -188,7 +205,15 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 		return err
 	}
 
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return failure.Wrap(
+			failure.CodeGatewayChatSettlementFailed,
+			err,
+			failure.WithMessage("commit chat settlement transaction"),
+		)
+	}
+
+	return nil
 }
 
 // numericIsZero 判断 NUMERIC 金额是否表示 0。

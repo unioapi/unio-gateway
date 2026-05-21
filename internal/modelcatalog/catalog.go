@@ -3,6 +3,7 @@ package modelcatalog
 import (
 	"context"
 
+	"github.com/ThankCat/unio-api/internal/failure"
 	"github.com/ThankCat/unio-api/internal/store/sqlc"
 )
 
@@ -29,10 +30,14 @@ func NewService(store Store) *Service {
 
 // ListAvailableModels 返回当前 project 可见的 OpenAI-compatible 模型。
 func (s *Service) ListAvailableModels(ctx context.Context, projectID int64) ([]Model, error) {
-	// TODO(阶段6/production): [GAP-6-006] /v1/models 当前只按全局 enabled channel/model 返回，未体现 project 级可见性、预算或禁用策略；开放后台项目配置前；与 routing 共用 project model/channel policy，保证“可见模型”和“可路由模型”一致。
+	// TODO(阶段6/production): [GAP-6-006] /v1/models 已支持 project_model_policies 模型 allow-list/deny-list，但尚未表达 project 禁用、预算约束或专属 channel 策略；开放后台项目配置/预算策略前；与 routing 共用 project/channel policy 和预算可见性规则。
 	rows, err := s.store.ListAvailableModelsForProject(ctx, projectID)
 	if err != nil {
-		return nil, err
+		return nil, failure.Wrap(
+			failure.CodeModelCatalogStoreFailed,
+			err,
+			failure.WithMessage("list available models"),
+		)
 	}
 
 	models := make([]Model, 0, len(rows))

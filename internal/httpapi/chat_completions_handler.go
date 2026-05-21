@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/ThankCat/unio-api/internal/httpx"
+	"github.com/ThankCat/unio-api/internal/routing"
 )
 
 const (
@@ -68,13 +69,12 @@ func (h *chatCompletionsHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 				return
 			}
 
-			_ = httpx.WriteOpenAIError(
+			writeChatServiceError(
 				w,
-				http.StatusInternalServerError,
+				req,
+				err,
 				"stream_chat_completion_error",
 				"stream chat completion failed",
-				"api_error",
-				nil,
 			)
 			return
 		}
@@ -85,13 +85,12 @@ func (h *chatCompletionsHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 
 	resp, err := h.service.CreateChatCompletion(r.Context(), req)
 	if err != nil {
-		_ = httpx.WriteOpenAIError(
+		writeChatServiceError(
 			w,
-			http.StatusInternalServerError,
+			req,
+			err,
 			"internal_error",
 			"chat completion failed",
-			"api_error",
-			nil,
 		)
 		return
 	}
@@ -103,6 +102,61 @@ func (h *chatCompletionsHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 // stringPtr 返回字符串指针，用于构造 optional 字段。
 func stringPtr(v string) *string {
 	return &v
+}
+
+// chatServiceErrorResponse 表示 chat service 错误对应的 OpenAI-compatible HTTP 响应。
+type chatServiceErrorResponse struct {
+	status    int
+	code      string
+	message   string
+	errorType string
+	param     *string
+}
+
+// writeChatServiceError 将 chat service 错误写成 OpenAI-compatible JSON error。
+func writeChatServiceError(w http.ResponseWriter, req ChatCompletionRequest, err error, fallbackCode string, fallbackMessage string) {
+	resp := mapChatServiceError(req, err, fallbackCode, fallbackMessage)
+
+	_ = httpx.WriteOpenAIError(
+		w,
+		resp.status,
+		resp.code,
+		resp.message,
+		resp.errorType,
+		resp.param,
+	)
+}
+
+// mapChatServiceError 将内部业务错误映射成用户可见错误。
+func mapChatServiceError(req ChatCompletionRequest, err error, fallbackCode string, fallbackMessage string) chatServiceErrorResponse {
+	modelParam := stringPtr("model")
+
+	switch {
+	case errors.Is(err, routing.ErrModelNotFound), errors.Is(err, routing.ErrModelNotAvailable):
+		return chatServiceErrorResponse{
+			status:    http.StatusNotFound,
+			code:      "model_not_found",
+			message:   fmt.Sprintf("The model %q does not exist or you do not have access to it.", req.Model),
+			errorType: "invalid_request_error",
+			param:     modelParam,
+		}
+	case errors.Is(err, routing.ErrNoAvailableChannel):
+		return chatServiceErrorResponse{
+			status:    http.StatusServiceUnavailable,
+			code:      "model_unavailable",
+			message:   fmt.Sprintf("The model %q is temporarily unavailable.", req.Model),
+			errorType: "api_error",
+			param:     modelParam,
+		}
+	default:
+		return chatServiceErrorResponse{
+			status:    http.StatusInternalServerError,
+			code:      fallbackCode,
+			message:   fallbackMessage,
+			errorType: "api_error",
+			param:     nil,
+		}
+	}
 }
 
 // writeJSONDecodeError 将 JSON decode 错误转换成 OpenAI-compatible 错误响应。

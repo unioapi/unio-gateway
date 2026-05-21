@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"time"
+
+	"github.com/ThankCat/unio-api/internal/failure"
 )
 
 var (
@@ -50,20 +52,36 @@ func NewLimiter(store Store) *Limiter {
 // Allow 判断 subject 在指定窗口内是否还能继续请求。
 func (l *Limiter) Allow(ctx context.Context, subject string, limit int64, window time.Duration) (Decision, error) {
 	if strings.TrimSpace(subject) == "" {
-		return Decision{}, ErrInvalidSubject
+		return Decision{}, failure.Wrap(
+			failure.CodeRateLimitInvalidSubject,
+			ErrInvalidSubject,
+			failure.WithMessage(ErrInvalidSubject.Error()),
+		)
 	}
 
 	if limit <= 0 {
-		return Decision{}, ErrInvalidLimit
+		return Decision{}, failure.Wrap(
+			failure.CodeRateLimitInvalidLimit,
+			ErrInvalidLimit,
+			failure.WithMessage(ErrInvalidLimit.Error()),
+		)
 	}
 
 	if window <= 0 {
-		return Decision{}, ErrInvalidWindow
+		return Decision{}, failure.Wrap(
+			failure.CodeRateLimitInvalidWindow,
+			ErrInvalidWindow,
+			failure.WithMessage(ErrInvalidWindow.Error()),
+		)
 	}
 
 	result, err := l.store.Increment(ctx, subject, window)
 	if err != nil {
-		return Decision{}, err
+		return Decision{}, failure.Wrap(
+			failure.CodeRateLimitStoreFailed,
+			err,
+			failure.WithMessage("increment rate limit counter"),
+		)
 	}
 
 	if result.Count <= limit {

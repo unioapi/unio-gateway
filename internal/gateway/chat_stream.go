@@ -8,6 +8,7 @@ import (
 
 	"github.com/ThankCat/unio-api/internal/adapter"
 	"github.com/ThankCat/unio-api/internal/auth"
+	"github.com/ThankCat/unio-api/internal/failure"
 	"github.com/ThankCat/unio-api/internal/httpapi"
 	"github.com/ThankCat/unio-api/internal/routing"
 )
@@ -24,7 +25,11 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ht
 
 	principal, ok := auth.APIKeyPrincipalFromContext(ctx)
 	if !ok {
-		return auth.ErrMissingAPIKey
+		return failure.Wrap(
+			failure.CodeAuthMissingAPIKey,
+			auth.ErrMissingAPIKey,
+			failure.WithMessage(auth.ErrMissingAPIKey.Error()),
+		)
 	}
 
 	// 先创建 request_records，并标记为 running。
@@ -38,7 +43,7 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ht
 		ModelID:   req.Model,
 	})
 	if err != nil {
-		s.markRequestRecordFailed(ctx, requestRecord, "routing_error", err)
+		s.markRequestRecordFailed(ctx, requestRecord, routingFailureCode(err), err)
 		return err
 	}
 
@@ -55,7 +60,10 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ht
 
 		streamAdapter, ok := s.registry.StreamChat(candidate.AdapterKey)
 		if !ok {
-			err := fmt.Errorf("gateway: stream chat adapter %q not registered", candidate.AdapterKey)
+			err := failure.New(
+				failure.CodeGatewayAdapterNotRegistered,
+				failure.WithMessage(fmt.Sprintf("gateway stream chat adapter %q not registered", candidate.AdapterKey)),
+			)
 
 			s.markAttemptRecordFailed(ctx, attemptRecord, "adapter_not_registered", err)
 			s.markRequestRecordFailed(ctx, requestRecord, "adapter_not_registered", err)
@@ -81,7 +89,10 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ht
 		// 只要上游已经返回 final usage，平台就有准确账务事实，必须尽力完成结算。
 		settleStreamFinalUsage := func() error {
 			if finalUsage == nil {
-				return fmt.Errorf("gateway: stream final usage is missing")
+				return failure.New(
+					failure.CodeGatewayStreamUsageMissing,
+					failure.WithMessage("gateway stream final usage is missing"),
+				)
 			}
 
 			// 客户端断开会取消原始请求 ctx；结算属于服务端账务收口，
@@ -191,7 +202,10 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ht
 		if finalUsage == nil {
 			// adapter 正常结束但没有 final usage，不能把它当作可计费成功请求。
 			// 这类请求可能是上游不支持 include_usage、代理吞掉尾包，或 parser 漏解析。
-			err := fmt.Errorf("gateway: stream final usage is missing")
+			err := failure.New(
+				failure.CodeGatewayStreamUsageMissing,
+				failure.WithMessage("gateway stream final usage is missing"),
+			)
 			s.markAttemptRecordFailed(ctx, attemptRecord, "stream_usage_missing", err)
 			s.markRequestRecordFailed(ctx, requestRecord, "stream_usage_missing", err)
 			return err
@@ -210,7 +224,11 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ht
 		return lastErr
 	}
 
-	err = routing.ErrNoAvailableChannel
+	err = failure.Wrap(
+		failure.CodeRoutingNoAvailableChannel,
+		routing.ErrNoAvailableChannel,
+		failure.WithMessage(routing.ErrNoAvailableChannel.Error()),
+	)
 	s.markRequestRecordFailed(ctx, requestRecord, "no_available_channel", err)
 	return err
 }

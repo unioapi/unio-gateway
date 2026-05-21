@@ -2,9 +2,9 @@ package redis
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/ThankCat/unio-api/internal/config"
+	"github.com/ThankCat/unio-api/internal/failure"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -25,7 +25,11 @@ func OpenRedis(ctx context.Context, cfg config.RedisConfig) (*redis.Client, erro
 
 	if err := client.Ping(ctx).Err(); err != nil {
 		_ = client.Close()
-		return nil, fmt.Errorf("ping redis: %w", err)
+		return nil, failure.Wrap(
+			failure.CodeDependencyRedisUnavailable,
+			err,
+			failure.WithMessage("ping redis"),
+		)
 	}
 
 	return client, nil

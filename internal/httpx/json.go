@@ -7,6 +7,8 @@ import (
 	"mime"
 	"net/http"
 	"strings"
+
+	"github.com/ThankCat/unio-api/internal/failure"
 )
 
 const (
@@ -31,7 +33,11 @@ var (
 // DecodeJSON 从 HTTP 请求体读取 JSON，并解码到 dst。
 func DecodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
 	if !isJSONContentType(r.Header.Get("Content-Type")) {
-		return ErrUnsupportedContentType
+		return failure.Wrap(
+			failure.CodeHTTPUnsupportedContentType,
+			ErrUnsupportedContentType,
+			failure.WithMessage("content type must be application/json"),
+		)
 	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, DefaultMaxJSONBodyBytes)
@@ -50,27 +56,51 @@ func DecodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
 
 		var maxBytes *http.MaxBytesError
 		if errors.As(err, &maxBytes) {
-			return ErrRequestBodyTooLarge
+			return failure.Wrap(
+				failure.CodeHTTPRequestBodyTooLarge,
+				ErrRequestBodyTooLarge,
+				failure.WithMessage("request body too large"),
+			)
 		}
 
-		return ErrTrailingJSONToken
+		return failure.Wrap(
+			failure.CodeHTTPTrailingJSONToken,
+			ErrTrailingJSONToken,
+			failure.WithMessage("request body must contain a single JSON object"),
+		)
 	}
 
-	return ErrTrailingJSONToken
+	return failure.Wrap(
+		failure.CodeHTTPTrailingJSONToken,
+		ErrTrailingJSONToken,
+		failure.WithMessage("request body must contain a single JSON object"),
+	)
 }
 
 // normalizeJSONDecodeError 将底层 JSON decode 错误收敛成 HTTP 层可稳定识别的错误。
 func normalizeJSONDecodeError(err error) error {
 	var maxBytesErr *http.MaxBytesError
 	if errors.As(err, &maxBytesErr) {
-		return ErrRequestBodyTooLarge
+		return failure.Wrap(
+			failure.CodeHTTPRequestBodyTooLarge,
+			ErrRequestBodyTooLarge,
+			failure.WithMessage("request body too large"),
+		)
 	}
 
 	if errors.Is(err, io.EOF) {
-		return ErrEmptyJSONBody
+		return failure.Wrap(
+			failure.CodeHTTPEmptyJSONBody,
+			ErrEmptyJSONBody,
+			failure.WithMessage("request body is required"),
+		)
 	}
 
-	return err
+	return failure.Wrap(
+		failure.CodeHTTPInvalidJSONBody,
+		err,
+		failure.WithMessage("invalid json body"),
+	)
 }
 
 // isJSONContentType 判断 contentType 是否是 "application/json" 类型。

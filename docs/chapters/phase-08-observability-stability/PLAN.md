@@ -145,3 +145,33 @@ curl /metrics
 2. timeout/5xx 可以按策略 retry/fallback。
 3. 429 可以按策略降权。
 4. 所有 retry/fallback 都写 attempt record。
+
+<a id="task-8-05-http-sse-writer"></a>
+### TASK-8.05 HTTP SSE Writer
+
+状态：planned
+
+目标：
+
+```text
+让 Unio 同时具备项目级 SSE Reader 和 HTTP SSE Writer，而不是只靠 data-only helper 写出 OpenAI-compatible stream。
+```
+
+当前状态：
+
+1. `internal/adapter/sse.Reader` 已负责解析上游 provider SSE。
+2. HTTP 写出侧当前只有 [httpx.WriteSSE](../../../internal/httpx/response.go)，可支持 `data: <json>` 和 `data: [DONE]`。
+3. 写出侧尚未抽象 event、id、retry、heartbeat、错误事件和 context-aware flush。
+
+计划实现：
+
+1. 抽出项目级 SSE Writer，优先保持 HTTP 层使用，不污染 gateway 和 adapter contract。
+2. 支持 `data`、`event`、`id`、`retry` 和 comment heartbeat。
+3. 多行 data 必须按 SSE 规则拆成多行 `data:`。
+4. 写出前检查 request context，flush 失败返回稳定错误。
+5. 支持阶段 8 stream 写出后错误观测，例如 `event: error` 或内部中断原因记录。
+6. 测试覆盖 data-only、event+data、heartbeat、多行 data、flush 不支持、客户端取消。
+
+关联 GAP：
+
+- [GAP-8-002](../../production/TODO_REGISTER.md#gap-8-002)

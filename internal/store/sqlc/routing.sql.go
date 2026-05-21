@@ -14,7 +14,15 @@ import (
 const findRouteCandidates = `-- name: FindRouteCandidates :many
 WITH project_scope AS (
     SELECT $2::BIGINT AS project_id
-)
+),
+     project_policy_mode AS (
+         SELECT EXISTS (
+             SELECT 1
+             FROM project_model_policies pmp
+                      JOIN project_scope ps ON ps.project_id = pmp.project_id
+             WHERE pmp.visibility = 'allowed'
+         ) AS has_allow_list
+     )
 SELECT
     m.id AS model_db_id,
     m.model_id AS requested_model_id,
@@ -28,15 +36,32 @@ SELECT
     c.priority,
     cm.upstream_model
 FROM models m
-JOIN channel_models cm ON cm.model_id = m.id
-JOIN channels c ON c.id = cm.channel_id
-JOIN providers p ON p.id = c.provider_id
-JOIN project_scope ps ON ps.project_id > 0
+         JOIN channel_models cm ON cm.model_id = m.id
+         JOIN channels c ON c.id = cm.channel_id
+         JOIN providers p ON p.id = c.provider_id
+         JOIN project_scope ps ON ps.project_id > 0
 WHERE m.model_id = $1
   AND m.status = 'enabled'
   AND cm.status = 'enabled'
   AND c.status = 'enabled'
   AND p.status = 'enabled'
+  AND NOT EXISTS (
+    SELECT 1
+    FROM project_model_policies denied
+             JOIN project_scope ps ON ps.project_id = denied.project_id
+    WHERE denied.model_id = m.id
+      AND denied.visibility = 'denied'
+)
+  AND (
+    NOT (SELECT has_allow_list FROM project_policy_mode)
+        OR EXISTS (
+        SELECT 1
+        FROM project_model_policies allowed
+                 JOIN project_scope ps ON ps.project_id = allowed.project_id
+        WHERE allowed.model_id = m.id
+          AND allowed.visibility = 'allowed'
+    )
+    )
 ORDER BY
     c.priority ASC,
     c.id ASC
@@ -91,4 +116,74 @@ func (q *Queries) FindRouteCandidates(ctx context.Context, arg FindRouteCandidat
 		return nil, err
 	}
 	return items, nil
+}
+
+const modelExistsByID = `-- name: ModelExistsByID :one
+SELECT EXISTS (
+    SELECT 1
+    FROM models m
+    WHERE m.model_id = $1
+    AND m.status = 'enabled'
+) AS exists
+`
+
+func (q *Queries) ModelExistsByID(ctx context.Context, requestedModelID string) (bool, error) {
+	row := q.db.QueryRow(ctx, modelExistsByID, requestedModelID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
+const projectCanUseModel = `-- name: ProjectCanUseModel :one
+WITH project_scope AS (
+    SELECT $1::BIGINT AS project_id
+),
+     target_model AS (
+         SELECT m.id
+         FROM models m
+         WHERE m.model_id = $2
+           AND m.status = 'enabled'
+     ),
+     project_policy_mode AS (
+         SELECT EXISTS (
+             SELECT 1
+             FROM project_model_policies pmp
+                      JOIN project_scope ps ON ps.project_id = pmp.project_id
+             WHERE pmp.visibility = 'allowed'
+         ) AS has_allow_list
+     )
+SELECT EXISTS (
+    SELECT 1
+    FROM target_model m
+             JOIN project_scope ps ON ps.project_id > 0
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM project_model_policies denied
+        WHERE denied.project_id = ps.project_id
+          AND denied.model_id = m.id
+          AND denied.visibility = 'denied'
+    )
+      AND (
+        NOT (SELECT has_allow_list FROM project_policy_mode)
+            OR EXISTS (
+            SELECT 1
+            FROM project_model_policies allowed
+            WHERE allowed.project_id = ps.project_id
+              AND allowed.model_id = m.id
+              AND allowed.visibility = 'allowed'
+        )
+        )
+) AS allowed
+`
+
+type ProjectCanUseModelParams struct {
+	ProjectID        int64
+	RequestedModelID string
+}
+
+func (q *Queries) ProjectCanUseModel(ctx context.Context, arg ProjectCanUseModelParams) (bool, error) {
+	row := q.db.QueryRow(ctx, projectCanUseModel, arg.ProjectID, arg.RequestedModelID)
+	var allowed bool
+	err := row.Scan(&allowed)
+	return allowed, err
 }

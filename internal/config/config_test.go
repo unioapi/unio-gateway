@@ -2,9 +2,10 @@ package config
 
 import (
 	"log/slog"
-	"strings"
 	"testing"
 	"time"
+
+	"github.com/ThankCat/unio-api/internal/failure"
 )
 
 func TestLoadDefaultRedisDB(t *testing.T) {
@@ -41,10 +42,7 @@ func TestLoadInvalidRedisDB(t *testing.T) {
 		t.Fatal("expected error, got nil")
 	}
 
-	// 错误信息要带配置名，方便启动失败时快速定位。
-	if !strings.Contains(err.Error(), "REDIS_DB") {
-		t.Fatalf("expected error to contain REDIS_DB, got %q", err.Error())
-	}
+	assertConfigFailure(t, err, failure.CodeConfigInvalid)
 }
 
 func TestLoadLogLevelDebug(t *testing.T) {
@@ -68,10 +66,7 @@ func TestLoadInvalidLogLevel(t *testing.T) {
 		t.Fatal("expected error, got nil")
 	}
 
-	// 错误信息要带配置名，方便定位启动失败原因。
-	if !strings.Contains(err.Error(), "LOG_LEVEL") {
-		t.Fatalf("expected error to contain LOG_LEVEL, got %q", err.Error())
-	}
+	assertConfigFailure(t, err, failure.CodeConfigUnsupported)
 }
 
 func TestLoadInfrastructureDefaults(t *testing.T) {
@@ -244,9 +239,7 @@ func TestLoadInvalidDuration(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), "HTTP_READ_TIMEOUT") {
-		t.Fatalf("expected error to contain HTTP_READ_TIMEOUT, got %q", err.Error())
-	}
+	assertConfigFailure(t, err, failure.CodeConfigInvalid)
 }
 
 func TestLoadInvalidPostgresMaxConns(t *testing.T) {
@@ -258,9 +251,7 @@ func TestLoadInvalidPostgresMaxConns(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), "POSTGRES_MAX_CONNS") {
-		t.Fatalf("expected error to contain POSTGRES_MAX_CONNS, got %q", err.Error())
-	}
+	assertConfigFailure(t, err, failure.CodeConfigInvalid)
 }
 
 func TestLoadInvalidRedisPoolSize(t *testing.T) {
@@ -272,9 +263,7 @@ func TestLoadInvalidRedisPoolSize(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), "REDIS_POOL_SIZE") {
-		t.Fatalf("expected error to contain REDIS_POOL_SIZE, got %q", err.Error())
-	}
+	assertConfigFailure(t, err, failure.CodeConfigInvalid)
 }
 
 func TestLoadInvalidRateLimitDefaultLimit(t *testing.T) {
@@ -286,9 +275,7 @@ func TestLoadInvalidRateLimitDefaultLimit(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), "RATE_LIMIT_DEFAULT_LIMIT") {
-		t.Fatalf("expected error to contain RATE_LIMIT_DEFAULT_LIMIT, got %q", err.Error())
-	}
+	assertConfigFailure(t, err, failure.CodeConfigInvalid)
 }
 
 func TestLoadInvalidRateLimitDefaultWindow(t *testing.T) {
@@ -300,9 +287,7 @@ func TestLoadInvalidRateLimitDefaultWindow(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), "RATE_LIMIT_DEFAULT_WINDOW") {
-		t.Fatalf("expected error to contain RATE_LIMIT_DEFAULT_WINDOW, got %q", err.Error())
-	}
+	assertConfigFailure(t, err, failure.CodeConfigInvalid)
 }
 
 func TestLoadInvalidRateLimitFailurePolicy(t *testing.T) {
@@ -314,8 +299,20 @@ func TestLoadInvalidRateLimitFailurePolicy(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), "RATE_LIMIT_FAILURE_POLICY") {
-		t.Fatalf("expected error to contain RATE_LIMIT_FAILURE_POLICY, got %q", err.Error())
+	assertConfigFailure(t, err, failure.CodeConfigUnsupported)
+}
+
+func assertConfigFailure(t *testing.T, err error, wantCode failure.Code) {
+	t.Helper()
+
+	if failure.CodeOf(err) != wantCode {
+		t.Fatalf("expected failure code %q, got %q", wantCode, failure.CodeOf(err))
+	}
+	if failure.CategoryOf(err) != failure.CategoryConfig {
+		t.Fatalf("expected failure category %q, got %q", failure.CategoryConfig, failure.CategoryOf(err))
+	}
+	if fields := failure.FieldsOf(err); len(fields) != 0 {
+		t.Fatalf("expected no failure fields, got %#v", fields)
 	}
 }
 

@@ -2,9 +2,11 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/ThankCat/unio-api/internal/auth"
+	"github.com/ThankCat/unio-api/internal/failure"
 	"github.com/ThankCat/unio-api/internal/httpapi"
 	"github.com/ThankCat/unio-api/internal/requestlog"
 	"github.com/ThankCat/unio-api/internal/routing"
@@ -83,6 +85,24 @@ func (s *ChatCompletionService) markAttemptRecordSucceeded(ctx context.Context, 
 	return err
 }
 
+// routingFailureCode 将 routing 内部错误转换成 request_records.error_code。
+func routingFailureCode(err error) string {
+	if code := failure.CodeOf(err); code != "" {
+		return string(code)
+	}
+
+	switch {
+	case errors.Is(err, routing.ErrModelNotFound):
+		return "model_not_found"
+	case errors.Is(err, routing.ErrModelNotAvailable):
+		return "model_not_available"
+	case errors.Is(err, routing.ErrNoAvailableChannel):
+		return "no_available_channel"
+	default:
+		return "routing_error"
+	}
+}
+
 // markRequestRecordFailed 把 request record 标记为失败。
 // 失败状态写入是审计动作，调用方仍然返回原始业务错误，避免状态写入细节覆盖根因。
 func (s *ChatCompletionService) markRequestRecordFailed(ctx context.Context, requestRecord requestlog.RequestRecord, code string, err error) {
@@ -94,7 +114,7 @@ func (s *ChatCompletionService) markRequestRecordFailed(ctx context.Context, req
 	// TODO(阶段7/production): [GAP-7-005] request_records.error_message 当前保存原始内部错误，未来后台暴露请求日志时可能泄漏上游路径、配置细节或敏感上下文；开放请求日志查询前；区分 safe_user_message、internal_error_detail，并对后台展示做脱敏。
 	_, _ = s.requestLog.MarkRequestFailed(ctx, requestlog.MarkRequestFailedParams{
 		ID:           requestRecord.ID,
-		ErrorCode:    code,
+		ErrorCode:    failureCodeOrFallback(err, code),
 		ErrorMessage: message,
 		CompletedAt:  time.Now(),
 	})
@@ -110,10 +130,18 @@ func (s *ChatCompletionService) markAttemptRecordFailed(ctx context.Context, att
 
 	_, _ = s.requestLog.MarkAttemptFailed(ctx, requestlog.MarkAttemptFailedParams{
 		ID:           attempt.ID,
-		ErrorCode:    code,
+		ErrorCode:    failureCodeOrFallback(err, code),
 		ErrorMessage: message,
 		CompletedAt:  time.Now(),
 	})
+}
+
+func failureCodeOrFallback(err error, fallback string) string {
+	if code := failure.CodeOf(err); code != "" {
+		return string(code)
+	}
+
+	return fallback
 }
 
 // markRequestCanceled 把 request record 和当前 attempt 标记为客户端取消。

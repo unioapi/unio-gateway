@@ -3,7 +3,8 @@ package requestlog
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"fmt"
+
+	"github.com/ThankCat/unio-api/internal/failure"
 )
 
 const requestIDRandomBytes = 16
@@ -14,7 +15,11 @@ func GenerateRequestID() (string, error) {
 	var b [requestIDRandomBytes]byte
 
 	if _, err := rand.Read(b[:]); err != nil {
-		return "", fmt.Errorf("requestlog: generate request id: %w", err)
+		return "", failure.Wrap(
+			failure.CodeRequestLogIDGenerateFailed,
+			err,
+			failure.WithMessage("generate request id"),
+		)
 	}
 
 	return "req_" + hex.EncodeToString(b[:]), nil

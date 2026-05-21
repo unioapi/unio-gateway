@@ -16,6 +16,7 @@ import (
 	"github.com/ThankCat/unio-api/internal/billing"
 	"github.com/ThankCat/unio-api/internal/config"
 	"github.com/ThankCat/unio-api/internal/credential"
+	"github.com/ThankCat/unio-api/internal/failure"
 	"github.com/ThankCat/unio-api/internal/gateway"
 	"github.com/ThankCat/unio-api/internal/httpapi"
 	"github.com/ThankCat/unio-api/internal/ledger"
@@ -33,7 +34,7 @@ func main() {
 
 	cfg, err := config.Load()
 	if err != nil {
-		bootstrapLogger.Error("load config failed", "error", err)
+		bootstrapLogger.Error("load config failed", failure.LogArgs(err)...)
 
 		os.Exit(1)
 	}
@@ -48,7 +49,7 @@ func main() {
 	// DB 启动期先检查数据库可用，避免服务带病启动。
 	pgPool, err := store.OpenPostgres(startupCtx, cfg.DB)
 	if err != nil {
-		logger.Error("open postgres failed", "error", err)
+		logger.Error("open postgres failed", failure.LogArgs(err)...)
 		os.Exit(1)
 	}
 	defer pgPool.Close()
@@ -57,7 +58,7 @@ func main() {
 	// Redis
 	redisClient, err := redis.OpenRedis(startupCtx, cfg.Redis)
 	if err != nil {
-		logger.Error("open redis failed", "error", err)
+		logger.Error("open redis failed", failure.LogArgs(err)...)
 		os.Exit(1)
 	}
 	defer redisClient.Close()
@@ -79,7 +80,7 @@ func main() {
 		StreamChat: openaiAdapter,
 	})
 	if err != nil {
-		logger.Error("openai adapter failed", "error", err)
+		logger.Error("openai adapter failed", failure.LogArgs(err)...)
 		os.Exit(1)
 	}
 
@@ -144,7 +145,7 @@ func main() {
 	case err, ok := <-errCh:
 		if ok && err != nil {
 			// 服务启动失败时走这里
-			logger.Error("server failed", "error", err)
+			logger.Error("server failed", failure.LogArgs(err)...)
 			os.Exit(1)
 		}
 	case sig := <-shutdownCh:
@@ -158,7 +159,7 @@ func main() {
 
 	// Shutdown 会停止接收新请求，并等待已有请求在 ctx 超时前完成。
 	if err := server.Shutdown(ctx); err != nil {
-		logger.Error("server shutdown failed", "error", err)
+		logger.Error("server shutdown failed", failure.LogArgs(err)...)
 		os.Exit(1)
 	}
 

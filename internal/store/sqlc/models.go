@@ -107,6 +107,14 @@ type Project struct {
 	UpdatedAt pgtype.Timestamptz
 }
 
+type ProjectModelPolicy struct {
+	ProjectID  int64
+	ModelID    int64
+	Visibility string
+	CreatedAt  pgtype.Timestamptz
+	UpdatedAt  pgtype.Timestamptz
+}
+
 type Provider struct {
 	ID        int64
 	Slug      string

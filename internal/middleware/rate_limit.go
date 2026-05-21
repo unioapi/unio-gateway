@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ThankCat/unio-api/internal/auth"
+	"github.com/ThankCat/unio-api/internal/failure"
 	"github.com/ThankCat/unio-api/internal/httpx"
 	"github.com/ThankCat/unio-api/internal/ratelimit"
 )
@@ -97,11 +98,12 @@ func logRateLimitFailure(logger *slog.Logger, subject string, keyPrefix string, 
 		return
 	}
 
-	logger.Warn(
-		"rate limit failed",
+	args := []any{
 		"subject", subject,
 		"api_key_prefix", keyPrefix,
 		"failure_policy", string(policy),
-		"err", err,
-	)
+	}
+	args = append(args, failure.LogArgs(err)...)
+
+	logger.Warn("rate limit failed", args...)
 }

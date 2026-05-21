@@ -122,7 +122,7 @@
 <a id="task-6-04-routing-policy"></a>
 ### TASK-6.04 Routing project policy
 
-状态：todo
+状态：done
 
 目标：
 
@@ -132,17 +132,16 @@
 
 当前欠账：
 
-1. routing 只校验 `project_id > 0`。
-2. `/v1/models` 只看全局 enabled 模型和 channel。
-3. 还没有 project_model/channel policy。
+1. `project_model_policies` 已支持模型 allow-list/deny-list。
+2. routing 和 `/v1/models` 已共用 project 模型可见性语义。
+3. 仍缺少 project 禁用、预算约束和专属 channel 策略。
 
 计划实现：
 
-1. 设计 project 级模型可见性表或策略查询。
-2. routing 选择 channel 前检查 project 是否允许使用该 model。
-3. `/v1/models` 使用相同策略。
-4. 后续预算策略进入 billing/preauthorization。
-5. 专属 channel 或禁用 channel 也应进入 routing policy。
+1. 保持 routing 和 `/v1/models` 共用 project model policy。
+2. 后续接入 project 禁用状态。
+3. 后续预算策略进入 billing/preauthorization。
+4. 专属 channel 或禁用 channel 也应进入 routing policy。
 
 完成标准：
 
@@ -159,7 +158,7 @@
 <a id="task-6-05-routing-error-semantics"></a>
 ### TASK-6.05 Routing 错误语义
 
-状态：todo
+状态：partial
 
 目标：
 
@@ -169,14 +168,12 @@
 
 计划实现：
 
-1. 增加 model exists 查询。
-2. 增加 project-visible model 查询。
-3. routing candidate 查询为空时区分原因。
-4. 定义 `ErrModelNotFound`、`ErrModelNotAvailable`、`ErrNoAvailableChannel`。
-5. HTTP 层映射成安全 OpenAI-compatible error。
+1. 增加 model exists 查询。已完成。
+2. 增加 project-visible model 查询。已完成。
+3. routing candidate 查询为空时区分原因。已完成。
+4. 定义 `ErrModelNotFound`、`ErrModelNotAvailable`、`ErrNoAvailableChannel`。已完成。
+5. HTTP 层映射成安全 OpenAI-compatible error。已完成。
 
 关联 GAP：
 
 - [GAP-6-007](../../production/TODO_REGISTER.md#gap-6-007)
-
-

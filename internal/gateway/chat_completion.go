@@ -8,6 +8,7 @@ import (
 
 	"github.com/ThankCat/unio-api/internal/adapter"
 	"github.com/ThankCat/unio-api/internal/auth"
+	"github.com/ThankCat/unio-api/internal/failure"
 	"github.com/ThankCat/unio-api/internal/httpapi"
 	"github.com/ThankCat/unio-api/internal/routing"
 )
@@ -24,7 +25,11 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ht
 
 	principal, ok := auth.APIKeyPrincipalFromContext(ctx)
 	if !ok {
-		return nil, auth.ErrMissingAPIKey
+		return nil, failure.Wrap(
+			failure.CodeAuthMissingAPIKey,
+			auth.ErrMissingAPIKey,
+			failure.WithMessage(auth.ErrMissingAPIKey.Error()),
+		)
 	}
 
 	requestRecord, err := s.createRequestRecord(ctx, principal, req, false)
@@ -37,7 +42,7 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ht
 		ModelID:   req.Model,
 	})
 	if err != nil {
-		s.markRequestRecordFailed(ctx, requestRecord, "routing_error", err)
+		s.markRequestRecordFailed(ctx, requestRecord, routingFailureCode(err), err)
 		return nil, err
 	}
 
@@ -54,7 +59,10 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ht
 
 		chatAdapter, ok := s.registry.Chat(candidate.AdapterKey)
 		if !ok {
-			err := fmt.Errorf("gateway: chat adapter %q not registered", candidate.AdapterKey)
+			err := failure.New(
+				failure.CodeGatewayAdapterNotRegistered,
+				failure.WithMessage(fmt.Sprintf("gateway chat adapter %q not registered", candidate.AdapterKey)),
+			)
 
 			s.markAttemptRecordFailed(ctx, attemptRecord, "adapter_not_registered", err)
 			s.markRequestRecordFailed(ctx, requestRecord, "adapter_not_registered", err)
@@ -138,8 +146,12 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ht
 		return nil, lastErr
 	}
 
-	err = routing.ErrNoAvailableChannel
-	s.markRequestRecordFailed(ctx, requestRecord, "no_available_channel", err)
+	err = failure.Wrap(
+		failure.CodeRoutingNoAvailableChannel,
+		routing.ErrNoAvailableChannel,
+		failure.WithMessage(routing.ErrNoAvailableChannel.Error()),
+	)
+	s.markRequestRecordFailed(ctx, requestRecord, routingFailureCode(err), err)
 
 	return nil, err
 }

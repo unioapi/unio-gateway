@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/ThankCat/unio-api/internal/failure"
 	"github.com/ThankCat/unio-api/internal/store/sqlc"
 )
 
@@ -75,7 +76,7 @@ func NewService(db TxBeginner, queries *sqlc.Queries) *Service {
 func (s *Service) Credit(ctx context.Context, params CreditParams) (Entry, error) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
-		return Entry{}, err
+		return Entry{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "begin ledger transaction")
 	}
 	defer func() {
 		_ = tx.Rollback(ctx)
@@ -93,7 +94,7 @@ func (s *Service) Credit(ctx context.Context, params CreditParams) (Entry, error
 		return entryFromSQLC(existing), nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
-		return Entry{}, err
+		return Entry{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "lookup ledger idempotency key")
 	}
 
 	// Credit 可以为新用户创建 0 余额行，再在同一事务中加款。
@@ -101,7 +102,7 @@ func (s *Service) Credit(ctx context.Context, params CreditParams) (Entry, error
 		UserID:   params.UserID,
 		Currency: params.Currency,
 	}); err != nil {
-		return Entry{}, err
+		return Entry{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "ensure user balance")
 	}
 
 	// 锁定用户余额行，确保并发充值/扣费不会基于同一个旧余额计算。
@@ -110,7 +111,7 @@ func (s *Service) Credit(ctx context.Context, params CreditParams) (Entry, error
 		Currency: params.Currency,
 	})
 	if err != nil {
-		return Entry{}, err
+		return Entry{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "lock user balance")
 	}
 
 	// 让 PostgreSQL 执行 NUMERIC 加法，避免在 Go 中用 float 或手写 decimal 计算金额。
@@ -120,7 +121,7 @@ func (s *Service) Credit(ctx context.Context, params CreditParams) (Entry, error
 		Currency: params.Currency,
 	})
 	if err != nil {
-		return Entry{}, err
+		return Entry{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "add user balance")
 	}
 
 	// 写入账本事实；balance_before/after 必须和余额更新结果一致。
@@ -140,11 +141,11 @@ func (s *Service) Credit(ctx context.Context, params CreditParams) (Entry, error
 			return s.resolveIdempotentCreateConflict(ctx, tx, params.IdempotencyKey, params.UserID, params.RequestRecordID, "credit", params.Amount, params.Currency)
 		}
 
-		return Entry{}, err
+		return Entry{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "create ledger entry")
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return Entry{}, err
+		return Entry{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "commit ledger transaction")
 	}
 
 	return entryFromSQLC(created), nil
@@ -154,7 +155,7 @@ func (s *Service) Credit(ctx context.Context, params CreditParams) (Entry, error
 func (s *Service) Debit(ctx context.Context, params DebitParams) (Entry, error) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
-		return Entry{}, err
+		return Entry{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "begin ledger transaction")
 	}
 	defer func() {
 		_ = tx.Rollback(ctx)
@@ -172,7 +173,7 @@ func (s *Service) Debit(ctx context.Context, params DebitParams) (Entry, error) 
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return Entry{}, err
+		return Entry{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "commit ledger transaction")
 	}
 
 	return entry, nil
@@ -196,7 +197,7 @@ func (s *Service) debitWithQueries(ctx context.Context, queries *sqlc.Queries, p
 		return entryFromSQLC(existing), nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
-		return Entry{}, err
+		return Entry{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "lookup ledger idempotency key")
 	}
 
 	// 扣费不能自动创建余额行；不存在余额行时应视为余额不足。
@@ -206,9 +207,9 @@ func (s *Service) debitWithQueries(ctx context.Context, queries *sqlc.Queries, p
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return Entry{}, ErrInsufficientBalance
+			return Entry{}, ledgerFailure(failure.CodeLedgerInsufficientBalance, ErrInsufficientBalance, ErrInsufficientBalance.Error())
 		}
-		return Entry{}, err
+		return Entry{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "lock user balance")
 	}
 
 	// 让 PostgreSQL 执行 NUMERIC 减法，并通过 WHERE balance >= amount 防止扣成负数。
@@ -219,9 +220,9 @@ func (s *Service) debitWithQueries(ctx context.Context, queries *sqlc.Queries, p
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return Entry{}, ErrInsufficientBalance
+			return Entry{}, ledgerFailure(failure.CodeLedgerInsufficientBalance, ErrInsufficientBalance, ErrInsufficientBalance.Error())
 		}
-		return Entry{}, err
+		return Entry{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "subtract user balance")
 	}
 
 	created, err := queries.CreateLedgerEntry(ctx, sqlc.CreateLedgerEntryParams{
@@ -236,7 +237,7 @@ func (s *Service) debitWithQueries(ctx context.Context, queries *sqlc.Queries, p
 		Reason:          params.Reason,
 	})
 	if err != nil {
-		return Entry{}, err
+		return Entry{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "create ledger entry")
 	}
 
 	return entryFromSQLC(created), nil
@@ -249,7 +250,7 @@ func (s *Service) resolveIdempotentCreateConflict(ctx context.Context, tx pgx.Tx
 
 	existing, err := s.queries.GetLedgerEntryByIdempotencyKey(ctx, idempotencyKey)
 	if err != nil {
-		return Entry{}, err
+		return Entry{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "lookup committed ledger idempotency key")
 	}
 	if err := ensureIdempotentEntryMatches(existing, userID, requestRecordID, entryType, amount, currency); err != nil {
 		return Entry{}, err
@@ -301,22 +302,26 @@ func isUniqueViolation(err error) bool {
 // ensureIdempotentEntryMatches 校验已有幂等流水是否和本次请求语义一致。
 func ensureIdempotentEntryMatches(row sqlc.LedgerEntry, userID int64, requestRecordID *int64, entryType string, amount pgtype.Numeric, currency string) error {
 	if row.UserID != userID {
-		return ErrIdempotencyConflict
+		return ledgerFailure(failure.CodeLedgerIdempotencyConflict, ErrIdempotencyConflict, ErrIdempotencyConflict.Error())
 	}
 	if row.EntryType != entryType {
-		return ErrIdempotencyConflict
+		return ledgerFailure(failure.CodeLedgerIdempotencyConflict, ErrIdempotencyConflict, ErrIdempotencyConflict.Error())
 	}
 	if row.Currency != currency {
-		return ErrIdempotencyConflict
+		return ledgerFailure(failure.CodeLedgerIdempotencyConflict, ErrIdempotencyConflict, ErrIdempotencyConflict.Error())
 	}
 	if !sameOptionalInt64(row.RequestRecordID, requestRecordID) {
-		return ErrIdempotencyConflict
+		return ledgerFailure(failure.CodeLedgerIdempotencyConflict, ErrIdempotencyConflict, ErrIdempotencyConflict.Error())
 	}
 	if !sameNumeric(row.Amount, amount) {
-		return ErrIdempotencyConflict
+		return ledgerFailure(failure.CodeLedgerIdempotencyConflict, ErrIdempotencyConflict, ErrIdempotencyConflict.Error())
 	}
 
 	return nil
+}
+
+func ledgerFailure(code failure.Code, cause error, message string) error {
+	return failure.Wrap(code, cause, failure.WithMessage(message))
 }
 
 // sameOptionalInt64 比较数据库可空 int8 和领域层可选 int64 是否相同。

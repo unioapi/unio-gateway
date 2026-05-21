@@ -270,6 +270,30 @@ Provider、channel、model、price、fallback、health 和 rate policy 属于业
 - OpenAI-compatible endpoint 不能无脑透传上游错误 body。
 - 用户 API key、后台 admin auth、用户后台 console auth 不能混用。
 
+## Failure 错误规范
+
+项目内部稳定错误统一使用 `internal/failure` 表达。
+
+基本规则：
+
+- 跨模块返回、日志记录、request/attempt error_code、retry/fallback 判断需要依赖的错误，必须使用 `failure.New` 或 `failure.Wrap`。
+- `failure.Code` 是系统内部稳定错误身份，格式为 `<category>_<reason>`，例如 `config_invalid`、`routing_no_available_channel`。
+- `failure.Category` 由 code 第一个 `_` 前缀推导；新增 code 时必须保证前缀就是稳定分类，不使用 `api_key_*` 这种会被推导成错误分类的形式，应该使用 `apikey_*`。
+- 模块内可以继续保留 sentinel error，例如 `ErrNoAvailableChannel`；返回给上层时用 `failure.Wrap(code, sentinel, ...)` 包起来，保证 `errors.Is` 仍可用。
+- 不要把错误码写成临时字面量；需要被判断、记录或跨模块传播的错误必须先定义为 `failure.Code`。
+- `failure.WithMessage` 用于内部诊断消息，不等于用户可见文案。
+- `failure.WithField` 只用于确实需要结构化检索的少量安全字段；不要为每个模块预定义 Field 常量，也不要把 API key、credential、上游原始 body、SQL 细节等敏感信息放进 fields。
+- 日志记录错误时使用 `failure.LogArgs(err)`，统一输出 `error`、`error_code`、`error_category` 和安全 fields。
+- HTTP 层必须把内部 failure 映射成安全的 OpenAI-compatible 错误响应，不能直接把 `err.Error()` 暴露给用户。
+- `request_records.error_code` 和 `request_attempts.error_code` 优先使用 `failure.CodeOf(err)`；没有 failure code 时才能使用本地 fallback code。
+- 测试应优先断言 `failure.CodeOf`、`failure.CategoryOf` 和 `errors.Is`，不要依赖完整错误字符串。
+
+Provider / upstream 错误规则：
+
+- Adapter 负责 provider-specific 错误解析、usage/error metadata 提取和协议转换。
+- Gateway 只消费 adapter 返回的稳定 failure 分类，不解析 provider 原始错误 body。
+- 用户可见错误由 HTTP 层统一映射；provider 原始错误只能进入后续脱敏后的内部日志、request log 内部字段或 observability metadata。
+
 ## 技术栈
 
 后端：

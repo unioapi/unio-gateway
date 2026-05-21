@@ -12,6 +12,7 @@ import (
 
 	"github.com/ThankCat/unio-api/internal/adapter"
 	"github.com/ThankCat/unio-api/internal/channel"
+	"github.com/ThankCat/unio-api/internal/failure"
 )
 
 // adapterChatRequestWithParams 创建带可透传 OpenAI-compatible 参数的 adapter 请求。
@@ -199,8 +200,8 @@ func TestAdapterChatCompletionsReturnsErrorForUpstreamStatus(t *testing.T) {
 		t.Fatal("expected error, got nil")
 	}
 
-	if !strings.Contains(err.Error(), "openai adapter: upstream status 502") {
-		t.Fatalf("expected upstream status error, got %v", err)
+	if failure.CodeOf(err) != failure.CodeAdapterUpstreamStatus {
+		t.Fatalf("expected failure code %q, got %q", failure.CodeAdapterUpstreamStatus, failure.CodeOf(err))
 	}
 }
 
@@ -229,8 +230,11 @@ func TestAdapterChatCompletionsUsesChannelTimeout(t *testing.T) {
 		t.Fatal("expected error, got nil")
 	}
 
-	if !strings.Contains(err.Error(), "context deadline exceeded") {
-		t.Fatalf("expected timeout error, got %v", err)
+	if failure.CodeOf(err) != failure.CodeAdapterSendRequestFailed {
+		t.Fatalf("expected failure code %q, got %q", failure.CodeAdapterSendRequestFailed, failure.CodeOf(err))
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected timeout error wrapping context deadline exceeded, got %v", err)
 	}
 }
 
@@ -664,8 +668,8 @@ func TestAdapterStreamChatCompletionsReturnsErrorForUpstreamStatus(t *testing.T)
 		t.Fatal("expected error, got nil")
 	}
 
-	if !strings.Contains(err.Error(), "openai adapter: upstream stream status 502") {
-		t.Fatalf("expected upstream stream status error, got %v", err)
+	if failure.CodeOf(err) != failure.CodeAdapterUpstreamStatus {
+		t.Fatalf("expected failure code %q, got %q", failure.CodeAdapterUpstreamStatus, failure.CodeOf(err))
 	}
 }
 
@@ -697,8 +701,8 @@ func TestAdapterStreamChatCompletionsReturnsErrorForBadSSEJSON(t *testing.T) {
 		t.Fatal("expected error, got nil")
 	}
 
-	if !strings.Contains(err.Error(), "openai adapter: decode stream chunk") {
-		t.Fatalf("expected decode stream chunk error, got %v", err)
+	if failure.CodeOf(err) != failure.CodeAdapterDecodeResponseFailed {
+		t.Fatalf("expected failure code %q, got %q", failure.CodeAdapterDecodeResponseFailed, failure.CodeOf(err))
 	}
 }
 
@@ -762,8 +766,8 @@ func TestAdapterStreamChatCompletionsStopsWhenEmitReturnsError(t *testing.T) {
 		t.Fatalf("expected emit error wrapping %v, got %v", emitErr, err)
 	}
 
-	if !strings.Contains(err.Error(), "openai adapter: send stream chunk") {
-		t.Fatalf("expected send stream chunk error, got %v", err)
+	if failure.CodeOf(err) != failure.CodeAdapterEmitFailed {
+		t.Fatalf("expected failure code %q, got %q", failure.CodeAdapterEmitFailed, failure.CodeOf(err))
 	}
 
 	if emitCalls != 1 {

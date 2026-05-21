@@ -10,6 +10,7 @@ import (
 	"github.com/ThankCat/unio-api/internal/adapter"
 	"github.com/ThankCat/unio-api/internal/auth"
 	"github.com/ThankCat/unio-api/internal/channel"
+	"github.com/ThankCat/unio-api/internal/failure"
 	"github.com/ThankCat/unio-api/internal/httpapi"
 	"github.com/ThankCat/unio-api/internal/httpx"
 	"github.com/ThankCat/unio-api/internal/requestlog"
@@ -531,6 +532,43 @@ func TestChatCompletionServiceCreateChatCompletionDoesNotCallAdapterOnRoutingErr
 	}
 }
 
+func TestRoutingFailureCodeClassifiesRoutingErrors(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{
+			name: "model not found",
+			err:  routing.ErrModelNotFound,
+			want: "model_not_found",
+		},
+		{
+			name: "model not available",
+			err:  routing.ErrModelNotAvailable,
+			want: "model_not_available",
+		},
+		{
+			name: "no available channel",
+			err:  routing.ErrNoAvailableChannel,
+			want: "no_available_channel",
+		},
+		{
+			name: "unknown routing error",
+			err:  errors.New("routing database failed"),
+			want: "routing_error",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := routingFailureCode(tc.err); got != tc.want {
+				t.Fatalf("expected code %q, got %q", tc.want, got)
+			}
+		})
+	}
+}
+
 func TestChatCompletionServiceCreateChatCompletionMarksRequestFailedOnSettlementError(t *testing.T) {
 	settlementErr := errors.New("settlement failed")
 	settlement := &fakeChatSettlementExecutor{err: settlementErr}
@@ -597,8 +635,8 @@ func TestChatCompletionServiceCreateChatCompletionReturnsMissingAdapterWithoutRe
 	if len(requestLog.markAttemptFailedArgs) != 1 {
 		t.Fatalf("expected one failed attempt, got %d", len(requestLog.markAttemptFailedArgs))
 	}
-	if requestLog.markAttemptFailedArgs[0].ErrorCode != "adapter_not_registered" {
-		t.Fatalf("expected adapter_not_registered, got %q", requestLog.markAttemptFailedArgs[0].ErrorCode)
+	if requestLog.markAttemptFailedArgs[0].ErrorCode != string(failure.CodeGatewayAdapterNotRegistered) {
+		t.Fatalf("expected %q, got %q", failure.CodeGatewayAdapterNotRegistered, requestLog.markAttemptFailedArgs[0].ErrorCode)
 	}
 	if requestLog.markAttemptFailedArgs[0].UpstreamStatusCode != nil {
 		t.Fatalf("expected unknown upstream status to stay nil, got %v", requestLog.markAttemptFailedArgs[0].UpstreamStatusCode)
@@ -606,8 +644,8 @@ func TestChatCompletionServiceCreateChatCompletionReturnsMissingAdapterWithoutRe
 	if len(requestLog.markRequestFailedArgs) != 1 {
 		t.Fatalf("expected one failed request, got %d", len(requestLog.markRequestFailedArgs))
 	}
-	if requestLog.markRequestFailedArgs[0].ErrorCode != "adapter_not_registered" {
-		t.Fatalf("expected adapter_not_registered, got %q", requestLog.markRequestFailedArgs[0].ErrorCode)
+	if requestLog.markRequestFailedArgs[0].ErrorCode != string(failure.CodeGatewayAdapterNotRegistered) {
+		t.Fatalf("expected %q, got %q", failure.CodeGatewayAdapterNotRegistered, requestLog.markRequestFailedArgs[0].ErrorCode)
 	}
 }
 
@@ -945,14 +983,14 @@ func TestChatCompletionServiceStreamChatCompletionFailsWithoutFinalUsage(t *test
 	if len(requestLog.markAttemptFailedArgs) != 1 {
 		t.Fatalf("expected attempt to fail once, got %d", len(requestLog.markAttemptFailedArgs))
 	}
-	if requestLog.markAttemptFailedArgs[0].ErrorCode != "stream_usage_missing" {
-		t.Fatalf("expected attempt error code %q, got %q", "stream_usage_missing", requestLog.markAttemptFailedArgs[0].ErrorCode)
+	if requestLog.markAttemptFailedArgs[0].ErrorCode != string(failure.CodeGatewayStreamUsageMissing) {
+		t.Fatalf("expected attempt error code %q, got %q", failure.CodeGatewayStreamUsageMissing, requestLog.markAttemptFailedArgs[0].ErrorCode)
 	}
 	if len(requestLog.markRequestFailedArgs) != 1 {
 		t.Fatalf("expected request to fail once, got %d", len(requestLog.markRequestFailedArgs))
 	}
-	if requestLog.markRequestFailedArgs[0].ErrorCode != "stream_usage_missing" {
-		t.Fatalf("expected request error code %q, got %q", "stream_usage_missing", requestLog.markRequestFailedArgs[0].ErrorCode)
+	if requestLog.markRequestFailedArgs[0].ErrorCode != string(failure.CodeGatewayStreamUsageMissing) {
+		t.Fatalf("expected request error code %q, got %q", failure.CodeGatewayStreamUsageMissing, requestLog.markRequestFailedArgs[0].ErrorCode)
 	}
 	if len(requestLog.markAttemptSucceededArgs) != 0 {
 		t.Fatalf("expected no direct attempt success, got %d", len(requestLog.markAttemptSucceededArgs))

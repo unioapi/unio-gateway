@@ -1,6 +1,6 @@
 # Project Status
 
-更新时间：2026-05-20
+更新时间：2026-05-21
 
 实现主线：
 
@@ -39,6 +39,7 @@ Release blockers 表示公开生产前必须关闭，不等于每次学习或复
 5. 阶段 5：当前 HTTP DTO 可透传参数已进入 `adapter.ChatRequest`、OpenAI wire DTO、非流式和流式请求；`GAP-5-001` 已关闭并移出 release blockers。
 6. 阶段 5：OpenAI stream parser 已从逐行 `bufio.Scanner` 替换为项目级 SSE event reader；`GAP-5-002` 已关闭。
 7. 阶段 5 学习交接已写入 [phase-05-adapter-boundary/HANDOFF.md](chapters/phase-05-adapter-boundary/HANDOFF.md)，下一次可从 `internal/adapter/sse` 开始学习。
+8. Failure 结构化错误基础已接入主要模块，并写入 [phase-08-observability-stability/HANDOFF.md](chapters/phase-08-observability-stability/HANDOFF.md)，后续 provider error classification、retry/fallback 和 observability 以此为基础继续推进。
 
 重要产品判断：
 
@@ -52,7 +53,7 @@ Release blockers 表示公开生产前必须关闭，不等于每次学习或复
 go test ./...
 ```
 
-最近一次验证通过：2026-05-20。
+最近一次验证通过：2026-05-21。
 
 ## 阶段总览
 

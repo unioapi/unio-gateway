@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+
+	"github.com/ThankCat/unio-api/internal/failure"
 )
 
 const (
@@ -92,7 +94,11 @@ func (r *Reader) Next() bool {
 		}
 		if line == nil && !terminated {
 			if r.hasData {
-				r.err = ErrMalformedStream
+				r.err = failure.Wrap(
+					failure.CodeSSEMalformedStream,
+					ErrMalformedStream,
+					failure.WithMessage(ErrMalformedStream.Error()),
+				)
 			}
 			r.resetPendingEvent()
 			return false
@@ -109,7 +115,11 @@ func (r *Reader) Next() bool {
 
 		if !terminated {
 			if r.hasData {
-				r.err = ErrMalformedStream
+				r.err = failure.Wrap(
+					failure.CodeSSEMalformedStream,
+					ErrMalformedStream,
+					failure.WithMessage(ErrMalformedStream.Error()),
+				)
 			}
 			r.resetPendingEvent()
 			return false
@@ -161,7 +171,11 @@ func (r *Reader) readLine() ([]byte, bool, error) {
 				return line, false, nil
 			}
 
-			return nil, false, fmt.Errorf("%w: %v", ErrMalformedStream, err)
+			return nil, false, failure.Wrap(
+				failure.CodeSSEMalformedStream,
+				fmt.Errorf("%w: %v", ErrMalformedStream, err),
+				failure.WithMessage(ErrMalformedStream.Error()),
+			)
 		}
 
 		switch b {
@@ -174,13 +188,21 @@ func (r *Reader) readLine() ([]byte, bool, error) {
 					_ = r.reader.UnreadByte()
 				}
 			} else if !errors.Is(err, io.EOF) {
-				return nil, false, fmt.Errorf("%w: %v", ErrMalformedStream, err)
+				return nil, false, failure.Wrap(
+					failure.CodeSSEMalformedStream,
+					fmt.Errorf("%w: %v", ErrMalformedStream, err),
+					failure.WithMessage(ErrMalformedStream.Error()),
+				)
 			}
 
 			return line, true, nil
 		default:
 			if len(line)+1 > r.config.MaxLineBytes {
-				return nil, false, ErrLineTooLong
+				return nil, false, failure.Wrap(
+					failure.CodeSSELineTooLong,
+					ErrLineTooLong,
+					failure.WithMessage(ErrLineTooLong.Error()),
+				)
 			}
 			line = append(line, b)
 		}
@@ -213,7 +235,11 @@ func (r *Reader) processLine(line []byte) (bool, error) {
 	switch string(name) {
 	case "data":
 		if len(r.eventData)+len(value)+1 > r.config.MaxEventBytes {
-			return false, ErrEventTooLarge
+			return false, failure.Wrap(
+				failure.CodeSSEEventTooLarge,
+				ErrEventTooLarge,
+				failure.WithMessage(ErrEventTooLarge.Error()),
+			)
 		}
 		r.eventData = append(r.eventData, value...)
 		r.eventData = append(r.eventData, '\n')
