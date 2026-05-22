@@ -56,6 +56,9 @@ const (
 
 	// CategoryRequestLog 表示请求日志事实写入错误。
 	CategoryRequestLog Category = "requestlog"
+
+	// CategoryBootstrap 表示启动装配或 preflight 检查错误。
+	CategoryBootstrap Category = "bootstrap"
 )
 
 // Category 从错误码前缀推导错误分类，例如 config_invalid => config。
@@ -256,11 +259,17 @@ const (
 	// CodeLedgerInsufficientBalance 表示余额不足。
 	CodeLedgerInsufficientBalance Code = "ledger_insufficient_balance"
 
+	// CodeLedgerInvalidAmount 表示账本金额参数非法。
+	CodeLedgerInvalidAmount Code = "ledger_invalid_amount"
+
 	// CodeLedgerIdempotencyConflict 表示幂等键被不同账本参数复用。
 	CodeLedgerIdempotencyConflict Code = "ledger_idempotency_conflict"
 
 	// CodeLedgerStoreFailed 表示 ledger 事务或存储操作失败。
 	CodeLedgerStoreFailed Code = "ledger_store_failed"
+
+	// CodeLedgerReservationNotFound 表示请求没有可结算的余额预授权记录。
+	CodeLedgerReservationNotFound Code = "ledger_reservation_not_found"
 )
 
 const (
@@ -280,4 +289,12 @@ const (
 
 	// CodeRequestLogStoreFailed 表示 request log 存储写入失败。
 	CodeRequestLogStoreFailed Code = "requestlog_store_failed"
+)
+
+const (
+	// CodeBootstrapStoreFailed 表示启动前检查读取存储失败。
+	CodeBootstrapStoreFailed Code = "bootstrap_store_failed"
+
+	// CodeBootstrapProviderAdapterCapabilityMissing 表示启用 provider 配置的 adapter 缺少当前进程要求的能力。
+	CodeBootstrapProviderAdapterCapabilityMissing Code = "bootstrap_provider_adapter_capability_missing"
 )

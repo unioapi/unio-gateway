@@ -1,0 +1,45 @@
+package bootstrap
+
+import (
+	"context"
+	"testing"
+
+	"github.com/ThankCat/unio-api/internal/adapter"
+	"github.com/ThankCat/unio-api/internal/routing"
+	"github.com/ThankCat/unio-api/internal/store/sqlc"
+	"github.com/jackc/pgx/v5"
+)
+
+type fakeChatGatewayDB struct{}
+
+func (db fakeChatGatewayDB) Begin(ctx context.Context) (pgx.Tx, error) {
+	return nil, nil
+}
+
+type fakeChatGatewayRouter struct{}
+
+func (r fakeChatGatewayRouter) PlanChat(ctx context.Context, req routing.ChatRouteRequest) (routing.ChatRoutePlan, error) {
+	return routing.ChatRoutePlan{}, nil
+}
+
+type fakeChatGatewayRegistry struct{}
+
+func (r fakeChatGatewayRegistry) Chat(adapterKey string) (adapter.ChatAdapter, bool) {
+	return nil, false
+}
+
+func (r fakeChatGatewayRegistry) StreamChat(adapterKey string) (adapter.StreamChatAdapter, bool) {
+	return nil, false
+}
+
+func TestNewChatGatewayBuildsService(t *testing.T) {
+	service := NewChatGateway(
+		fakeChatGatewayDB{},
+		&sqlc.Queries{},
+		fakeChatGatewayRouter{},
+		fakeChatGatewayRegistry{},
+	)
+	if service == nil {
+		t.Fatal("expected chat gateway service")
+	}
+}

@@ -4,9 +4,11 @@ CREATE TABLE user_balances (
     user_id BIGINT NOT NULL REFERENCES users (id),
     currency TEXT NOT NULL CHECK (currency <> ''),
     balance NUMERIC(20, 10) NOT NULL DEFAULT 0 CHECK (balance >= 0),
+    reserved_balance NUMERIC(20, 10) NOT NULL DEFAULT 0 CHECK (reserved_balance >= 0),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (user_id, currency)
+    UNIQUE (user_id, currency),
+    CONSTRAINT ck_user_balances_reserved_not_above_balance CHECK (reserved_balance <= balance)
 );
 
 -- request_records.id 本身已经唯一；这里增加组合唯一约束，让 ledger_entries 可以用组合外键保证 request 和 user 归属一致。
@@ -50,7 +52,10 @@ CREATE TABLE ledger_entries (
 
     CONSTRAINT fk_ledger_entries_request_user
         FOREIGN KEY (request_record_id, user_id)
-            REFERENCES request_records (id, user_id)
+            REFERENCES request_records (id, user_id),
+
+    CONSTRAINT uq_ledger_entries_id_user_request
+        UNIQUE (id, user_id, request_record_id)
 );
 
 -- 后台账单和审计常按用户倒序查看流水。

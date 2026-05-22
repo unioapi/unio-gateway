@@ -99,7 +99,7 @@ func (r *Router) PlanChat(ctx context.Context, req ChatRouteRequest) (ChatRouteP
 }
 
 func (r *Router) findCandidateRows(ctx context.Context, req ChatRouteRequest) ([]sqlc.FindRouteCandidatesRow, error) {
-	// TODO(阶段6/production): [GAP-6-005] routing 已支持 project_model_policies 模型 allow-list/deny-list，但尚未表达 project 禁用、预算约束或专属 channel 策略；开放后台项目配置/预算策略前；引入 project 状态、preauthorization 和 project_channel policy 参与 routing。
+	// TODO(阶段6/production): [GAP-6-005] routing 已支持 project_model_policies 模型 allow-list/deny-list，但尚未表达 project 禁用、预算约束或专属 channel 策略；阶段 7 预授权和阶段 9 项目策略管理前；预算约束进入 preauthorization，project 禁用和 project_channel policy 进入后台管理策略。
 	rows, err := r.store.FindRouteCandidates(ctx, sqlc.FindRouteCandidatesParams{
 		RequestedModelID: req.ModelID,
 		ProjectID:        req.ProjectID,

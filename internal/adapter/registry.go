@@ -96,3 +96,15 @@ func (r *Registry) StreamChat(adapterKey string) (StreamChatAdapter, bool) {
 	adapter, ok := r.streamChat[adapterKey]
 	return adapter, ok
 }
+
+// HasChat 判断 adapter key 是否注册了非流式聊天能力。
+func (r *Registry) HasChat(adapterKey string) bool {
+	_, ok := r.chat[adapterKey]
+	return ok
+}
+
+// HasStreamChat 判断 adapter key 是否注册了流式聊天能力。
+func (r *Registry) HasStreamChat(adapterKey string) bool {
+	_, ok := r.streamChat[adapterKey]
+	return ok
+}

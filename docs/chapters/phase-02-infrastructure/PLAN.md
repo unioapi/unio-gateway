@@ -28,7 +28,7 @@
 <a id="task-2-01-config-boundary"></a>
 ### TASK-2.01 Config 边界
 
-状态：partial
+状态：done
 
 目标：
 
@@ -40,11 +40,11 @@
 
 1. 基础 config 结构已经存在。
 2. PostgreSQL DSN、Redis 地址等基础配置已进入 config。
+3. provider/channel/model 已进入数据库业务数据，当前正式 config 未承载 provider/channel env。
 
 当前欠账：
 
-1. migration runner 和 schema version 启动校验还未收口。
-2. provider/channel 相关临时配置需要逐步退出正式 config 边界。
+1. 无。
 
 设计约束：
 

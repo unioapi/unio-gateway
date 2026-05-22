@@ -11,7 +11,7 @@
 | RB-005 | [GAP-7-003](TODO_REGISTER.md#gap-7-003) | 阶段 7 | request/attempt 终态缺少状态机守卫，并发更新可能覆盖账务事实。 | [TASK-7.18](../chapters/phase-07-billing-ledger/PLAN.md#task-7-18-request-state-machine) |
 | RB-006 | [GAP-7-004](TODO_REGISTER.md#gap-7-004) | 阶段 7 | 无 final usage 的客户端取消缺少预授权，平台成本无法准确结算。 | [TASK-7.17](../chapters/phase-07-billing-ledger/PLAN.md#task-7-17-preauthorization) |
 | RB-007 | [GAP-7-007](TODO_REGISTER.md#gap-7-007) | 阶段 7 | settlement 缺少请求级幂等完成检测，补偿任务可能把已成功请求误标失败。 | [TASK-7.19](../chapters/phase-07-billing-ledger/PLAN.md#task-7-19-settlement-idempotency) |
-| RB-008 | [GAP-7-011](TODO_REGISTER.md#gap-7-011) | 阶段 7 | ledger 缺少 freeze/capture/refund 语义，stream 和余额不足场景无法生产级控损。 | [TASK-7.17](../chapters/phase-07-billing-ledger/PLAN.md#task-7-17-preauthorization) |
+| RB-008 | [GAP-7-011](TODO_REGISTER.md#gap-7-011) | 阶段 7 | ledger reservation 底座已具备 freeze/capture/release，但 gateway 尚未在调用上游前接入预授权和异常 release。 | [TASK-7.17](../chapters/phase-07-billing-ledger/PLAN.md#task-7-17-preauthorization) |
 | RB-009 | [GAP-7-012](TODO_REGISTER.md#gap-7-012) | 阶段 7 | 外部事务内并发 debit 幂等冲突可能导致 settlement 失败且无法稳定重入。 | [TASK-7.19](../chapters/phase-07-billing-ledger/PLAN.md#task-7-19-settlement-idempotency) |
 
 ## 使用规则

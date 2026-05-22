@@ -92,7 +92,7 @@
 <a id="task-6-03-bootstrap-wiring"></a>
 ### TASK-6.03 启动装配治理
 
-状态：todo
+状态：done
 
 目标：
 
@@ -102,16 +102,24 @@
 
 当前欠账：
 
-1. [cmd/server/main.go](../../../cmd/server/main.go) 直接装配 credential、routing、adapter registry、gateway。
-2. provider.adapter 是否存在于 adapter registry 缺少启动前校验。
+1. 无当前阶段内必须关闭的欠账。
+
+已完成：
+
+1. 新增 `internal/bootstrap` provider adapter preflight。
+2. adapter registry 构建已从 `cmd/server/main.go` 迁入 `internal/bootstrap`。
+3. credential resolver 和 chat routing 构建已从 `cmd/server/main.go` 迁入 `internal/bootstrap`。
+4. chat gateway、request log、settlement、billing calculator 和 ledger service 构建已从 `cmd/server/main.go` 迁入 `internal/bootstrap`。
+5. API key auth、model catalog、rate limit 和 HTTP router 构建已从 `cmd/server/main.go` 迁入 `internal/bootstrap`。
+6. 启动时读取数据库中 enabled provider 的 adapter key。
+7. 启动时校验 adapter registry 同时具备 chat 和 stream chat 能力。
+8. preflight 失败时返回 `bootstrap_*` failure code，并携带 provider_id、provider_slug、adapter_key 和 capability 安全字段。
+9. server app wiring 已收敛到 `internal/bootstrap.NewServerApp`，`cmd/server/main.go` 只保留 config、资源启动、HTTP server lifecycle 和退出信号处理。
+10. 后台写入 provider.adapter 的 registry 校验推迟到阶段 9 provider CRUD。
 
 计划实现：
 
-1. 抽出 bootstrap/app wiring 组件。
-2. `main` 只负责 config、logger、lifecycle、signal。
-3. app wiring 负责依赖构造顺序。
-4. 启动时校验数据库中 enabled provider 的 adapter key 是否存在。
-5. 后台写入 provider.adapter 时也要校验 registry。
+1. 阶段 9 后台 provider CRUD 写入 provider.adapter 时校验 adapter key 必须存在于 registry。
 
 关联 GAP：
 
@@ -127,27 +135,25 @@
 目标：
 
 ```text
-让不同 project 能拥有不同模型可见性、预算、禁用和专属 channel 策略。
+让不同 project 能拥有不同模型可见性；预算、禁用和专属 channel 策略进入后续阶段。
 ```
 
 当前欠账：
 
+1. 无当前阶段内必须关闭的欠账。
+
+已完成：
+
 1. `project_model_policies` 已支持模型 allow-list/deny-list。
 2. routing 和 `/v1/models` 已共用 project 模型可见性语义。
-3. 仍缺少 project 禁用、预算约束和专属 channel 策略。
+3. 用户看得到的模型一定可路由。
+4. 用户不可用的模型不会出现在 `/v1/models`。
+5. 同一模型可以因 project 不同而可见性不同。
 
 计划实现：
 
-1. 保持 routing 和 `/v1/models` 共用 project model policy。
-2. 后续接入 project 禁用状态。
-3. 后续预算策略进入 billing/preauthorization。
-4. 专属 channel 或禁用 channel 也应进入 routing policy。
-
-完成标准：
-
-1. 用户看得到的模型一定可路由。
-2. 用户不可用的模型不会出现在 `/v1/models`。
-3. 同一模型可以因 project 不同而可见性不同。
+1. 阶段 7 preauthorization 统一处理预算约束。
+2. 阶段 9 项目策略管理处理 project 禁用、专属 channel 和后台配置入口。
 
 关联 GAP：
 
@@ -158,7 +164,7 @@
 <a id="task-6-05-routing-error-semantics"></a>
 ### TASK-6.05 Routing 错误语义
 
-状态：partial
+状态：done
 
 目标：
 

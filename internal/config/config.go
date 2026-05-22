@@ -66,8 +66,6 @@ type RateLimitConfig struct {
 	FailurePolicy string
 }
 
-// TODO(阶段6/production): [GAP-6-004] provider/channel 业务数据进入 config 会阻断后台动态管理；接入数据库 channel 时；config 只保留 KMS/master key 和全局默认上游 timeout 等启动级配置。
-
 // Load 从环境变量加载配置，并对需要解析的字段做启动期校验。
 func Load() (Config, error) {
 	redisDB, err := getEnvInt("REDIS_DB", 0)

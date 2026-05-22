@@ -87,6 +87,51 @@ func TestRegistryReturnsFalseForUnknownAdapterKey(t *testing.T) {
 	}
 }
 
+func TestRegistryReportsRegisteredCapabilities(t *testing.T) {
+	registry, err := NewRegistry(
+		Registration{
+			Key:        "openai",
+			Chat:       &registryTestChatAdapter{},
+			StreamChat: &registryTestStreamChatAdapter{},
+		},
+		Registration{
+			Key:  "chat-only",
+			Chat: &registryTestChatAdapter{},
+		},
+		Registration{
+			Key:        "stream-only",
+			StreamChat: &registryTestStreamChatAdapter{},
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewRegistry returned error: %v", err)
+	}
+
+	tests := []struct {
+		name       string
+		key        string
+		wantChat   bool
+		wantStream bool
+	}{
+		{name: "both capabilities", key: "openai", wantChat: true, wantStream: true},
+		{name: "chat only", key: "chat-only", wantChat: true, wantStream: false},
+		{name: "stream only", key: "stream-only", wantChat: false, wantStream: true},
+		{name: "unknown key", key: "missing", wantChat: false, wantStream: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := registry.HasChat(tt.key); got != tt.wantChat {
+				t.Fatalf("HasChat(%q) = %v, want %v", tt.key, got, tt.wantChat)
+			}
+
+			if got := registry.HasStreamChat(tt.key); got != tt.wantStream {
+				t.Fatalf("HasStreamChat(%q) = %v, want %v", tt.key, got, tt.wantStream)
+			}
+		})
+	}
+}
+
 func TestNewRegistryRejectsEmptyKey(t *testing.T) {
 	_, err := NewRegistry(Registration{
 		Key:  "",

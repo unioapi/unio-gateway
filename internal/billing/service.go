@@ -57,7 +57,23 @@ type Settlement struct {
 	FormulaVersion string
 }
 
+type tokenPrices struct {
+	Currency             string
+	FormulaVersion       string
+	InputPrice           *big.Rat
+	OutputPrice          *big.Rat
+	CachedInputPrice     *big.Rat
+	ReasoningOutputPrice *big.Rat
+}
+
+// AuthorizationEstimate 表示调用上游前用于预授权的保守 token 估算。
+type AuthorizationEstimate struct {
+	PromptTokens        int64
+	MaxCompletionTokens int64
+}
+
 // Service 负责根据 usage 和 price snapshot 计算请求应扣金额。
+// TODO(教学/refactor): 下节课先拆分 billing service 文件；保持行为不变，把 DTO/价格规范化、预授权估算、真实结算和 NUMERIC helper 分到独立文件。
 type Service struct{}
 
 // Calculate 根据 usage 和 price snapshot 计算本次请求应扣金额。
@@ -94,57 +110,9 @@ func (s Service) Calculate(usage Usage, price PriceSnapshot) (Settlement, error)
 		)
 	}
 
-	if price.PricingUnit != PricingUnitPer1MTokens {
-		return Settlement{}, failure.Wrap(
-			failure.CodeBillingUnsupportedPricingUnit,
-			ErrUnsupportedPricingUnit,
-			failure.WithMessage(ErrUnsupportedPricingUnit.Error()),
-		)
-	}
-
-	if price.Currency == "" {
-		return Settlement{}, failure.Wrap(
-			failure.CodeBillingInvalidPrice,
-			ErrInvalidPrice,
-			failure.WithMessage(ErrInvalidPrice.Error()),
-		)
-	}
-
-	formulaVersion := price.FormulaVersion
-	if formulaVersion == "" {
-		formulaVersion = FormulaVersionV1
-	}
-	if formulaVersion != FormulaVersionV1 {
-		return Settlement{}, failure.Wrap(
-			failure.CodeBillingUnsupportedFormula,
-			ErrUnsupportedFormula,
-			failure.WithMessage(ErrUnsupportedFormula.Error()),
-		)
-	}
-
-	inputPrice, err := requiredNonNegativeNumeric(price.InputPrice)
+	prices, err := normalizeTokenPrices(price)
 	if err != nil {
 		return Settlement{}, err
-	}
-	outputPrice, err := requiredNonNegativeNumeric(price.OutputPrice)
-	if err != nil {
-		return Settlement{}, err
-	}
-
-	cachedInputPrice := inputPrice
-	if price.CachedInputPrice.Valid {
-		cachedInputPrice, err = requiredNonNegativeNumeric(price.CachedInputPrice)
-		if err != nil {
-			return Settlement{}, err
-		}
-	}
-
-	reasoningOutputPrice := outputPrice
-	if price.ReasoningOutputPrice.Valid {
-		reasoningOutputPrice, err = requiredNonNegativeNumeric(price.ReasoningOutputPrice)
-		if err != nil {
-			return Settlement{}, err
-		}
 	}
 
 	uncachedPrompt := usage.PromptTokens - usage.CachedTokens
@@ -152,16 +120,45 @@ func (s Service) Calculate(usage Usage, price PriceSnapshot) (Settlement, error)
 
 	// 公式版本 token_v1：四类 token 分别按快照价格计费，再统一除以 100 万。
 	amount := new(big.Rat)
-	amount.Add(amount, tokenCost(inputPrice, uncachedPrompt))
-	amount.Add(amount, tokenCost(cachedInputPrice, usage.CachedTokens))
-	amount.Add(amount, tokenCost(outputPrice, normalCompletion))
-	amount.Add(amount, tokenCost(reasoningOutputPrice, usage.ReasoningTokens))
+	amount.Add(amount, tokenCost(prices.InputPrice, uncachedPrompt))
+	amount.Add(amount, tokenCost(prices.CachedInputPrice, usage.CachedTokens))
+	amount.Add(amount, tokenCost(prices.OutputPrice, normalCompletion))
+	amount.Add(amount, tokenCost(prices.ReasoningOutputPrice, usage.ReasoningTokens))
 	amount.Quo(amount, big.NewRat(1_000_000, 1))
 
 	return Settlement{
 		Amount:         ratToNumeric(amount, amountDecimalScale),
-		Currency:       price.Currency,
-		FormulaVersion: formulaVersion,
+		Currency:       prices.Currency,
+		FormulaVersion: prices.FormulaVersion,
+	}, nil
+}
+
+// EstimateAuthorization 根据预估最大 token 用量计算需要冻结的金额。
+func (s Service) EstimateAuthorization(estimate AuthorizationEstimate, price PriceSnapshot) (Settlement, error) {
+	if estimate.PromptTokens < 0 || estimate.MaxCompletionTokens < 0 {
+		return Settlement{}, failure.Wrap(
+			failure.CodeBillingInvalidUsage,
+			ErrInvalidUsage,
+			failure.WithMessage(ErrInvalidUsage.Error()),
+		)
+	}
+
+	prices, err := normalizeTokenPrices(price)
+	if err != nil {
+		return Settlement{}, err
+	}
+
+	maxCompletionPrice := maxRat(prices.OutputPrice, prices.ReasoningOutputPrice)
+
+	amount := new(big.Rat)
+	amount.Add(amount, tokenCost(prices.InputPrice, estimate.PromptTokens))
+	amount.Add(amount, tokenCost(maxCompletionPrice, estimate.MaxCompletionTokens))
+	amount.Quo(amount, big.NewRat(1_000_000, 1))
+
+	return Settlement{
+		Amount:         ratToNumeric(amount, amountDecimalScale),
+		Currency:       prices.Currency,
+		FormulaVersion: prices.FormulaVersion,
 	}, nil
 }
 
@@ -239,4 +236,78 @@ func roundHalfUp(value *big.Rat) *big.Int {
 // pow10 返回 10 的 exp 次方。
 func pow10(exp int32) *big.Int {
 	return new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(exp)), nil)
+}
+
+func normalizeTokenPrices(price PriceSnapshot) (tokenPrices, error) {
+	if price.PricingUnit != PricingUnitPer1MTokens {
+		return tokenPrices{}, failure.Wrap(
+			failure.CodeBillingUnsupportedPricingUnit,
+			ErrUnsupportedPricingUnit,
+			failure.WithMessage(ErrUnsupportedPricingUnit.Error()),
+		)
+	}
+
+	if price.Currency == "" {
+		return tokenPrices{}, failure.Wrap(
+			failure.CodeBillingInvalidPrice,
+			ErrInvalidPrice,
+			failure.WithMessage(ErrInvalidPrice.Error()),
+		)
+	}
+
+	formulaVersion := price.FormulaVersion
+	if formulaVersion == "" {
+		formulaVersion = FormulaVersionV1
+	}
+	if formulaVersion != FormulaVersionV1 {
+		return tokenPrices{}, failure.Wrap(
+			failure.CodeBillingUnsupportedFormula,
+			ErrUnsupportedFormula,
+			failure.WithMessage(ErrUnsupportedFormula.Error()),
+		)
+	}
+
+	inputPrice, err := requiredNonNegativeNumeric(price.InputPrice)
+	if err != nil {
+		return tokenPrices{}, err
+	}
+
+	outputPrice, err := requiredNonNegativeNumeric(price.OutputPrice)
+	if err != nil {
+		return tokenPrices{}, err
+	}
+
+	cachedInputPrice := inputPrice
+	if price.CachedInputPrice.Valid {
+		cachedInputPrice, err = requiredNonNegativeNumeric(price.CachedInputPrice)
+		if err != nil {
+			return tokenPrices{}, err
+		}
+	}
+
+	reasoningOutputPrice := outputPrice
+	if price.ReasoningOutputPrice.Valid {
+		reasoningOutputPrice, err = requiredNonNegativeNumeric(price.ReasoningOutputPrice)
+		if err != nil {
+			return tokenPrices{}, err
+		}
+	}
+
+	return tokenPrices{
+		Currency:             price.Currency,
+		FormulaVersion:       formulaVersion,
+		InputPrice:           inputPrice,
+		OutputPrice:          outputPrice,
+		CachedInputPrice:     cachedInputPrice,
+		ReasoningOutputPrice: reasoningOutputPrice,
+	}, nil
+}
+
+// maxRat 返回两个非 nil 有理数中的较大值。
+func maxRat(left *big.Rat, right *big.Rat) *big.Rat {
+	if left.Cmp(right) >= 0 {
+		return new(big.Rat).Set(left)
+	}
+
+	return new(big.Rat).Set(right)
 }

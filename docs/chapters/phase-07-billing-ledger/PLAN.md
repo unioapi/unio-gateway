@@ -81,7 +81,7 @@ ledger entry
 
 1. 支持 credit/debit ledger entry。
 2. debit 使用事务更新 user balance。
-3. 后续补 pre-authorize/capture/refund/reservation。
+3. ledger reservation pre-authorize/capture/release 已完成，后续接入 gateway 调用上游前冻结余额。
 
 关联 GAP：
 
@@ -146,16 +146,17 @@ ledger entry
 <a id="task-7-17-preauthorization"></a>
 ### TASK-7.17 余额预检查与预授权最小闭环
 
-状态：todo
+状态：in_progress
 
 范围：
 
 1. 请求调用上游前检查用户余额。
 2. 非流式请求支持余额 preflight 或 reservation。
 3. 流式请求根据模型价格和 `max_tokens` 做预授权。
-4. 成功后按真实 usage capture。
-5. 失败、取消、无 final usage 时 release/refund 或进入异常状态。
-6. 所有余额动作都必须可审计。
+4. 为后续 project 预算或用量上限预留统一判断入口。
+5. 成功后按真实 usage capture。
+6. 失败、取消、无 final usage 时 release 或进入异常状态。
+7. 所有余额动作都必须可审计。
 
 生产风险：
 
@@ -254,4 +255,3 @@ stream 长输出和恶意断开也无法控损。
 关联 GAP：
 
 - [GAP-7-010](../../production/TODO_REGISTER.md#gap-7-010)
-

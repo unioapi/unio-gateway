@@ -12,6 +12,7 @@ RETURNING
     user_id,
     currency,
     balance,
+    reserved_balance,
     created_at,
     updated_at;
 
@@ -21,6 +22,7 @@ SELECT
     user_id,
     currency,
     balance,
+    reserved_balance,
     created_at,
     updated_at
 FROM
@@ -35,6 +37,7 @@ SELECT
     user_id,
     currency,
     balance,
+    reserved_balance,
     created_at,
     updated_at
 FROM
@@ -57,6 +60,7 @@ RETURNING
     user_id,
     currency,
     balance,
+    reserved_balance,
     created_at,
     updated_at;
 
@@ -160,7 +164,7 @@ FROM
 WHERE
     request_record_id = sqlc.arg (request_record_id)
 ORDER BY
-    id ASC;
+    id;
 
 -- name: EnsureUserBalance :exec
 INSERT INTO user_balances(user_id, currency, balance)
@@ -179,6 +183,7 @@ RETURNING
     user_id,
     currency,
     balance,
+    reserved_balance,
     created_at,
     updated_at;
 
@@ -190,10 +195,221 @@ SET
 WHERE user_id = sqlc.arg(user_id)
   AND currency = sqlc.arg(currency)
   AND balance >= sqlc.arg(amount)
+  AND balance - reserved_balance >= sqlc.arg(amount)
 RETURNING
     id,
     user_id,
     currency,
     balance,
+    reserved_balance,
     created_at,
     updated_at;
+
+-- name: ReserveUserBalance :one
+UPDATE user_balances
+SET
+    reserved_balance = reserved_balance + sqlc.arg(amount),
+    updated_at = now()
+WHERE user_id = sqlc.arg(user_id)
+    AND currency = sqlc.arg(currency)
+    AND balance - reserved_balance >= sqlc.arg(amount)
+RETURNING
+    id,
+    user_id,
+    currency,
+    balance,
+    reserved_balance,
+    created_at,
+    updated_at;
+
+-- name: CreateLedgerReservation :one
+INSERT INTO ledger_reservations (
+    user_id,
+    request_record_id,
+    currency,
+    status,
+    authorized_amount,
+    idempotency_key,
+    reason
+)
+VALUES (
+           sqlc.arg(user_id),
+           sqlc.arg(request_record_id),
+           sqlc.arg(currency),
+           'authorized',
+           sqlc.arg(authorized_amount),
+           sqlc.arg(idempotency_key),
+           sqlc.arg(reason)
+       )
+RETURNING
+    id,
+    user_id,
+    request_record_id,
+    currency,
+    status,
+    authorized_amount,
+    captured_amount,
+    released_amount,
+    capture_ledger_entry_id,
+    idempotency_key,
+    reason,
+    created_at,
+    updated_at,
+    captured_at,
+    released_at;
+
+-- name: GetLedgerReservationByIdempotencyKey :one
+SELECT
+    id,
+    user_id,
+    request_record_id,
+    currency,
+    status,
+    authorized_amount,
+    captured_amount,
+    released_amount,
+    capture_ledger_entry_id,
+    idempotency_key,
+    reason,
+    created_at,
+    updated_at,
+    captured_at,
+    released_at
+FROM ledger_reservations
+WHERE idempotency_key = sqlc.arg(idempotency_key);
+
+-- name: GetLedgerReservationByRequestRecordID :one
+SELECT
+    id,
+    user_id,
+    request_record_id,
+    currency,
+    status,
+    authorized_amount,
+    captured_amount,
+    released_amount,
+    capture_ledger_entry_id,
+    idempotency_key,
+    reason,
+    created_at,
+    updated_at,
+    captured_at,
+    released_at
+FROM ledger_reservations
+WHERE request_record_id = sqlc.arg(request_record_id);
+
+-- name: GetLedgerReservationByRequestRecordIDForUpdate :one
+SELECT
+    id,
+    user_id,
+    request_record_id,
+    currency,
+    status,
+    authorized_amount,
+    captured_amount,
+    released_amount,
+    capture_ledger_entry_id,
+    idempotency_key,
+    reason,
+    created_at,
+    updated_at,
+    captured_at,
+    released_at
+FROM ledger_reservations
+WHERE request_record_id = sqlc.arg(request_record_id)
+    FOR UPDATE;
+
+-- name: CaptureUserReservedBalance :one
+UPDATE user_balances
+SET
+    balance = balance - sqlc.arg(captured_amount),
+    reserved_balance = reserved_balance - sqlc.arg(authorized_amount),
+    updated_at = now()
+WHERE user_id = sqlc.arg(user_id)
+  AND currency = sqlc.arg(currency)
+  AND reserved_balance >= sqlc.arg(authorized_amount)
+  AND balance >= sqlc.arg(captured_amount)
+RETURNING
+    id,
+    user_id,
+    currency,
+    balance,
+    reserved_balance,
+    created_at,
+    updated_at;
+
+-- name: ReleaseUserReservedBalance :one
+UPDATE user_balances
+SET
+    reserved_balance = reserved_balance - sqlc.arg(amount),
+    updated_at = now()
+WHERE user_id = sqlc.arg(user_id)
+  AND currency = sqlc.arg(currency)
+  AND reserved_balance >= sqlc.arg(amount)
+RETURNING
+    id,
+    user_id,
+    currency,
+    balance,
+    reserved_balance,
+    created_at,
+    updated_at;
+
+-- name: CaptureLedgerReservation :one
+UPDATE ledger_reservations
+SET
+    status = 'captured',
+    captured_amount = sqlc.arg(captured_amount),
+    released_amount = authorized_amount - sqlc.arg(captured_amount),
+    capture_ledger_entry_id = sqlc.arg(capture_ledger_entry_id),
+    captured_at = now(),
+    released_at = CASE
+                      WHEN authorized_amount > sqlc.arg(captured_amount) THEN now()
+                      ELSE NULL
+        END,
+    updated_at = now()
+WHERE id = sqlc.arg(id)
+  AND status = 'authorized'
+  AND authorized_amount >= sqlc.arg(captured_amount)
+RETURNING
+    id,
+    user_id,
+    request_record_id,
+    currency,
+    status,
+    authorized_amount,
+    captured_amount,
+    released_amount,
+    capture_ledger_entry_id,
+    idempotency_key,
+    reason,
+    created_at,
+    updated_at,
+    captured_at,
+    released_at;
+
+-- name: ReleaseLedgerReservation :one
+UPDATE ledger_reservations
+SET
+    status = 'released',
+    released_amount = authorized_amount,
+    released_at = now(),
+    updated_at = now()
+WHERE id = sqlc.arg(id)
+  AND status = 'authorized'
+RETURNING
+    id,
+    user_id,
+    request_record_id,
+    currency,
+    status,
+    authorized_amount,
+    captured_amount,
+    released_amount,
+    capture_ledger_entry_id,
+    idempotency_key,
+    reason,
+    created_at,
+    updated_at,
+    captured_at,
+    released_at;

@@ -12,7 +12,7 @@
 ## 生产验收
 
 1. 调用上游前有余额 preflight 或 pre-authorization。
-2. stream 有 freeze/capture/refund 闭环。
+2. stream 有 freeze/capture/release 闭环。
 3. 无 final usage、客户端取消、上游中断都有明确计费策略。
 4. settlement 以 request 为边界幂等。
 5. request/attempt 终态不会被覆盖。
@@ -27,11 +27,10 @@
 3. settlement 成功、失败、重复执行测试通过。
 4. stream final usage 成功结算测试通过。
 5. stream 客户端取消、有 usage、无 usage 测试通过。
-6. preauthorization 实现后补冻结、capture、refund、余额不足测试。
+6. preauthorization 实现后补冻结、capture、release、余额不足测试。
 
 ## 文档验收
 
 1. 所有阶段 7 production TODO 都有 GAP 编号。
 2. TODO register 中每个阶段 7 GAP 都链接到具体 TASK。
 3. 阶段 7 完成前，`docs/production/RELEASE_BLOCKERS.md` 中不得保留阶段 7 P0 blocker。
-

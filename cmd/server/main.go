@@ -10,31 +10,19 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/adapter"
-	"github.com/ThankCat/unio-api/internal/adapter/openai"
-	"github.com/ThankCat/unio-api/internal/auth"
-	"github.com/ThankCat/unio-api/internal/billing"
+	"github.com/ThankCat/unio-api/internal/bootstrap"
 	"github.com/ThankCat/unio-api/internal/config"
-	"github.com/ThankCat/unio-api/internal/credential"
 	"github.com/ThankCat/unio-api/internal/failure"
-	"github.com/ThankCat/unio-api/internal/gateway"
-	"github.com/ThankCat/unio-api/internal/httpapi"
-	"github.com/ThankCat/unio-api/internal/ledger"
-	"github.com/ThankCat/unio-api/internal/modelcatalog"
-	"github.com/ThankCat/unio-api/internal/ratelimit"
 	"github.com/ThankCat/unio-api/internal/redis"
-	"github.com/ThankCat/unio-api/internal/requestlog"
-	"github.com/ThankCat/unio-api/internal/routing"
 	"github.com/ThankCat/unio-api/internal/store"
-	"github.com/ThankCat/unio-api/internal/store/sqlc"
 )
 
 func main() {
-	bootstrapLogger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	preLogger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 	cfg, err := config.Load()
 	if err != nil {
-		bootstrapLogger.Error("load config failed", failure.LogArgs(err)...)
+		preLogger.Error("load config failed", failure.LogArgs(err)...)
 
 		os.Exit(1)
 	}
@@ -64,61 +52,21 @@ func main() {
 	defer redisClient.Close()
 	logger.Info("redis connected", "addr", cfg.Redis.Addr, "db", cfg.Redis.DB)
 
-	// TODO(阶段6/production): [GAP-6-002] main 函数直接装配 credential、routing、adapter registry 和 gateway 会让启动逻辑膨胀；阶段 6 收口或进入后台管理装配前；抽出 server bootstrap/app wiring 组件，保持 main 只负责配置、生命周期和退出信号。
-	queries := sqlc.New(pgPool)
-	apiKeyAuthenticator := auth.NewAPIKeyAuthenticator(queries)
-	modelCatalogService := modelcatalog.NewService(queries)
-	requestLogStore := requestlog.NewStore(queries)
-	credentialResolver := credential.NewStaticResolver(map[string]string{})
-
-	chatRouter := routing.NewRouter(queries, credentialResolver, 30*time.Second)
-	openaiAdapter := openai.NewAdapter(http.DefaultClient)
-	// TODO(阶段6/production): [GAP-6-003] provider.adapter 缺少启动/后台写入校验会导致运行时 registry miss；开放后台管理或启用真实 channel 前；在 provider 写入和启动 preflight 中校验 adapter key 必须存在于 adapter registry。
-	adapterRegistry, err := adapter.NewRegistry(adapter.Registration{
-		Key:        "openai",
-		Chat:       openaiAdapter,
-		StreamChat: openaiAdapter,
+	// APP
+	app, err := bootstrap.NewServerApp(startupCtx, bootstrap.ServerAppDeps{
+		Logger: logger,
+		Config: cfg,
+		DB:     pgPool,
+		Redis:  redisClient,
 	})
 	if err != nil {
-		logger.Error("openai adapter failed", failure.LogArgs(err)...)
+		logger.Error("server app failed", failure.LogArgs(err)...)
 		os.Exit(1)
 	}
 
-	ledgerService := ledger.NewService(pgPool, queries)
-	chatSettlementService := gateway.NewChatSettlementService(
-		pgPool,
-		queries,
-		billing.Service{},
-		ledgerService,
-	)
-
-	chatCompletionService := gateway.NewChatCompletionService(
-		chatRouter,
-		adapterRegistry,
-		nil,
-		requestLogStore,
-		chatSettlementService,
-	)
-
-	rateLimitStore := ratelimit.NewRedisStore(redisClient, cfg.Redis.KeyNamespace)
-	rateLimiter := ratelimit.NewLimiter(rateLimitStore)
-
-	handler := httpapi.NewRouter(httpapi.RouterDeps{
-		Logger:              logger,
-		APIKeyAuthenticator: apiKeyAuthenticator,
-		RateLimiter:         rateLimiter,
-
-		RateLimitLimit:         cfg.RateLimit.DefaultLimit,
-		RateLimitWindow:        cfg.RateLimit.DefaultWindow,
-		RateLimitFailurePolicy: cfg.RateLimit.FailurePolicy,
-
-		ChatCompletionService: chatCompletionService,
-		ModelCatalogService:   modelCatalogService,
-	})
-
 	server := &http.Server{
 		Addr:    cfg.HTTP.Addr,
-		Handler: handler,
+		Handler: app.Handler,
 
 		ReadTimeout:  cfg.HTTP.ReadTimeout,
 		WriteTimeout: cfg.HTTP.WriteTimeout,

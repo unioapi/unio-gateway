@@ -83,6 +83,7 @@ func TestUserBalanceLifecycleAndUniqueness(t *testing.T) {
 		t.Fatalf("expected currency USD, got %q", created.Currency)
 	}
 	assertNumericEquals(t, created.Balance, 100)
+	assertNumericEquals(t, created.ReservedBalance, 0)
 	if !created.CreatedAt.Valid || !created.UpdatedAt.Valid {
 		t.Fatal("expected balance timestamps to be set")
 	}
@@ -164,6 +165,7 @@ func TestEnsureAddAndSubtractUserBalance(t *testing.T) {
 		t.Fatalf("get ensured user balance: %v", err)
 	}
 	assertNumericEquals(t, initial.Balance, 0)
+	assertNumericEquals(t, initial.ReservedBalance, 0)
 
 	added, err := queries.AddUserBalance(ctx, sqlc.AddUserBalanceParams{
 		Amount:   numeric(25),
@@ -174,6 +176,7 @@ func TestEnsureAddAndSubtractUserBalance(t *testing.T) {
 		t.Fatalf("add user balance: %v", err)
 	}
 	assertNumericEquals(t, added.Balance, 25)
+	assertNumericEquals(t, added.ReservedBalance, 0)
 
 	subtracted, err := queries.SubtractUserBalance(ctx, sqlc.SubtractUserBalanceParams{
 		Amount:   numeric(10),
@@ -184,6 +187,7 @@ func TestEnsureAddAndSubtractUserBalance(t *testing.T) {
 		t.Fatalf("subtract user balance: %v", err)
 	}
 	assertNumericEquals(t, subtracted.Balance, 15)
+	assertNumericEquals(t, subtracted.ReservedBalance, 0)
 
 	_, err = queries.SubtractUserBalance(ctx, sqlc.SubtractUserBalanceParams{
 		Amount:   numeric(99),
@@ -202,6 +206,94 @@ func TestEnsureAddAndSubtractUserBalance(t *testing.T) {
 		t.Fatalf("get user balance after failed subtract: %v", err)
 	}
 	assertNumericEquals(t, got.Balance, 15)
+	assertNumericEquals(t, got.ReservedBalance, 0)
+}
+
+func TestReserveUserBalanceConsumesAvailableBalance(t *testing.T) {
+	ctx, _, queries, cleanup := newModelChannelTestTx(t)
+	defer cleanup()
+
+	identity := createRequestRecordIdentity(t, ctx, queries)
+
+	if _, err := queries.CreateUserBalance(ctx, sqlc.CreateUserBalanceParams{
+		UserID:   identity.user.ID,
+		Currency: "USD",
+		Balance:  numeric(100),
+	}); err != nil {
+		t.Fatalf("create user balance: %v", err)
+	}
+
+	reserved, err := queries.ReserveUserBalance(ctx, sqlc.ReserveUserBalanceParams{
+		Amount:   numeric(70),
+		UserID:   identity.user.ID,
+		Currency: "USD",
+	})
+	if err != nil {
+		t.Fatalf("reserve user balance: %v", err)
+	}
+	assertNumericEquals(t, reserved.Balance, 100)
+	assertNumericEquals(t, reserved.ReservedBalance, 70)
+
+	_, err = queries.ReserveUserBalance(ctx, sqlc.ReserveUserBalanceParams{
+		Amount:   numeric(31),
+		UserID:   identity.user.ID,
+		Currency: "USD",
+	})
+	if !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("expected no rows when reserve exceeds available balance, got %v", err)
+	}
+
+	got, err := queries.GetUserBalance(ctx, sqlc.GetUserBalanceParams{
+		UserID:   identity.user.ID,
+		Currency: "USD",
+	})
+	if err != nil {
+		t.Fatalf("get user balance after failed reserve: %v", err)
+	}
+	assertNumericEquals(t, got.Balance, 100)
+	assertNumericEquals(t, got.ReservedBalance, 70)
+}
+
+func TestSubtractUserBalanceRespectsReservedBalance(t *testing.T) {
+	ctx, _, queries, cleanup := newModelChannelTestTx(t)
+	defer cleanup()
+
+	identity := createRequestRecordIdentity(t, ctx, queries)
+
+	if _, err := queries.CreateUserBalance(ctx, sqlc.CreateUserBalanceParams{
+		UserID:   identity.user.ID,
+		Currency: "USD",
+		Balance:  numeric(100),
+	}); err != nil {
+		t.Fatalf("create user balance: %v", err)
+	}
+	if _, err := queries.ReserveUserBalance(ctx, sqlc.ReserveUserBalanceParams{
+		Amount:   numeric(70),
+		UserID:   identity.user.ID,
+		Currency: "USD",
+	}); err != nil {
+		t.Fatalf("reserve user balance: %v", err)
+	}
+
+	_, err := queries.SubtractUserBalance(ctx, sqlc.SubtractUserBalanceParams{
+		Amount:   numeric(40),
+		UserID:   identity.user.ID,
+		Currency: "USD",
+	})
+	if !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("expected no rows when subtract exceeds available balance, got %v", err)
+	}
+
+	subtracted, err := queries.SubtractUserBalance(ctx, sqlc.SubtractUserBalanceParams{
+		Amount:   numeric(30),
+		UserID:   identity.user.ID,
+		Currency: "USD",
+	})
+	if err != nil {
+		t.Fatalf("subtract unreserved balance: %v", err)
+	}
+	assertNumericEquals(t, subtracted.Balance, 70)
+	assertNumericEquals(t, subtracted.ReservedBalance, 70)
 }
 
 func TestUserBalanceRejectsInvalidConstraints(t *testing.T) {
@@ -477,6 +569,302 @@ func TestLedgerEntryRequiresMatchingRequestUser(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected ledger entry with mismatched request user to fail")
+	}
+	if !isForeignKeyViolation(err) {
+		t.Fatalf("expected foreign key violation, got %v", err)
+	}
+}
+
+func TestLedgerReservationCreateGetAndUniqueness(t *testing.T) {
+	ctx, _, queries, cleanup := newModelChannelTestTx(t)
+	defer cleanup()
+
+	identity := createRequestRecordIdentity(t, ctx, queries)
+	requestRecord := createRequestRecordForTest(t, ctx, queries, identity, fmt.Sprintf("reservation-%d", time.Now().UnixNano()))
+
+	created, err := queries.CreateLedgerReservation(ctx, sqlc.CreateLedgerReservationParams{
+		UserID:           identity.user.ID,
+		RequestRecordID:  requestRecord.ID,
+		Currency:         "USD",
+		AuthorizedAmount: numeric(40),
+		IdempotencyKey:   fmt.Sprintf("reservation-idempotency-%d", time.Now().UnixNano()),
+		Reason:           "test reservation",
+	})
+	if err != nil {
+		t.Fatalf("create ledger reservation: %v", err)
+	}
+	if created.UserID != identity.user.ID {
+		t.Fatalf("expected user id %d, got %d", identity.user.ID, created.UserID)
+	}
+	if created.RequestRecordID != requestRecord.ID {
+		t.Fatalf("expected request record id %d, got %d", requestRecord.ID, created.RequestRecordID)
+	}
+	if created.Status != "authorized" {
+		t.Fatalf("expected authorized reservation, got %q", created.Status)
+	}
+	assertNumericEquals(t, created.AuthorizedAmount, 40)
+	assertNumericEquals(t, created.CapturedAmount, 0)
+	assertNumericEquals(t, created.ReleasedAmount, 0)
+	if created.CaptureLedgerEntryID.Valid {
+		t.Fatalf("expected no capture ledger entry id, got %d", created.CaptureLedgerEntryID.Int64)
+	}
+	if !created.CreatedAt.Valid || !created.UpdatedAt.Valid {
+		t.Fatal("expected reservation timestamps to be set")
+	}
+	if created.CapturedAt.Valid || created.ReleasedAt.Valid {
+		t.Fatal("expected authorized reservation to have no terminal timestamps")
+	}
+
+	byKey, err := queries.GetLedgerReservationByIdempotencyKey(ctx, created.IdempotencyKey)
+	if err != nil {
+		t.Fatalf("get reservation by idempotency key: %v", err)
+	}
+	if byKey.ID != created.ID {
+		t.Fatalf("expected reservation id %d by key, got %d", created.ID, byKey.ID)
+	}
+
+	byRequest, err := queries.GetLedgerReservationByRequestRecordID(ctx, requestRecord.ID)
+	if err != nil {
+		t.Fatalf("get reservation by request record id: %v", err)
+	}
+	if byRequest.ID != created.ID {
+		t.Fatalf("expected reservation id %d by request, got %d", created.ID, byRequest.ID)
+	}
+
+	_, err = queries.CreateLedgerReservation(ctx, sqlc.CreateLedgerReservationParams{
+		UserID:           identity.user.ID,
+		RequestRecordID:  requestRecord.ID,
+		Currency:         "USD",
+		AuthorizedAmount: numeric(1),
+		IdempotencyKey:   fmt.Sprintf("reservation-duplicate-request-%d", time.Now().UnixNano()),
+		Reason:           "duplicate request reservation",
+	})
+	if err == nil {
+		t.Fatal("expected duplicate request reservation to fail")
+	}
+	if !isUniqueViolation(err) {
+		t.Fatalf("expected unique violation, got %v", err)
+	}
+}
+
+func TestLedgerReservationRequiresMatchingRequestUser(t *testing.T) {
+	ctx, _, queries, cleanup := newModelChannelTestTx(t)
+	defer cleanup()
+
+	requestOwner := createRequestRecordIdentity(t, ctx, queries)
+	otherUser := createRequestRecordIdentity(t, ctx, queries)
+	requestRecord := createRequestRecordForTest(t, ctx, queries, requestOwner, fmt.Sprintf("reservation-request-owner-%d", time.Now().UnixNano()))
+
+	_, err := queries.CreateLedgerReservation(ctx, sqlc.CreateLedgerReservationParams{
+		UserID:           otherUser.user.ID,
+		RequestRecordID:  requestRecord.ID,
+		Currency:         "USD",
+		AuthorizedAmount: numeric(1),
+		IdempotencyKey:   fmt.Sprintf("reservation-user-mismatch-%d", time.Now().UnixNano()),
+		Reason:           "mismatched request user",
+	})
+	if err == nil {
+		t.Fatal("expected reservation with mismatched request user to fail")
+	}
+	if !isForeignKeyViolation(err) {
+		t.Fatalf("expected foreign key violation, got %v", err)
+	}
+}
+
+func TestCaptureReservedBalanceAndReservation(t *testing.T) {
+	ctx, _, queries, cleanup := newModelChannelTestTx(t)
+	defer cleanup()
+
+	identity := createRequestRecordIdentity(t, ctx, queries)
+	requestRecord := createRequestRecordForTest(t, ctx, queries, identity, fmt.Sprintf("capture-reservation-%d", time.Now().UnixNano()))
+
+	if _, err := queries.CreateUserBalance(ctx, sqlc.CreateUserBalanceParams{
+		UserID:   identity.user.ID,
+		Currency: "USD",
+		Balance:  numeric(100),
+	}); err != nil {
+		t.Fatalf("create user balance: %v", err)
+	}
+	if _, err := queries.ReserveUserBalance(ctx, sqlc.ReserveUserBalanceParams{
+		Amount:   numeric(40),
+		UserID:   identity.user.ID,
+		Currency: "USD",
+	}); err != nil {
+		t.Fatalf("reserve user balance: %v", err)
+	}
+	reservation, err := queries.CreateLedgerReservation(ctx, sqlc.CreateLedgerReservationParams{
+		UserID:           identity.user.ID,
+		RequestRecordID:  requestRecord.ID,
+		Currency:         "USD",
+		AuthorizedAmount: numeric(40),
+		IdempotencyKey:   fmt.Sprintf("capture-reservation-%d", time.Now().UnixNano()),
+		Reason:           "test capture reservation",
+	})
+	if err != nil {
+		t.Fatalf("create ledger reservation: %v", err)
+	}
+
+	locked, err := queries.GetLedgerReservationByRequestRecordIDForUpdate(ctx, requestRecord.ID)
+	if err != nil {
+		t.Fatalf("get reservation for update: %v", err)
+	}
+	if locked.ID != reservation.ID {
+		t.Fatalf("expected locked reservation id %d, got %d", reservation.ID, locked.ID)
+	}
+
+	debit := createLedgerEntryForTest(t, queries, ctx, sqlc.CreateLedgerEntryParams{
+		UserID:          identity.user.ID,
+		RequestRecordID: pgtype.Int8{Int64: requestRecord.ID, Valid: true},
+		EntryType:       "debit",
+		Amount:          numeric(25),
+		Currency:        "USD",
+		BalanceBefore:   numeric(100),
+		BalanceAfter:    numeric(75),
+		IdempotencyKey:  fmt.Sprintf("capture-debit-%d", time.Now().UnixNano()),
+		Reason:          "capture reserved balance",
+	})
+
+	balance, err := queries.CaptureUserReservedBalance(ctx, sqlc.CaptureUserReservedBalanceParams{
+		CapturedAmount:   numeric(25),
+		AuthorizedAmount: numeric(40),
+		UserID:           identity.user.ID,
+		Currency:         "USD",
+	})
+	if err != nil {
+		t.Fatalf("capture user reserved balance: %v", err)
+	}
+	assertNumericEquals(t, balance.Balance, 75)
+	assertNumericEquals(t, balance.ReservedBalance, 0)
+
+	captured, err := queries.CaptureLedgerReservation(ctx, sqlc.CaptureLedgerReservationParams{
+		CapturedAmount:       numeric(25),
+		CaptureLedgerEntryID: pgtype.Int8{Int64: debit.ID, Valid: true},
+		ID:                   reservation.ID,
+	})
+	if err != nil {
+		t.Fatalf("capture ledger reservation: %v", err)
+	}
+	if captured.Status != "captured" {
+		t.Fatalf("expected captured status, got %q", captured.Status)
+	}
+	assertNumericEquals(t, captured.AuthorizedAmount, 40)
+	assertNumericEquals(t, captured.CapturedAmount, 25)
+	assertNumericEquals(t, captured.ReleasedAmount, 15)
+	if !captured.CaptureLedgerEntryID.Valid || captured.CaptureLedgerEntryID.Int64 != debit.ID {
+		t.Fatalf("expected capture ledger entry id %d, got %+v", debit.ID, captured.CaptureLedgerEntryID)
+	}
+	if !captured.CapturedAt.Valid {
+		t.Fatal("expected captured_at to be set")
+	}
+	if !captured.ReleasedAt.Valid {
+		t.Fatal("expected released_at to be set when capture releases unused amount")
+	}
+}
+
+func TestReleaseReservedBalanceAndReservation(t *testing.T) {
+	ctx, _, queries, cleanup := newModelChannelTestTx(t)
+	defer cleanup()
+
+	identity := createRequestRecordIdentity(t, ctx, queries)
+	requestRecord := createRequestRecordForTest(t, ctx, queries, identity, fmt.Sprintf("release-reservation-%d", time.Now().UnixNano()))
+
+	if _, err := queries.CreateUserBalance(ctx, sqlc.CreateUserBalanceParams{
+		UserID:   identity.user.ID,
+		Currency: "USD",
+		Balance:  numeric(80),
+	}); err != nil {
+		t.Fatalf("create user balance: %v", err)
+	}
+	if _, err := queries.ReserveUserBalance(ctx, sqlc.ReserveUserBalanceParams{
+		Amount:   numeric(30),
+		UserID:   identity.user.ID,
+		Currency: "USD",
+	}); err != nil {
+		t.Fatalf("reserve user balance: %v", err)
+	}
+	reservation, err := queries.CreateLedgerReservation(ctx, sqlc.CreateLedgerReservationParams{
+		UserID:           identity.user.ID,
+		RequestRecordID:  requestRecord.ID,
+		Currency:         "USD",
+		AuthorizedAmount: numeric(30),
+		IdempotencyKey:   fmt.Sprintf("release-reservation-%d", time.Now().UnixNano()),
+		Reason:           "test release reservation",
+	})
+	if err != nil {
+		t.Fatalf("create ledger reservation: %v", err)
+	}
+
+	balance, err := queries.ReleaseUserReservedBalance(ctx, sqlc.ReleaseUserReservedBalanceParams{
+		Amount:   numeric(30),
+		UserID:   identity.user.ID,
+		Currency: "USD",
+	})
+	if err != nil {
+		t.Fatalf("release user reserved balance: %v", err)
+	}
+	assertNumericEquals(t, balance.Balance, 80)
+	assertNumericEquals(t, balance.ReservedBalance, 0)
+
+	released, err := queries.ReleaseLedgerReservation(ctx, reservation.ID)
+	if err != nil {
+		t.Fatalf("release ledger reservation: %v", err)
+	}
+	if released.Status != "released" {
+		t.Fatalf("expected released status, got %q", released.Status)
+	}
+	assertNumericEquals(t, released.AuthorizedAmount, 30)
+	assertNumericEquals(t, released.CapturedAmount, 0)
+	assertNumericEquals(t, released.ReleasedAmount, 30)
+	if released.CaptureLedgerEntryID.Valid {
+		t.Fatalf("expected no capture ledger entry id, got %d", released.CaptureLedgerEntryID.Int64)
+	}
+	if released.CapturedAt.Valid {
+		t.Fatal("expected captured_at to remain null")
+	}
+	if !released.ReleasedAt.Valid {
+		t.Fatal("expected released_at to be set")
+	}
+}
+
+func TestCaptureLedgerReservationRequiresMatchingLedgerEntry(t *testing.T) {
+	ctx, _, queries, cleanup := newModelChannelTestTx(t)
+	defer cleanup()
+
+	identity := createRequestRecordIdentity(t, ctx, queries)
+	otherIdentity := createRequestRecordIdentity(t, ctx, queries)
+	requestRecord := createRequestRecordForTest(t, ctx, queries, identity, fmt.Sprintf("capture-fk-reservation-%d", time.Now().UnixNano()))
+	otherRequestRecord := createRequestRecordForTest(t, ctx, queries, otherIdentity, fmt.Sprintf("capture-fk-other-%d", time.Now().UnixNano()))
+
+	reservation, err := queries.CreateLedgerReservation(ctx, sqlc.CreateLedgerReservationParams{
+		UserID:           identity.user.ID,
+		RequestRecordID:  requestRecord.ID,
+		Currency:         "USD",
+		AuthorizedAmount: numeric(10),
+		IdempotencyKey:   fmt.Sprintf("capture-fk-reservation-%d", time.Now().UnixNano()),
+		Reason:           "test capture ledger entry foreign key",
+	})
+	if err != nil {
+		t.Fatalf("create ledger reservation: %v", err)
+	}
+	wrongEntry := createLedgerEntryForTest(t, queries, ctx, sqlc.CreateLedgerEntryParams{
+		UserID:          otherIdentity.user.ID,
+		RequestRecordID: pgtype.Int8{Int64: otherRequestRecord.ID, Valid: true},
+		EntryType:       "debit",
+		Amount:          numeric(10),
+		Currency:        "USD",
+		BalanceBefore:   numeric(20),
+		BalanceAfter:    numeric(10),
+		IdempotencyKey:  fmt.Sprintf("capture-fk-wrong-entry-%d", time.Now().UnixNano()),
+		Reason:          "wrong capture ledger entry",
+	})
+
+	_, err = queries.CaptureLedgerReservation(ctx, sqlc.CaptureLedgerReservationParams{
+		CapturedAmount:       numeric(10),
+		CaptureLedgerEntryID: pgtype.Int8{Int64: wrongEntry.ID, Valid: true},
+		ID:                   reservation.ID,
+	})
+	if err == nil {
+		t.Fatal("expected capture reservation with mismatched ledger entry to fail")
 	}
 	if !isForeignKeyViolation(err) {
 		t.Fatalf("expected foreign key violation, got %v", err)

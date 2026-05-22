@@ -152,11 +152,12 @@
 2. project 用量统计。
 3. API key 用量统计。
 4. project 级模型可见性配置。
-5. project 级预算或用量上限。
-6. 后续团队/organization 模式迁移预留。
+5. project 禁用或启用状态配置。
+6. project 级预算或用量上限。
+7. project 专属 channel 或禁用 channel 策略。
+8. 后续团队/organization 模式迁移预留。
 
 依赖：
 
 1. [TASK-6.04](../phase-06-model-channel-routing/PLAN.md#task-6-04-routing-policy)
 2. [TASK-7.17](../phase-07-billing-ledger/PLAN.md#task-7-17-preauthorization)
-

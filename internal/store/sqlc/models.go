@@ -59,6 +59,24 @@ type LedgerEntry struct {
 	CreatedAt       pgtype.Timestamptz
 }
 
+type LedgerReservation struct {
+	ID                   int64
+	UserID               int64
+	RequestRecordID      int64
+	Currency             string
+	Status               string
+	AuthorizedAmount     pgtype.Numeric
+	CapturedAmount       pgtype.Numeric
+	ReleasedAmount       pgtype.Numeric
+	CaptureLedgerEntryID pgtype.Int8
+	IdempotencyKey       string
+	Reason               string
+	CreatedAt            pgtype.Timestamptz
+	UpdatedAt            pgtype.Timestamptz
+	CapturedAt           pgtype.Timestamptz
+	ReleasedAt           pgtype.Timestamptz
+}
+
 type Model struct {
 	ID          int64
 	ModelID     string
@@ -192,10 +210,11 @@ type User struct {
 }
 
 type UserBalance struct {
-	ID        int64
-	UserID    int64
-	Currency  string
-	Balance   pgtype.Numeric
-	CreatedAt pgtype.Timestamptz
-	UpdatedAt pgtype.Timestamptz
+	ID              int64
+	UserID          int64
+	Currency        string
+	Balance         pgtype.Numeric
+	ReservedBalance pgtype.Numeric
+	CreatedAt       pgtype.Timestamptz
+	UpdatedAt       pgtype.Timestamptz
 }

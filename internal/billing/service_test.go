@@ -133,6 +133,70 @@ func TestCalculateRoundsToAmountScale(t *testing.T) {
 	assertNumeric(t, settlement.Amount, 1, -10)
 }
 
+// TestEstimateAuthorizationUsesHigherCompletionPrice 验证预授权按 output/reasoning 中更贵的 completion 价格冻结。
+func TestEstimateAuthorizationUsesHigherCompletionPrice(t *testing.T) {
+	settlement, err := (Service{}).EstimateAuthorization(AuthorizationEstimate{
+		PromptTokens:        1000,
+		MaxCompletionTokens: 500,
+	}, defaultPriceSnapshot())
+	if err != nil {
+		t.Fatalf("estimate authorization: %v", err)
+	}
+
+	if settlement.Currency != "USD" {
+		t.Fatalf("expected USD currency, got %q", settlement.Currency)
+	}
+	if settlement.FormulaVersion != FormulaVersionV1 {
+		t.Fatalf("expected formula version %q, got %q", FormulaVersionV1, settlement.FormulaVersion)
+	}
+
+	// (1000*2 + 500*12) / 1_000_000 = 0.0080000000。
+	assertNumeric(t, settlement.Amount, 80_000000, -10)
+}
+
+// TestEstimateAuthorizationFallsBackToOutputPrice 验证 reasoning 价格未配置时按普通 output 价格估算。
+func TestEstimateAuthorizationFallsBackToOutputPrice(t *testing.T) {
+	price := defaultPriceSnapshot()
+	price.ReasoningOutputPrice = nullNumeric()
+
+	settlement, err := (Service{}).EstimateAuthorization(AuthorizationEstimate{
+		PromptTokens:        1000,
+		MaxCompletionTokens: 500,
+	}, price)
+	if err != nil {
+		t.Fatalf("estimate authorization: %v", err)
+	}
+
+	// (1000*2 + 500*8) / 1_000_000 = 0.0060000000。
+	assertNumeric(t, settlement.Amount, 60_000000, -10)
+}
+
+// TestEstimateAuthorizationRejectsInvalidEstimate 验证预授权估算不接受负数 token。
+func TestEstimateAuthorizationRejectsInvalidEstimate(t *testing.T) {
+	tests := []struct {
+		name     string
+		estimate AuthorizationEstimate
+	}{
+		{
+			name:     "negative prompt tokens",
+			estimate: AuthorizationEstimate{PromptTokens: -1},
+		},
+		{
+			name:     "negative max completion tokens",
+			estimate: AuthorizationEstimate{MaxCompletionTokens: -1},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := (Service{}).EstimateAuthorization(tt.estimate, defaultPriceSnapshot())
+			if !errors.Is(err, ErrInvalidUsage) {
+				t.Fatalf("expected ErrInvalidUsage, got %v", err)
+			}
+		})
+	}
+}
+
 // TestCalculateRejectsInvalidUsage 验证 usage token 约束和数据库 usage_records 约束保持一致。
 func TestCalculateRejectsInvalidUsage(t *testing.T) {
 	tests := []struct {

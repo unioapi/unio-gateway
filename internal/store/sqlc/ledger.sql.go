@@ -23,6 +23,7 @@ RETURNING
     user_id,
     currency,
     balance,
+    reserved_balance,
     created_at,
     updated_at
 `
@@ -41,6 +42,117 @@ func (q *Queries) AddUserBalance(ctx context.Context, arg AddUserBalanceParams) 
 		&i.UserID,
 		&i.Currency,
 		&i.Balance,
+		&i.ReservedBalance,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const captureLedgerReservation = `-- name: CaptureLedgerReservation :one
+UPDATE ledger_reservations
+SET
+    status = 'captured',
+    captured_amount = $1,
+    released_amount = authorized_amount - $1,
+    capture_ledger_entry_id = $2,
+    captured_at = now(),
+    released_at = CASE
+                      WHEN authorized_amount > $1 THEN now()
+                      ELSE NULL
+        END,
+    updated_at = now()
+WHERE id = $3
+  AND status = 'authorized'
+  AND authorized_amount >= $1
+RETURNING
+    id,
+    user_id,
+    request_record_id,
+    currency,
+    status,
+    authorized_amount,
+    captured_amount,
+    released_amount,
+    capture_ledger_entry_id,
+    idempotency_key,
+    reason,
+    created_at,
+    updated_at,
+    captured_at,
+    released_at
+`
+
+type CaptureLedgerReservationParams struct {
+	CapturedAmount       pgtype.Numeric
+	CaptureLedgerEntryID pgtype.Int8
+	ID                   int64
+}
+
+func (q *Queries) CaptureLedgerReservation(ctx context.Context, arg CaptureLedgerReservationParams) (LedgerReservation, error) {
+	row := q.db.QueryRow(ctx, captureLedgerReservation, arg.CapturedAmount, arg.CaptureLedgerEntryID, arg.ID)
+	var i LedgerReservation
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.RequestRecordID,
+		&i.Currency,
+		&i.Status,
+		&i.AuthorizedAmount,
+		&i.CapturedAmount,
+		&i.ReleasedAmount,
+		&i.CaptureLedgerEntryID,
+		&i.IdempotencyKey,
+		&i.Reason,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.CapturedAt,
+		&i.ReleasedAt,
+	)
+	return i, err
+}
+
+const captureUserReservedBalance = `-- name: CaptureUserReservedBalance :one
+UPDATE user_balances
+SET
+    balance = balance - $1,
+    reserved_balance = reserved_balance - $2,
+    updated_at = now()
+WHERE user_id = $3
+  AND currency = $4
+  AND reserved_balance >= $2
+  AND balance >= $1
+RETURNING
+    id,
+    user_id,
+    currency,
+    balance,
+    reserved_balance,
+    created_at,
+    updated_at
+`
+
+type CaptureUserReservedBalanceParams struct {
+	CapturedAmount   pgtype.Numeric
+	AuthorizedAmount pgtype.Numeric
+	UserID           int64
+	Currency         string
+}
+
+func (q *Queries) CaptureUserReservedBalance(ctx context.Context, arg CaptureUserReservedBalanceParams) (UserBalance, error) {
+	row := q.db.QueryRow(ctx, captureUserReservedBalance,
+		arg.CapturedAmount,
+		arg.AuthorizedAmount,
+		arg.UserID,
+		arg.Currency,
+	)
+	var i UserBalance
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Currency,
+		&i.Balance,
+		&i.ReservedBalance,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -127,6 +239,82 @@ func (q *Queries) CreateLedgerEntry(ctx context.Context, arg CreateLedgerEntryPa
 	return i, err
 }
 
+const createLedgerReservation = `-- name: CreateLedgerReservation :one
+INSERT INTO ledger_reservations (
+    user_id,
+    request_record_id,
+    currency,
+    status,
+    authorized_amount,
+    idempotency_key,
+    reason
+)
+VALUES (
+           $1,
+           $2,
+           $3,
+           'authorized',
+           $4,
+           $5,
+           $6
+       )
+RETURNING
+    id,
+    user_id,
+    request_record_id,
+    currency,
+    status,
+    authorized_amount,
+    captured_amount,
+    released_amount,
+    capture_ledger_entry_id,
+    idempotency_key,
+    reason,
+    created_at,
+    updated_at,
+    captured_at,
+    released_at
+`
+
+type CreateLedgerReservationParams struct {
+	UserID           int64
+	RequestRecordID  int64
+	Currency         string
+	AuthorizedAmount pgtype.Numeric
+	IdempotencyKey   string
+	Reason           string
+}
+
+func (q *Queries) CreateLedgerReservation(ctx context.Context, arg CreateLedgerReservationParams) (LedgerReservation, error) {
+	row := q.db.QueryRow(ctx, createLedgerReservation,
+		arg.UserID,
+		arg.RequestRecordID,
+		arg.Currency,
+		arg.AuthorizedAmount,
+		arg.IdempotencyKey,
+		arg.Reason,
+	)
+	var i LedgerReservation
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.RequestRecordID,
+		&i.Currency,
+		&i.Status,
+		&i.AuthorizedAmount,
+		&i.CapturedAmount,
+		&i.ReleasedAmount,
+		&i.CaptureLedgerEntryID,
+		&i.IdempotencyKey,
+		&i.Reason,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.CapturedAt,
+		&i.ReleasedAt,
+	)
+	return i, err
+}
+
 const createUserBalance = `-- name: CreateUserBalance :one
 INSERT INTO
     user_balances (user_id, currency, balance)
@@ -141,6 +329,7 @@ RETURNING
     user_id,
     currency,
     balance,
+    reserved_balance,
     created_at,
     updated_at
 `
@@ -159,6 +348,7 @@ func (q *Queries) CreateUserBalance(ctx context.Context, arg CreateUserBalancePa
 		&i.UserID,
 		&i.Currency,
 		&i.Balance,
+		&i.ReservedBalance,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -219,12 +409,146 @@ func (q *Queries) GetLedgerEntryByIdempotencyKey(ctx context.Context, idempotenc
 	return i, err
 }
 
+const getLedgerReservationByIdempotencyKey = `-- name: GetLedgerReservationByIdempotencyKey :one
+SELECT
+    id,
+    user_id,
+    request_record_id,
+    currency,
+    status,
+    authorized_amount,
+    captured_amount,
+    released_amount,
+    capture_ledger_entry_id,
+    idempotency_key,
+    reason,
+    created_at,
+    updated_at,
+    captured_at,
+    released_at
+FROM ledger_reservations
+WHERE idempotency_key = $1
+`
+
+func (q *Queries) GetLedgerReservationByIdempotencyKey(ctx context.Context, idempotencyKey string) (LedgerReservation, error) {
+	row := q.db.QueryRow(ctx, getLedgerReservationByIdempotencyKey, idempotencyKey)
+	var i LedgerReservation
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.RequestRecordID,
+		&i.Currency,
+		&i.Status,
+		&i.AuthorizedAmount,
+		&i.CapturedAmount,
+		&i.ReleasedAmount,
+		&i.CaptureLedgerEntryID,
+		&i.IdempotencyKey,
+		&i.Reason,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.CapturedAt,
+		&i.ReleasedAt,
+	)
+	return i, err
+}
+
+const getLedgerReservationByRequestRecordID = `-- name: GetLedgerReservationByRequestRecordID :one
+SELECT
+    id,
+    user_id,
+    request_record_id,
+    currency,
+    status,
+    authorized_amount,
+    captured_amount,
+    released_amount,
+    capture_ledger_entry_id,
+    idempotency_key,
+    reason,
+    created_at,
+    updated_at,
+    captured_at,
+    released_at
+FROM ledger_reservations
+WHERE request_record_id = $1
+`
+
+func (q *Queries) GetLedgerReservationByRequestRecordID(ctx context.Context, requestRecordID int64) (LedgerReservation, error) {
+	row := q.db.QueryRow(ctx, getLedgerReservationByRequestRecordID, requestRecordID)
+	var i LedgerReservation
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.RequestRecordID,
+		&i.Currency,
+		&i.Status,
+		&i.AuthorizedAmount,
+		&i.CapturedAmount,
+		&i.ReleasedAmount,
+		&i.CaptureLedgerEntryID,
+		&i.IdempotencyKey,
+		&i.Reason,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.CapturedAt,
+		&i.ReleasedAt,
+	)
+	return i, err
+}
+
+const getLedgerReservationByRequestRecordIDForUpdate = `-- name: GetLedgerReservationByRequestRecordIDForUpdate :one
+SELECT
+    id,
+    user_id,
+    request_record_id,
+    currency,
+    status,
+    authorized_amount,
+    captured_amount,
+    released_amount,
+    capture_ledger_entry_id,
+    idempotency_key,
+    reason,
+    created_at,
+    updated_at,
+    captured_at,
+    released_at
+FROM ledger_reservations
+WHERE request_record_id = $1
+    FOR UPDATE
+`
+
+func (q *Queries) GetLedgerReservationByRequestRecordIDForUpdate(ctx context.Context, requestRecordID int64) (LedgerReservation, error) {
+	row := q.db.QueryRow(ctx, getLedgerReservationByRequestRecordIDForUpdate, requestRecordID)
+	var i LedgerReservation
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.RequestRecordID,
+		&i.Currency,
+		&i.Status,
+		&i.AuthorizedAmount,
+		&i.CapturedAmount,
+		&i.ReleasedAmount,
+		&i.CaptureLedgerEntryID,
+		&i.IdempotencyKey,
+		&i.Reason,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.CapturedAt,
+		&i.ReleasedAt,
+	)
+	return i, err
+}
+
 const getUserBalance = `-- name: GetUserBalance :one
 SELECT
     id,
     user_id,
     currency,
     balance,
+    reserved_balance,
     created_at,
     updated_at
 FROM
@@ -247,6 +571,7 @@ func (q *Queries) GetUserBalance(ctx context.Context, arg GetUserBalanceParams) 
 		&i.UserID,
 		&i.Currency,
 		&i.Balance,
+		&i.ReservedBalance,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -259,6 +584,7 @@ SELECT
     user_id,
     currency,
     balance,
+    reserved_balance,
     created_at,
     updated_at
 FROM
@@ -282,6 +608,7 @@ func (q *Queries) GetUserBalanceForUpdate(ctx context.Context, arg GetUserBalanc
 		&i.UserID,
 		&i.Currency,
 		&i.Balance,
+		&i.ReservedBalance,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -306,7 +633,7 @@ FROM
 WHERE
     request_record_id = $1
 ORDER BY
-    id ASC
+    id
 `
 
 func (q *Queries) ListLedgerEntriesByRequest(ctx context.Context, requestRecordID pgtype.Int8) ([]LedgerEntry, error) {
@@ -412,6 +739,134 @@ func (q *Queries) ListLedgerEntriesByUser(ctx context.Context, arg ListLedgerEnt
 	return items, nil
 }
 
+const releaseLedgerReservation = `-- name: ReleaseLedgerReservation :one
+UPDATE ledger_reservations
+SET
+    status = 'released',
+    released_amount = authorized_amount,
+    released_at = now(),
+    updated_at = now()
+WHERE id = $1
+  AND status = 'authorized'
+RETURNING
+    id,
+    user_id,
+    request_record_id,
+    currency,
+    status,
+    authorized_amount,
+    captured_amount,
+    released_amount,
+    capture_ledger_entry_id,
+    idempotency_key,
+    reason,
+    created_at,
+    updated_at,
+    captured_at,
+    released_at
+`
+
+func (q *Queries) ReleaseLedgerReservation(ctx context.Context, id int64) (LedgerReservation, error) {
+	row := q.db.QueryRow(ctx, releaseLedgerReservation, id)
+	var i LedgerReservation
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.RequestRecordID,
+		&i.Currency,
+		&i.Status,
+		&i.AuthorizedAmount,
+		&i.CapturedAmount,
+		&i.ReleasedAmount,
+		&i.CaptureLedgerEntryID,
+		&i.IdempotencyKey,
+		&i.Reason,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.CapturedAt,
+		&i.ReleasedAt,
+	)
+	return i, err
+}
+
+const releaseUserReservedBalance = `-- name: ReleaseUserReservedBalance :one
+UPDATE user_balances
+SET
+    reserved_balance = reserved_balance - $1,
+    updated_at = now()
+WHERE user_id = $2
+  AND currency = $3
+  AND reserved_balance >= $1
+RETURNING
+    id,
+    user_id,
+    currency,
+    balance,
+    reserved_balance,
+    created_at,
+    updated_at
+`
+
+type ReleaseUserReservedBalanceParams struct {
+	Amount   pgtype.Numeric
+	UserID   int64
+	Currency string
+}
+
+func (q *Queries) ReleaseUserReservedBalance(ctx context.Context, arg ReleaseUserReservedBalanceParams) (UserBalance, error) {
+	row := q.db.QueryRow(ctx, releaseUserReservedBalance, arg.Amount, arg.UserID, arg.Currency)
+	var i UserBalance
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Currency,
+		&i.Balance,
+		&i.ReservedBalance,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const reserveUserBalance = `-- name: ReserveUserBalance :one
+UPDATE user_balances
+SET
+    reserved_balance = reserved_balance + $1,
+    updated_at = now()
+WHERE user_id = $2
+    AND currency = $3
+    AND balance - reserved_balance >= $1
+RETURNING
+    id,
+    user_id,
+    currency,
+    balance,
+    reserved_balance,
+    created_at,
+    updated_at
+`
+
+type ReserveUserBalanceParams struct {
+	Amount   pgtype.Numeric
+	UserID   int64
+	Currency string
+}
+
+func (q *Queries) ReserveUserBalance(ctx context.Context, arg ReserveUserBalanceParams) (UserBalance, error) {
+	row := q.db.QueryRow(ctx, reserveUserBalance, arg.Amount, arg.UserID, arg.Currency)
+	var i UserBalance
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Currency,
+		&i.Balance,
+		&i.ReservedBalance,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const subtractUserBalance = `-- name: SubtractUserBalance :one
 UPDATE user_balances
 SET
@@ -420,11 +875,13 @@ SET
 WHERE user_id = $2
   AND currency = $3
   AND balance >= $1
+  AND balance - reserved_balance >= $1
 RETURNING
     id,
     user_id,
     currency,
     balance,
+    reserved_balance,
     created_at,
     updated_at
 `
@@ -443,6 +900,7 @@ func (q *Queries) SubtractUserBalance(ctx context.Context, arg SubtractUserBalan
 		&i.UserID,
 		&i.Currency,
 		&i.Balance,
+		&i.ReservedBalance,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -462,6 +920,7 @@ RETURNING
     user_id,
     currency,
     balance,
+    reserved_balance,
     created_at,
     updated_at
 `
@@ -480,6 +939,7 @@ func (q *Queries) UpdateUserBalance(ctx context.Context, arg UpdateUserBalancePa
 		&i.UserID,
 		&i.Currency,
 		&i.Balance,
+		&i.ReservedBalance,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
