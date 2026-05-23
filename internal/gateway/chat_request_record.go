@@ -151,7 +151,7 @@ func (s *ChatCompletionService) markRequestCanceled(ctx context.Context, request
 		message = err.Error()
 	}
 
-	// TODO(阶段7/production): [GAP-7-004] 无 final usage 的客户端取消缺少 pre-authorize 会造成平台成本无法准确结算或被滥用；公开生产前；基于预授权、退款或异常风控处理无 usage canceled request。
+	// TODO(阶段7/production): [GAP-7-004] 无 final usage 的取消或中断无法得到真实 actual amount，当前只能释放冻结余额并记录 canceled，平台仍可能承担上游成本；公开生产前；补异常风控、provider 可取消能力和无 usage 成本核销策略。
 	// 客户端断开时原请求 ctx 通常已经取消；这里脱离请求取消，
 	// 给审计写入一个很短的补偿窗口，避免 canceled 状态写不进去。
 	auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)

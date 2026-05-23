@@ -133,14 +133,14 @@ func TestCalculateRoundsToAmountScale(t *testing.T) {
 	assertNumeric(t, settlement.Amount, 1, -10)
 }
 
-// TestEstimateAuthorizationUsesHigherCompletionPrice 验证预授权按 output/reasoning 中更贵的 completion 价格冻结。
-func TestEstimateAuthorizationUsesHigherCompletionPrice(t *testing.T) {
-	settlement, err := (Service{}).EstimateAuthorization(AuthorizationEstimate{
+// TestEstimateAuthorizationAmountUsesHigherCompletionPrice 验证冻结金额按 output/reasoning 中更贵的 completion 价格计算。
+func TestEstimateAuthorizationAmountUsesHigherCompletionPrice(t *testing.T) {
+	settlement, err := (Service{}).EstimateAuthorizationAmount(AuthorizationEstimate{
 		PromptTokens:        1000,
 		MaxCompletionTokens: 500,
 	}, defaultPriceSnapshot())
 	if err != nil {
-		t.Fatalf("estimate authorization: %v", err)
+		t.Fatalf("estimate reservation amount: %v", err)
 	}
 
 	if settlement.Currency != "USD" {
@@ -154,25 +154,25 @@ func TestEstimateAuthorizationUsesHigherCompletionPrice(t *testing.T) {
 	assertNumeric(t, settlement.Amount, 80_000000, -10)
 }
 
-// TestEstimateAuthorizationFallsBackToOutputPrice 验证 reasoning 价格未配置时按普通 output 价格估算。
-func TestEstimateAuthorizationFallsBackToOutputPrice(t *testing.T) {
+// TestEstimateAuthorizationAmountFallsBackToOutputPrice 验证 reasoning 价格未配置时按普通 output 价格估算。
+func TestEstimateAuthorizationAmountFallsBackToOutputPrice(t *testing.T) {
 	price := defaultPriceSnapshot()
 	price.ReasoningOutputPrice = nullNumeric()
 
-	settlement, err := (Service{}).EstimateAuthorization(AuthorizationEstimate{
+	settlement, err := (Service{}).EstimateAuthorizationAmount(AuthorizationEstimate{
 		PromptTokens:        1000,
 		MaxCompletionTokens: 500,
 	}, price)
 	if err != nil {
-		t.Fatalf("estimate authorization: %v", err)
+		t.Fatalf("estimate reservation amount: %v", err)
 	}
 
 	// (1000*2 + 500*8) / 1_000_000 = 0.0060000000。
 	assertNumeric(t, settlement.Amount, 60_000000, -10)
 }
 
-// TestEstimateAuthorizationRejectsInvalidEstimate 验证预授权估算不接受负数 token。
-func TestEstimateAuthorizationRejectsInvalidEstimate(t *testing.T) {
+// TestEstimateAuthorizationAmountRejectsInvalidEstimate 验证冻结金额估算不接受负数 token。
+func TestEstimateAuthorizationAmountRejectsInvalidEstimate(t *testing.T) {
 	tests := []struct {
 		name     string
 		estimate AuthorizationEstimate
@@ -189,7 +189,7 @@ func TestEstimateAuthorizationRejectsInvalidEstimate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := (Service{}).EstimateAuthorization(tt.estimate, defaultPriceSnapshot())
+			_, err := (Service{}).EstimateAuthorizationAmount(tt.estimate, defaultPriceSnapshot())
 			if !errors.Is(err, ErrInvalidUsage) {
 				t.Fatalf("expected ErrInvalidUsage, got %v", err)
 			}

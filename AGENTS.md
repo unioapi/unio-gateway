@@ -270,6 +270,17 @@ Provider、channel、model、price、fallback、health 和 rate policy 属于业
 - OpenAI-compatible endpoint 不能无脑透传上游错误 body。
 - 用户 API key、后台 admin auth、用户后台 console auth 不能混用。
 
+计费与余额商业规则：
+
+- 用户不需要为一次 API 调用手动计算 token 或费用；估算、冻结、结算和核销由平台负责。
+- Unio 当前采用严格不透支用户余额的预付费模型，不允许静默欠费、负余额或充值后偷偷追扣旧账；如果未来支持信用额度，必须另做产品决策和账务模型。
+- Chat authorization 必须区分 `estimated_amount` 和 `authorized_amount`：前者是本次请求的风险估算，后者是实际从用户可用余额中冻结的钱。
+- 当 `available_balance <= 0` 时，请求必须在调用上游前拒绝。
+- 当 `0 < available_balance < estimated_amount` 时，允许冻结全部可用余额并继续请求；成功后最多扣除已冻结金额，超出部分记录为平台 `written_off_amount` / `platform_loss`。
+- 当 `available_balance >= estimated_amount` 时，按估算金额冻结；成功后按真实 usage capture，多余冻结金额 release。
+- 上游成功且有可靠 usage 时，`actual_amount > authorized_amount` 不应作为普通 settlement failed；应 capture 已冻结金额、记录差额核销，并让请求按成功账务事实收口。
+- 差额核销必须有可审计账务事实、原因码和告警；不能只吞掉错误或只写日志。
+
 ## Failure 错误规范
 
 项目内部稳定错误统一使用 `internal/failure` 表达。

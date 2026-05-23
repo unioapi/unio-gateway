@@ -152,7 +152,7 @@
 
 计划实现：
 
-1. 阶段 7 preauthorization 统一处理预算约束。
+1. 阶段 7 reservation/余额冻结 统一处理预算约束。
 2. 阶段 9 项目策略管理处理 project 禁用、专属 channel 和后台配置入口。
 
 关联 GAP：

@@ -60,13 +60,13 @@ gateway/routing 负责选择 channel 并解析 credential，adapter 只负责协
 原因：
 
 ```text
-估算扣费可能导致误扣，且当前没有预授权和退款闭环。
+估算扣费可能导致误扣，且当前没有余额冻结和 release 闭环。
 ```
 
 影响：
 
 ```text
-公开生产前必须实现预授权、异常状态记录和风控策略。
+公开生产前必须实现余额冻结、异常状态记录和风控策略。
 关联任务：../chapters/phase-07-billing-ledger/PLAN.md#task-7-17-preauthorization
 ```
 
@@ -116,3 +116,43 @@ HTTP correlation id 仍需要输入约束。
 新增通用能力前必须先检查 docs/production/THIRD_PARTY_POLICY.md。
 ```
 
+## DEC-006 部分余额放行与平台差额核销
+
+状态：accepted
+
+决策：
+
+```text
+Chat 请求采用严格不透支用户余额的预付费模型，但低余额用户可以消耗剩余可用余额。
+
+调用上游前，billing 计算 estimated_amount；ledger 实际冻结 authorized_amount。
+当 available_balance >= estimated_amount 时，authorized_amount = estimated_amount。
+当 0 < available_balance < estimated_amount 时，authorized_amount = available_balance，请求仍可继续。
+当 available_balance <= 0 时，请求直接拒绝，不调用上游。
+
+请求成功后按真实 actual_amount 结算：
+captured_amount = min(actual_amount, authorized_amount)
+written_off_amount = max(actual_amount - captured_amount, 0)
+
+written_off_amount 是平台差额核销，不形成用户隐性欠费，不允许用户余额变负。
+```
+
+原因：
+
+```text
+用户不应该为了发起 API 请求而精确计算 token 或预估费用。
+如果要求余额必须覆盖最坏冻结金额，低余额用户会出现“有余额但花不出去”的反人类体验。
+如果允许追扣或负余额，又会引入欠费、追款和充值抵扣等新的产品与账务复杂度。
+
+当前阶段选择平台承担少量估算差额，用 tokenizer、模型 max_tokens、核销上限和告警把风险压到低频异常。
+```
+
+影响：
+
+```text
+authorization 必须拆分 estimated_amount 与 authorized_amount。
+settlement 不能再把 actual_amount > authorized_amount 当作普通失败；
+应 capture 已冻结金额，记录 write-off 账务事实，并在上游成功且有 usage 时让 request 成功收口。
+
+实现前由 GAP-7-014 作为公开计费 API 阻断项跟踪。
+```

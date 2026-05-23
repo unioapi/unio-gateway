@@ -89,6 +89,15 @@ type fakeChatSettlementExecutor struct {
 	err    error
 }
 
+// fakeChatAuthorizer 是 gateway 测试使用的 chat authorization 替身。
+type fakeChatAuthorizer struct {
+	authorizeParams []ChatAuthorizeParams
+	releaseParams   []ChatReleaseAuthorizationParams
+	authorization   ChatAuthorization
+	authorizeErr    error
+	releaseErr      error
+}
+
 // newFakeRequestLogService 创建测试用 requestlog.Service。
 func newFakeRequestLogService() *fakeRequestLogService {
 	return &fakeRequestLogService{
@@ -101,6 +110,31 @@ func newFakeRequestLogService() *fakeRequestLogService {
 func (s *fakeChatSettlementExecutor) SettleSuccessfulChat(ctx context.Context, params ChatSettlementParams) error {
 	s.params = append(s.params, params)
 	return s.err
+}
+
+// AuthorizeChat 记录冻结余额参数，并返回测试预设授权。
+func (a *fakeChatAuthorizer) AuthorizeChat(ctx context.Context, params ChatAuthorizeParams) (ChatAuthorization, error) {
+	a.authorizeParams = append(a.authorizeParams, params)
+	if a.authorizeErr != nil {
+		return ChatAuthorization{}, a.authorizeErr
+	}
+
+	authorization := a.authorization
+	if authorization.ReservationID == 0 {
+		authorization.ReservationID = 7000 + int64(len(a.authorizeParams))
+	}
+	authorization.RequestRecordID = params.RequestRecord.ID
+	if authorization.Currency == "" {
+		authorization.Currency = "USD"
+	}
+
+	return authorization, nil
+}
+
+// ReleaseChat 记录释放冻结余额参数，并返回测试预设错误。
+func (a *fakeChatAuthorizer) ReleaseChat(ctx context.Context, params ChatReleaseAuthorizationParams) error {
+	a.releaseParams = append(a.releaseParams, params)
+	return a.releaseErr
 }
 
 // CreateRequest 记录创建 request record 的参数并返回 pending 记录。
@@ -380,6 +414,28 @@ func newChatCompletionSettlementForTest() *fakeChatSettlementExecutor {
 	return &fakeChatSettlementExecutor{}
 }
 
+// newChatCompletionAuthorizerForTest 创建 chat completion 测试用授权替身。
+func newChatCompletionAuthorizerForTest() *fakeChatAuthorizer {
+	return &fakeChatAuthorizer{}
+}
+
+// newChatCompletionServiceForTest 创建带默认授权替身的 gateway service。
+func newChatCompletionServiceForTest(router ChatRouter, registry AdapterRegistry, retryClassifier RetryClassifier, requestLog requestlog.Service, settlement ChatSettlementExecutor) *ChatCompletionService {
+	return newChatCompletionServiceForTestWithAuthorizer(router, registry, retryClassifier, requestLog, settlement, newChatCompletionAuthorizerForTest())
+}
+
+// newChatCompletionServiceForTestWithAuthorizer 创建可注入授权替身的 gateway service。
+func newChatCompletionServiceForTestWithAuthorizer(router ChatRouter, registry AdapterRegistry, retryClassifier RetryClassifier, requestLog requestlog.Service, settlement ChatSettlementExecutor, authorizer ChatAuthorizer) *ChatCompletionService {
+	return NewChatCompletionService(
+		router,
+		registry,
+		retryClassifier,
+		requestLog,
+		settlement,
+		authorizer,
+	)
+}
+
 func TestChatCompletionServiceCreateChatCompletionRoutesAndCallsAdapter(t *testing.T) {
 	fakeAdapter := &fakeChatAdapter{
 		chatResp: chatResponse("adapter response"),
@@ -394,7 +450,10 @@ func TestChatCompletionServiceCreateChatCompletionRoutesAndCallsAdapter(t *testi
 	}
 	requestLog := newFakeRequestLogService()
 	settlement := newChatCompletionSettlementForTest()
-	service := NewChatCompletionService(router, registry, nil, requestLog, settlement)
+	authorizer := &fakeChatAuthorizer{
+		authorization: ChatAuthorization{ReservationID: 7788},
+	}
+	service := newChatCompletionServiceForTestWithAuthorizer(router, registry, nil, requestLog, settlement, authorizer)
 
 	got, err := service.CreateChatCompletion(contextWithPrincipal(42), chatRequestWithParams())
 	if err != nil {
@@ -493,13 +552,25 @@ func TestChatCompletionServiceCreateChatCompletionRoutesAndCallsAdapter(t *testi
 	if settlementParams.Usage.TotalTokens != 21 {
 		t.Fatalf("expected settlement total tokens %d, got %d", 21, settlementParams.Usage.TotalTokens)
 	}
+	if len(authorizer.authorizeParams) != 1 {
+		t.Fatalf("expected one authorization, got %d", len(authorizer.authorizeParams))
+	}
+	if authorizer.authorizeParams[0].ModelDBID != 1123 {
+		t.Fatalf("expected authorization model db id %d, got %d", int64(1123), authorizer.authorizeParams[0].ModelDBID)
+	}
+	if settlementParams.Authorization.ReservationID != 7788 {
+		t.Fatalf("expected settlement authorization reservation id %d, got %d", int64(7788), settlementParams.Authorization.ReservationID)
+	}
+	if len(authorizer.releaseParams) != 0 {
+		t.Fatalf("expected no authorization release on success, got %d", len(authorizer.releaseParams))
+	}
 }
 
 func TestChatCompletionServiceCreateChatCompletionDoesNotCallAdapterOnRoutingError(t *testing.T) {
 	routingErr := errors.New("no route")
 	fakeAdapter := &fakeChatAdapter{}
 	requestLog := newFakeRequestLogService()
-	service := NewChatCompletionService(
+	service := newChatCompletionServiceForTest(
 		&fakeChatRouter{err: routingErr},
 		&fakeAdapterRegistry{
 			chatAdapters: map[string]adapter.ChatAdapter{
@@ -572,12 +643,15 @@ func TestRoutingFailureCodeClassifiesRoutingErrors(t *testing.T) {
 func TestChatCompletionServiceCreateChatCompletionMarksRequestFailedOnSettlementError(t *testing.T) {
 	settlementErr := errors.New("settlement failed")
 	settlement := &fakeChatSettlementExecutor{err: settlementErr}
+	authorizer := &fakeChatAuthorizer{
+		authorization: ChatAuthorization{ReservationID: 7701},
+	}
 
 	fakeAdapter := &fakeChatAdapter{
 		chatResp: chatResponse("adapter response"),
 	}
 	requestLog := newFakeRequestLogService()
-	service := NewChatCompletionService(
+	service := newChatCompletionServiceForTestWithAuthorizer(
 		&fakeChatRouter{plan: routePlan(routeCandidate("openai", 123, "gpt-4.1"))},
 		&fakeAdapterRegistry{
 			chatAdapters: map[string]adapter.ChatAdapter{
@@ -587,6 +661,7 @@ func TestChatCompletionServiceCreateChatCompletionMarksRequestFailedOnSettlement
 		nil,
 		requestLog,
 		settlement,
+		authorizer,
 	)
 
 	_, err := service.CreateChatCompletion(contextWithPrincipal(42), chatRequest())
@@ -595,6 +670,12 @@ func TestChatCompletionServiceCreateChatCompletionMarksRequestFailedOnSettlement
 	}
 	if len(settlement.params) != 1 {
 		t.Fatalf("expected settlement to be called once, got %d", len(settlement.params))
+	}
+	if settlement.params[0].Authorization.ReservationID != 7701 {
+		t.Fatalf("expected settlement reservation id %d, got %d", int64(7701), settlement.params[0].Authorization.ReservationID)
+	}
+	if len(authorizer.releaseParams) != 0 {
+		t.Fatalf("expected no authorization release when settlement fails, got %d", len(authorizer.releaseParams))
 	}
 	if len(requestLog.markRequestFailedArgs) != 1 {
 		t.Fatalf("expected request to be marked failed once, got %d", len(requestLog.markRequestFailedArgs))
@@ -607,16 +688,73 @@ func TestChatCompletionServiceCreateChatCompletionMarksRequestFailedOnSettlement
 	}
 }
 
+func TestChatCompletionServiceCreateChatCompletionDoesNotCallAdapterWhenAuthorizationFails(t *testing.T) {
+	authorizationErr := errors.New("authorization failed")
+	fakeAdapter := &fakeChatAdapter{chatResp: chatResponse("should not call")}
+	requestLog := newFakeRequestLogService()
+	settlement := newChatCompletionSettlementForTest()
+	authorizer := &fakeChatAuthorizer{authorizeErr: authorizationErr}
+	service := newChatCompletionServiceForTestWithAuthorizer(
+		&fakeChatRouter{plan: routePlan(routeCandidate("openai", 123, "gpt-4.1"))},
+		&fakeAdapterRegistry{
+			chatAdapters: map[string]adapter.ChatAdapter{
+				"openai": fakeAdapter,
+			},
+		},
+		nil,
+		requestLog,
+		settlement,
+		authorizer,
+	)
+
+	_, err := service.CreateChatCompletion(contextWithPrincipal(42), chatRequest())
+	if !errors.Is(err, authorizationErr) {
+		t.Fatalf("expected authorization error, got %v", err)
+	}
+	if len(authorizer.authorizeParams) != 1 {
+		t.Fatalf("expected one authorization attempt, got %d", len(authorizer.authorizeParams))
+	}
+	if authorizer.authorizeParams[0].RequestRecord.ID != 1 {
+		t.Fatalf("expected authorization request record id 1, got %d", authorizer.authorizeParams[0].RequestRecord.ID)
+	}
+	if authorizer.authorizeParams[0].ModelDBID != 1123 {
+		t.Fatalf("expected authorization model db id %d, got %d", int64(1123), authorizer.authorizeParams[0].ModelDBID)
+	}
+	if fakeAdapter.chatCalled != 0 {
+		t.Fatalf("expected adapter not to be called after authorization failure, got %d", fakeAdapter.chatCalled)
+	}
+	if len(authorizer.releaseParams) != 0 {
+		t.Fatalf("expected no release when authorization was not created, got %d", len(authorizer.releaseParams))
+	}
+	if len(settlement.params) != 0 {
+		t.Fatalf("expected settlement not to be called, got %d", len(settlement.params))
+	}
+	if len(requestLog.markAttemptFailedArgs) != 1 {
+		t.Fatalf("expected attempt to fail once, got %d", len(requestLog.markAttemptFailedArgs))
+	}
+	if requestLog.markAttemptFailedArgs[0].ErrorCode != "chat_authorization_failed" {
+		t.Fatalf("expected attempt error code %q, got %q", "chat_authorization_failed", requestLog.markAttemptFailedArgs[0].ErrorCode)
+	}
+	if len(requestLog.markRequestFailedArgs) != 1 {
+		t.Fatalf("expected request to fail once, got %d", len(requestLog.markRequestFailedArgs))
+	}
+	if requestLog.markRequestFailedArgs[0].ErrorCode != "chat_authorization_failed" {
+		t.Fatalf("expected request error code %q, got %q", "chat_authorization_failed", requestLog.markRequestFailedArgs[0].ErrorCode)
+	}
+}
+
 func TestChatCompletionServiceCreateChatCompletionReturnsMissingAdapterWithoutRetry(t *testing.T) {
 	classifier := &fakeRetryClassifier{retryable: true}
 	requestLog := newFakeRequestLogService()
 	settlement := newChatCompletionSettlementForTest()
-	service := NewChatCompletionService(
+	authorizer := newChatCompletionAuthorizerForTest()
+	service := newChatCompletionServiceForTestWithAuthorizer(
 		&fakeChatRouter{plan: routePlan(routeCandidate("missing", 123, "gpt-4.1"))},
 		&fakeAdapterRegistry{chatAdapters: map[string]adapter.ChatAdapter{}},
 		classifier,
 		requestLog,
 		settlement,
+		authorizer,
 	)
 
 	_, err := service.CreateChatCompletion(contextWithPrincipal(42), chatRequest())
@@ -628,6 +766,12 @@ func TestChatCompletionServiceCreateChatCompletionReturnsMissingAdapterWithoutRe
 	}
 	if len(settlement.params) != 0 {
 		t.Fatalf("expected settlement not to be called, got %d calls", len(settlement.params))
+	}
+	if len(authorizer.authorizeParams) != 0 {
+		t.Fatalf("expected missing adapter not to authorize balance, got %d authorizations", len(authorizer.authorizeParams))
+	}
+	if len(authorizer.releaseParams) != 0 {
+		t.Fatalf("expected no authorization release when nothing was authorized, got %d", len(authorizer.releaseParams))
 	}
 	if len(requestLog.createAttempts) != 1 {
 		t.Fatalf("expected one attempt for missing adapter, got %d", len(requestLog.createAttempts))
@@ -649,6 +793,52 @@ func TestChatCompletionServiceCreateChatCompletionReturnsMissingAdapterWithoutRe
 	}
 }
 
+func TestChatCompletionServiceCreateChatCompletionReleasesAuthorizationWhenFallbackAdapterMissing(t *testing.T) {
+	upstreamErr := errors.New("temporary upstream error")
+	firstAdapter := &fakeChatAdapter{chatErr: upstreamErr}
+	classifier := &fakeRetryClassifier{retryable: true}
+	requestLog := newFakeRequestLogService()
+	settlement := newChatCompletionSettlementForTest()
+	authorizer := &fakeChatAuthorizer{
+		authorization: ChatAuthorization{ReservationID: 8811},
+	}
+	service := newChatCompletionServiceForTestWithAuthorizer(
+		&fakeChatRouter{plan: routePlan(
+			routeCandidate("openai-primary", 101, "gpt-4.1"),
+			routeCandidate("missing-secondary", 102, "gpt-4.1"),
+		)},
+		&fakeAdapterRegistry{
+			chatAdapters: map[string]adapter.ChatAdapter{
+				"openai-primary": firstAdapter,
+			},
+		},
+		classifier,
+		requestLog,
+		settlement,
+		authorizer,
+	)
+
+	_, err := service.CreateChatCompletion(contextWithPrincipal(42), chatRequest())
+	if err == nil {
+		t.Fatal("expected missing fallback adapter error")
+	}
+	if firstAdapter.chatCalled != 1 {
+		t.Fatalf("expected first adapter to be called once, got %d", firstAdapter.chatCalled)
+	}
+	if classifier.called != 1 {
+		t.Fatalf("expected retry classifier to be called once, got %d", classifier.called)
+	}
+	if len(settlement.params) != 0 {
+		t.Fatalf("expected settlement not to be called, got %d", len(settlement.params))
+	}
+	if len(authorizer.releaseParams) != 1 {
+		t.Fatalf("expected authorization release when fallback adapter is missing, got %d", len(authorizer.releaseParams))
+	}
+	if authorizer.releaseParams[0].ReservationID != 8811 {
+		t.Fatalf("expected released reservation id %d, got %d", int64(8811), authorizer.releaseParams[0].ReservationID)
+	}
+}
+
 func TestChatCompletionServiceCreateChatCompletionFallsBackOnRetryableAdapterError(t *testing.T) {
 	upstreamErr := errors.New("temporary upstream error")
 	firstAdapter := &fakeChatAdapter{chatErr: upstreamErr}
@@ -656,7 +846,10 @@ func TestChatCompletionServiceCreateChatCompletionFallsBackOnRetryableAdapterErr
 	classifier := &fakeRetryClassifier{retryable: true}
 	requestLog := newFakeRequestLogService()
 	settlement := newChatCompletionSettlementForTest()
-	service := NewChatCompletionService(
+	authorizer := &fakeChatAuthorizer{
+		authorization: ChatAuthorization{ReservationID: 7799},
+	}
+	service := newChatCompletionServiceForTestWithAuthorizer(
 		&fakeChatRouter{plan: routePlan(
 			routeCandidate("openai-primary", 101, "gpt-4.1"),
 			routeCandidate("openai-secondary", 102, "gpt-4.1"),
@@ -670,6 +863,7 @@ func TestChatCompletionServiceCreateChatCompletionFallsBackOnRetryableAdapterErr
 		classifier,
 		requestLog,
 		settlement,
+		authorizer,
 	)
 
 	got, err := service.CreateChatCompletion(contextWithPrincipal(42), chatRequest())
@@ -706,8 +900,78 @@ func TestChatCompletionServiceCreateChatCompletionFallsBackOnRetryableAdapterErr
 	if len(settlement.params) != 1 {
 		t.Fatalf("expected request to be settled once, got %d", len(settlement.params))
 	}
+	if len(authorizer.authorizeParams) != 1 {
+		t.Fatalf("expected one request-level authorization across fallback, got %d", len(authorizer.authorizeParams))
+	}
+	if settlement.params[0].Authorization.ReservationID != 7799 {
+		t.Fatalf("expected settlement reservation id %d, got %d", int64(7799), settlement.params[0].Authorization.ReservationID)
+	}
+	if len(authorizer.releaseParams) != 0 {
+		t.Fatalf("expected no authorization release after successful fallback settlement, got %d", len(authorizer.releaseParams))
+	}
 	if len(requestLog.markRequestFailedArgs) != 0 {
 		t.Fatalf("expected request not to fail, got %#v", requestLog.markRequestFailedArgs)
+	}
+}
+
+func TestChatCompletionServiceCreateChatCompletionReleasesAuthorizationWhenAllRetryableAttemptsFail(t *testing.T) {
+	firstErr := errors.New("temporary upstream error")
+	secondErr := errors.New("second upstream error")
+	firstAdapter := &fakeChatAdapter{chatErr: firstErr}
+	secondAdapter := &fakeChatAdapter{chatErr: secondErr}
+	classifier := &fakeRetryClassifier{retryable: true}
+	requestLog := newFakeRequestLogService()
+	settlement := newChatCompletionSettlementForTest()
+	authorizer := &fakeChatAuthorizer{
+		authorization: ChatAuthorization{ReservationID: 7710},
+	}
+	service := newChatCompletionServiceForTestWithAuthorizer(
+		&fakeChatRouter{plan: routePlan(
+			routeCandidate("openai-primary", 101, "gpt-4.1"),
+			routeCandidate("openai-secondary", 102, "gpt-4.1"),
+		)},
+		&fakeAdapterRegistry{
+			chatAdapters: map[string]adapter.ChatAdapter{
+				"openai-primary":   firstAdapter,
+				"openai-secondary": secondAdapter,
+			},
+		},
+		classifier,
+		requestLog,
+		settlement,
+		authorizer,
+	)
+
+	_, err := service.CreateChatCompletion(contextWithPrincipal(42), chatRequest())
+	if !errors.Is(err, secondErr) {
+		t.Fatalf("expected last retryable adapter error, got %v", err)
+	}
+	if firstAdapter.chatCalled != 1 || secondAdapter.chatCalled != 1 {
+		t.Fatalf("expected both adapters to be called once, got first=%d second=%d", firstAdapter.chatCalled, secondAdapter.chatCalled)
+	}
+	if classifier.called != 2 {
+		t.Fatalf("expected retry classifier to be called twice, got %d", classifier.called)
+	}
+	if len(authorizer.authorizeParams) != 1 {
+		t.Fatalf("expected one request-level authorization, got %d", len(authorizer.authorizeParams))
+	}
+	if len(authorizer.releaseParams) != 1 {
+		t.Fatalf("expected one authorization release after all retryable attempts fail, got %d", len(authorizer.releaseParams))
+	}
+	if authorizer.releaseParams[0].ReservationID != 7710 {
+		t.Fatalf("expected released reservation id %d, got %d", int64(7710), authorizer.releaseParams[0].ReservationID)
+	}
+	if len(settlement.params) != 0 {
+		t.Fatalf("expected settlement not to be called, got %d", len(settlement.params))
+	}
+	if len(requestLog.markAttemptFailedArgs) != 2 {
+		t.Fatalf("expected two failed attempts, got %d", len(requestLog.markAttemptFailedArgs))
+	}
+	if len(requestLog.markRequestFailedArgs) != 1 {
+		t.Fatalf("expected request to fail once, got %d", len(requestLog.markRequestFailedArgs))
+	}
+	if requestLog.markRequestFailedArgs[0].ErrorCode != "adapter_error" {
+		t.Fatalf("expected request error code %q, got %q", "adapter_error", requestLog.markRequestFailedArgs[0].ErrorCode)
 	}
 }
 
@@ -717,7 +981,10 @@ func TestChatCompletionServiceCreateChatCompletionDoesNotFallbackOnNonRetryableA
 	secondAdapter := &fakeChatAdapter{chatResp: chatResponse("fallback response")}
 	classifier := &fakeRetryClassifier{retryable: false}
 	requestLog := newFakeRequestLogService()
-	service := NewChatCompletionService(
+	authorizer := &fakeChatAuthorizer{
+		authorization: ChatAuthorization{ReservationID: 7720},
+	}
+	service := newChatCompletionServiceForTestWithAuthorizer(
 		&fakeChatRouter{plan: routePlan(
 			routeCandidate("openai-primary", 101, "gpt-4.1"),
 			routeCandidate("openai-secondary", 102, "gpt-4.1"),
@@ -731,6 +998,7 @@ func TestChatCompletionServiceCreateChatCompletionDoesNotFallbackOnNonRetryableA
 		classifier,
 		requestLog,
 		newChatCompletionSettlementForTest(),
+		authorizer,
 	)
 
 	_, err := service.CreateChatCompletion(contextWithPrincipal(42), chatRequest())
@@ -745,6 +1013,12 @@ func TestChatCompletionServiceCreateChatCompletionDoesNotFallbackOnNonRetryableA
 	}
 	if classifier.called != 1 {
 		t.Fatalf("expected retry classifier to be called once, got %d", classifier.called)
+	}
+	if len(authorizer.releaseParams) != 1 {
+		t.Fatalf("expected authorization release after non-retryable adapter error, got %d", len(authorizer.releaseParams))
+	}
+	if authorizer.releaseParams[0].ReservationID != 7720 {
+		t.Fatalf("expected released reservation id %d, got %d", int64(7720), authorizer.releaseParams[0].ReservationID)
 	}
 	if len(requestLog.createAttempts) != 1 {
 		t.Fatalf("expected only first attempt to be created, got %d", len(requestLog.createAttempts))
@@ -763,13 +1037,60 @@ func TestChatCompletionServiceCreateChatCompletionDoesNotFallbackOnNonRetryableA
 	}
 }
 
+func TestChatCompletionServiceCreateChatCompletionReturnsReleaseErrorWhenAdapterErrorReleaseFails(t *testing.T) {
+	upstreamErr := errors.New("invalid upstream request")
+	releaseErr := errors.New("release failed")
+	firstAdapter := &fakeChatAdapter{chatErr: upstreamErr}
+	classifier := &fakeRetryClassifier{retryable: false}
+	requestLog := newFakeRequestLogService()
+	authorizer := &fakeChatAuthorizer{
+		authorization: ChatAuthorization{ReservationID: 7730},
+		releaseErr:    releaseErr,
+	}
+	service := newChatCompletionServiceForTestWithAuthorizer(
+		&fakeChatRouter{plan: routePlan(routeCandidate("openai-primary", 101, "gpt-4.1"))},
+		&fakeAdapterRegistry{
+			chatAdapters: map[string]adapter.ChatAdapter{
+				"openai-primary": firstAdapter,
+			},
+		},
+		classifier,
+		requestLog,
+		newChatCompletionSettlementForTest(),
+		authorizer,
+	)
+
+	_, err := service.CreateChatCompletion(contextWithPrincipal(42), chatRequest())
+	if !errors.Is(err, releaseErr) {
+		t.Fatalf("expected release error to be returned, got %v", err)
+	}
+	if len(authorizer.releaseParams) != 1 {
+		t.Fatalf("expected one release attempt, got %d", len(authorizer.releaseParams))
+	}
+	if authorizer.releaseParams[0].ReservationID != 7730 {
+		t.Fatalf("expected released reservation id %d, got %d", int64(7730), authorizer.releaseParams[0].ReservationID)
+	}
+	if len(requestLog.markAttemptFailedArgs) != 1 {
+		t.Fatalf("expected original adapter attempt to be marked failed once, got %d", len(requestLog.markAttemptFailedArgs))
+	}
+	if len(requestLog.markRequestFailedArgs) != 1 {
+		t.Fatalf("expected request to be marked failed by release failure, got %d", len(requestLog.markRequestFailedArgs))
+	}
+	if requestLog.markRequestFailedArgs[0].ErrorCode != "chat_authorization_release_failed" {
+		t.Fatalf("expected request error code %q, got %q", "chat_authorization_release_failed", requestLog.markRequestFailedArgs[0].ErrorCode)
+	}
+}
+
 func TestChatCompletionServiceCreateChatCompletionMarksCanceledWithoutFallback(t *testing.T) {
 	firstAdapter := &fakeChatAdapter{chatErr: context.Canceled}
 	secondAdapter := &fakeChatAdapter{chatResp: chatResponse("should not call")}
 	classifier := &fakeRetryClassifier{retryable: true}
 	requestLog := newFakeRequestLogService()
 	settlement := newChatCompletionSettlementForTest()
-	service := NewChatCompletionService(
+	authorizer := &fakeChatAuthorizer{
+		authorization: ChatAuthorization{ReservationID: 7799},
+	}
+	service := newChatCompletionServiceForTestWithAuthorizer(
 		&fakeChatRouter{plan: routePlan(
 			routeCandidate("openai-primary", 101, "gpt-4.1"),
 			routeCandidate("openai-secondary", 102, "gpt-4.1"),
@@ -783,6 +1104,7 @@ func TestChatCompletionServiceCreateChatCompletionMarksCanceledWithoutFallback(t
 		classifier,
 		requestLog,
 		settlement,
+		authorizer,
 	)
 
 	_, err := service.CreateChatCompletion(contextWithPrincipal(42), chatRequest())
@@ -800,6 +1122,12 @@ func TestChatCompletionServiceCreateChatCompletionMarksCanceledWithoutFallback(t
 	}
 	if len(settlement.params) != 0 {
 		t.Fatalf("expected settlement not to be called, got %d calls", len(settlement.params))
+	}
+	if len(authorizer.releaseParams) != 1 {
+		t.Fatalf("expected one authorization release after client cancel, got %d", len(authorizer.releaseParams))
+	}
+	if authorizer.releaseParams[0].ReservationID != 7799 {
+		t.Fatalf("expected released reservation id %d, got %d", int64(7799), authorizer.releaseParams[0].ReservationID)
 	}
 	if len(requestLog.markAttemptCanceledArgs) != 1 {
 		t.Fatalf("expected 1 attempt canceled call, got %d", len(requestLog.markAttemptCanceledArgs))
@@ -843,7 +1171,10 @@ func TestChatCompletionServiceStreamChatCompletionRoutesAndCallsAdapter(t *testi
 	}
 	requestLog := newFakeRequestLogService()
 	settlement := newChatCompletionSettlementForTest()
-	service := NewChatCompletionService(router, registry, nil, requestLog, settlement)
+	authorizer := &fakeChatAuthorizer{
+		authorization: ChatAuthorization{ReservationID: 8820},
+	}
+	service := newChatCompletionServiceForTestWithAuthorizer(router, registry, nil, requestLog, settlement, authorizer)
 
 	chunks := make([]httpapi.ChatCompletionStreamResponse, 0)
 	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequestWithParams(), func(chunk httpapi.ChatCompletionStreamResponse) error {
@@ -915,11 +1246,20 @@ func TestChatCompletionServiceStreamChatCompletionRoutesAndCallsAdapter(t *testi
 	if settlement.params[0].Usage.ReasoningTokens != 2 {
 		t.Fatalf("expected reasoning tokens %d, got %d", 2, settlement.params[0].Usage.ReasoningTokens)
 	}
+	if len(authorizer.authorizeParams) != 1 {
+		t.Fatalf("expected one stream authorization, got %d", len(authorizer.authorizeParams))
+	}
+	if settlement.params[0].Authorization.ReservationID != 8820 {
+		t.Fatalf("expected settlement reservation id %d, got %d", int64(8820), settlement.params[0].Authorization.ReservationID)
+	}
+	if len(authorizer.releaseParams) != 0 {
+		t.Fatalf("expected no authorization release on successful stream settlement, got %d", len(authorizer.releaseParams))
+	}
 }
 
 func TestChatCompletionServiceStreamChatCompletionReturnsMissingAdapterWithoutRetry(t *testing.T) {
 	classifier := &fakeRetryClassifier{retryable: true}
-	service := NewChatCompletionService(
+	service := newChatCompletionServiceForTest(
 		&fakeChatRouter{plan: routePlan(routeCandidate("missing", 123, "gpt-4.1"))},
 		&fakeAdapterRegistry{streamChatAdapters: map[string]adapter.StreamChatAdapter{}},
 		classifier,
@@ -938,6 +1278,182 @@ func TestChatCompletionServiceStreamChatCompletionReturnsMissingAdapterWithoutRe
 	}
 }
 
+func TestChatCompletionServiceStreamChatCompletionDoesNotCallAdapterWhenAuthorizationFails(t *testing.T) {
+	authorizationErr := errors.New("stream authorization failed")
+	fakeAdapter := &fakeChatAdapter{
+		streamResp: []adapter.ChatStreamChunk{
+			{Content: "should not emit"},
+			streamUsageChunk("gpt-4.1"),
+		},
+	}
+	requestLog := newFakeRequestLogService()
+	settlement := newChatCompletionSettlementForTest()
+	authorizer := &fakeChatAuthorizer{authorizeErr: authorizationErr}
+	service := newChatCompletionServiceForTestWithAuthorizer(
+		&fakeChatRouter{plan: routePlan(routeCandidate("openai", 123, "gpt-4.1"))},
+		&fakeAdapterRegistry{
+			streamChatAdapters: map[string]adapter.StreamChatAdapter{
+				"openai": fakeAdapter,
+			},
+		},
+		nil,
+		requestLog,
+		settlement,
+		authorizer,
+	)
+
+	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk httpapi.ChatCompletionStreamResponse) error {
+		t.Fatalf("expected no stream chunk after authorization failure, got %#v", chunk)
+		return nil
+	})
+	if !errors.Is(err, authorizationErr) {
+		t.Fatalf("expected authorization error, got %v", err)
+	}
+	if len(authorizer.authorizeParams) != 1 {
+		t.Fatalf("expected one authorization attempt, got %d", len(authorizer.authorizeParams))
+	}
+	if fakeAdapter.streamCalled != 0 {
+		t.Fatalf("expected stream adapter not to be called after authorization failure, got %d", fakeAdapter.streamCalled)
+	}
+	if len(authorizer.releaseParams) != 0 {
+		t.Fatalf("expected no release when stream authorization was not created, got %d", len(authorizer.releaseParams))
+	}
+	if len(settlement.params) != 0 {
+		t.Fatalf("expected settlement not to be called, got %d", len(settlement.params))
+	}
+	if len(requestLog.markAttemptFailedArgs) != 1 {
+		t.Fatalf("expected stream attempt to fail once, got %d", len(requestLog.markAttemptFailedArgs))
+	}
+	if requestLog.markAttemptFailedArgs[0].ErrorCode != "chat_authorization_failed" {
+		t.Fatalf("expected attempt error code %q, got %q", "chat_authorization_failed", requestLog.markAttemptFailedArgs[0].ErrorCode)
+	}
+	if len(requestLog.markRequestFailedArgs) != 1 {
+		t.Fatalf("expected stream request to fail once, got %d", len(requestLog.markRequestFailedArgs))
+	}
+	if requestLog.markRequestFailedArgs[0].ErrorCode != "chat_authorization_failed" {
+		t.Fatalf("expected request error code %q, got %q", "chat_authorization_failed", requestLog.markRequestFailedArgs[0].ErrorCode)
+	}
+}
+
+func TestChatCompletionServiceStreamChatCompletionReleasesAuthorizationWhenFallbackAdapterMissing(t *testing.T) {
+	upstreamErr := errors.New("temporary stream upstream error")
+	firstAdapter := &fakeChatAdapter{streamErr: upstreamErr}
+	classifier := &fakeRetryClassifier{retryable: true}
+	requestLog := newFakeRequestLogService()
+	authorizer := &fakeChatAuthorizer{
+		authorization: ChatAuthorization{ReservationID: 9901},
+	}
+	service := newChatCompletionServiceForTestWithAuthorizer(
+		&fakeChatRouter{plan: routePlan(
+			routeCandidate("openai-primary", 101, "gpt-4.1"),
+			routeCandidate("missing-secondary", 102, "gpt-4.1"),
+		)},
+		&fakeAdapterRegistry{
+			streamChatAdapters: map[string]adapter.StreamChatAdapter{
+				"openai-primary": firstAdapter,
+			},
+		},
+		classifier,
+		requestLog,
+		newChatCompletionSettlementForTest(),
+		authorizer,
+	)
+
+	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk httpapi.ChatCompletionStreamResponse) error {
+		t.Fatalf("expected no stream chunk, got %#v", chunk)
+		return nil
+	})
+	if err == nil {
+		t.Fatal("expected missing fallback stream adapter error")
+	}
+	if firstAdapter.streamCalled != 1 {
+		t.Fatalf("expected first stream adapter to be called once, got %d", firstAdapter.streamCalled)
+	}
+	if classifier.called != 1 {
+		t.Fatalf("expected retry classifier to be called once, got %d", classifier.called)
+	}
+	if len(authorizer.releaseParams) != 1 {
+		t.Fatalf("expected authorization release when fallback stream adapter is missing, got %d", len(authorizer.releaseParams))
+	}
+	if authorizer.releaseParams[0].ReservationID != 9901 {
+		t.Fatalf("expected released reservation id %d, got %d", int64(9901), authorizer.releaseParams[0].ReservationID)
+	}
+	if len(requestLog.markRequestFailedArgs) != 1 {
+		t.Fatalf("expected request to fail once, got %d", len(requestLog.markRequestFailedArgs))
+	}
+}
+
+func TestChatCompletionServiceStreamChatCompletionReleasesAuthorizationOnNonRetryableAdapterError(t *testing.T) {
+	upstreamErr := errors.New("invalid stream upstream request")
+	firstAdapter := &fakeChatAdapter{streamErr: upstreamErr}
+	secondAdapter := &fakeChatAdapter{
+		streamResp: []adapter.ChatStreamChunk{
+			{Content: "should not fallback"},
+			streamUsageChunk("gpt-4.1"),
+		},
+	}
+	classifier := &fakeRetryClassifier{retryable: false}
+	requestLog := newFakeRequestLogService()
+	settlement := newChatCompletionSettlementForTest()
+	authorizer := &fakeChatAuthorizer{
+		authorization: ChatAuthorization{ReservationID: 9902},
+	}
+	service := newChatCompletionServiceForTestWithAuthorizer(
+		&fakeChatRouter{plan: routePlan(
+			routeCandidate("openai-primary", 101, "gpt-4.1"),
+			routeCandidate("openai-secondary", 102, "gpt-4.1"),
+		)},
+		&fakeAdapterRegistry{
+			streamChatAdapters: map[string]adapter.StreamChatAdapter{
+				"openai-primary":   firstAdapter,
+				"openai-secondary": secondAdapter,
+			},
+		},
+		classifier,
+		requestLog,
+		settlement,
+		authorizer,
+	)
+
+	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk httpapi.ChatCompletionStreamResponse) error {
+		t.Fatalf("expected no stream chunk after non-retryable error, got %#v", chunk)
+		return nil
+	})
+	if !errors.Is(err, upstreamErr) {
+		t.Fatalf("expected non-retryable stream adapter error, got %v", err)
+	}
+	if firstAdapter.streamCalled != 1 {
+		t.Fatalf("expected first stream adapter to be called once, got %d", firstAdapter.streamCalled)
+	}
+	if secondAdapter.streamCalled != 0 {
+		t.Fatalf("expected second stream adapter not to be called, got %d", secondAdapter.streamCalled)
+	}
+	if classifier.called != 1 {
+		t.Fatalf("expected retry classifier to be called once, got %d", classifier.called)
+	}
+	if len(authorizer.releaseParams) != 1 {
+		t.Fatalf("expected authorization release after non-retryable stream adapter error, got %d", len(authorizer.releaseParams))
+	}
+	if authorizer.releaseParams[0].ReservationID != 9902 {
+		t.Fatalf("expected released reservation id %d, got %d", int64(9902), authorizer.releaseParams[0].ReservationID)
+	}
+	if len(settlement.params) != 0 {
+		t.Fatalf("expected settlement not to be called, got %d", len(settlement.params))
+	}
+	if len(requestLog.markAttemptFailedArgs) != 1 {
+		t.Fatalf("expected one failed attempt, got %d", len(requestLog.markAttemptFailedArgs))
+	}
+	if requestLog.markAttemptFailedArgs[0].ErrorCode != "stream_adapter_error" {
+		t.Fatalf("expected attempt error code %q, got %q", "stream_adapter_error", requestLog.markAttemptFailedArgs[0].ErrorCode)
+	}
+	if len(requestLog.markRequestFailedArgs) != 1 {
+		t.Fatalf("expected one failed request, got %d", len(requestLog.markRequestFailedArgs))
+	}
+	if requestLog.markRequestFailedArgs[0].ErrorCode != "stream_adapter_error" {
+		t.Fatalf("expected request error code %q, got %q", "stream_adapter_error", requestLog.markRequestFailedArgs[0].ErrorCode)
+	}
+}
+
 func TestChatCompletionServiceStreamChatCompletionFailsWithoutFinalUsage(t *testing.T) {
 	fakeAdapter := &fakeChatAdapter{
 		streamResp: []adapter.ChatStreamChunk{
@@ -951,7 +1467,10 @@ func TestChatCompletionServiceStreamChatCompletionFailsWithoutFinalUsage(t *test
 	}
 	requestLog := newFakeRequestLogService()
 	settlement := newChatCompletionSettlementForTest()
-	service := NewChatCompletionService(
+	authorizer := &fakeChatAuthorizer{
+		authorization: ChatAuthorization{ReservationID: 8801},
+	}
+	service := newChatCompletionServiceForTestWithAuthorizer(
 		&fakeChatRouter{plan: routePlan(routeCandidate("openai", 123, "gpt-4.1"))},
 		&fakeAdapterRegistry{
 			streamChatAdapters: map[string]adapter.StreamChatAdapter{
@@ -961,6 +1480,7 @@ func TestChatCompletionServiceStreamChatCompletionFailsWithoutFinalUsage(t *test
 		nil,
 		requestLog,
 		settlement,
+		authorizer,
 	)
 
 	chunks := make([]httpapi.ChatCompletionStreamResponse, 0)
@@ -979,6 +1499,12 @@ func TestChatCompletionServiceStreamChatCompletionFailsWithoutFinalUsage(t *test
 	}
 	if len(settlement.params) != 0 {
 		t.Fatalf("expected settlement not to run without final usage, got %d calls", len(settlement.params))
+	}
+	if len(authorizer.releaseParams) != 1 {
+		t.Fatalf("expected authorization release without final usage, got %d", len(authorizer.releaseParams))
+	}
+	if authorizer.releaseParams[0].ReservationID != 8801 {
+		t.Fatalf("expected released reservation id %d, got %d", int64(8801), authorizer.releaseParams[0].ReservationID)
 	}
 	if len(requestLog.markAttemptFailedArgs) != 1 {
 		t.Fatalf("expected attempt to fail once, got %d", len(requestLog.markAttemptFailedArgs))
@@ -1015,7 +1541,10 @@ func TestChatCompletionServiceStreamChatCompletionMarksRequestFailedOnSettlement
 	}
 	requestLog := newFakeRequestLogService()
 	settlement := &fakeChatSettlementExecutor{err: settlementErr}
-	service := NewChatCompletionService(
+	authorizer := &fakeChatAuthorizer{
+		authorization: ChatAuthorization{ReservationID: 8830},
+	}
+	service := newChatCompletionServiceForTestWithAuthorizer(
 		&fakeChatRouter{plan: routePlan(routeCandidate("openai", 123, "gpt-4.1"))},
 		&fakeAdapterRegistry{
 			streamChatAdapters: map[string]adapter.StreamChatAdapter{
@@ -1025,6 +1554,7 @@ func TestChatCompletionServiceStreamChatCompletionMarksRequestFailedOnSettlement
 		nil,
 		requestLog,
 		settlement,
+		authorizer,
 	)
 
 	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk httpapi.ChatCompletionStreamResponse) error {
@@ -1035,6 +1565,12 @@ func TestChatCompletionServiceStreamChatCompletionMarksRequestFailedOnSettlement
 	}
 	if len(settlement.params) != 1 {
 		t.Fatalf("expected settlement to be called once, got %d", len(settlement.params))
+	}
+	if settlement.params[0].Authorization.ReservationID != 8830 {
+		t.Fatalf("expected settlement reservation id %d, got %d", int64(8830), settlement.params[0].Authorization.ReservationID)
+	}
+	if len(authorizer.releaseParams) != 0 {
+		t.Fatalf("expected no authorization release when stream settlement fails, got %d", len(authorizer.releaseParams))
 	}
 	if len(requestLog.markRequestFailedArgs) != 1 {
 		t.Fatalf("expected request to be marked failed once, got %d", len(requestLog.markRequestFailedArgs))
@@ -1066,7 +1602,10 @@ func TestChatCompletionServiceStreamChatCompletionSettlesAfterFinalUsageWithAdap
 	}
 	requestLog := newFakeRequestLogService()
 	settlement := newChatCompletionSettlementForTest()
-	service := NewChatCompletionService(
+	authorizer := &fakeChatAuthorizer{
+		authorization: ChatAuthorization{ReservationID: 8840},
+	}
+	service := newChatCompletionServiceForTestWithAuthorizer(
 		&fakeChatRouter{plan: routePlan(routeCandidate("openai", 123, "gpt-4.1"))},
 		&fakeAdapterRegistry{
 			streamChatAdapters: map[string]adapter.StreamChatAdapter{
@@ -1076,6 +1615,7 @@ func TestChatCompletionServiceStreamChatCompletionSettlesAfterFinalUsageWithAdap
 		nil,
 		requestLog,
 		settlement,
+		authorizer,
 	)
 
 	chunks := make([]httpapi.ChatCompletionStreamResponse, 0)
@@ -1094,6 +1634,12 @@ func TestChatCompletionServiceStreamChatCompletionSettlesAfterFinalUsageWithAdap
 	}
 	if settlement.params[0].Usage.TotalTokens != 21 {
 		t.Fatalf("expected settlement total tokens 21, got %d", settlement.params[0].Usage.TotalTokens)
+	}
+	if settlement.params[0].Authorization.ReservationID != 8840 {
+		t.Fatalf("expected settlement reservation id %d, got %d", int64(8840), settlement.params[0].Authorization.ReservationID)
+	}
+	if len(authorizer.releaseParams) != 0 {
+		t.Fatalf("expected no authorization release after final usage settlement, got %d", len(authorizer.releaseParams))
 	}
 	if len(requestLog.markAttemptCanceledArgs) != 0 {
 		t.Fatalf("expected no canceled attempt after final usage, got %d", len(requestLog.markAttemptCanceledArgs))
@@ -1125,7 +1671,10 @@ func TestChatCompletionServiceStreamChatCompletionSettlesAfterFinalUsageWithClie
 	classifier := &fakeRetryClassifier{retryable: true}
 	requestLog := newFakeRequestLogService()
 	settlement := newChatCompletionSettlementForTest()
-	service := NewChatCompletionService(
+	authorizer := &fakeChatAuthorizer{
+		authorization: ChatAuthorization{ReservationID: 8850},
+	}
+	service := newChatCompletionServiceForTestWithAuthorizer(
 		&fakeChatRouter{plan: routePlan(
 			routeCandidate("openai-primary", 101, "gpt-4.1"),
 			routeCandidate("openai-secondary", 102, "gpt-4.1"),
@@ -1144,6 +1693,7 @@ func TestChatCompletionServiceStreamChatCompletionSettlesAfterFinalUsageWithClie
 		classifier,
 		requestLog,
 		settlement,
+		authorizer,
 	)
 
 	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk httpapi.ChatCompletionStreamResponse) error {
@@ -1160,6 +1710,12 @@ func TestChatCompletionServiceStreamChatCompletionSettlesAfterFinalUsageWithClie
 	}
 	if settlement.params[0].AttemptRecord.ID != 1 {
 		t.Fatalf("expected first attempt to be settled, got attempt id %d", settlement.params[0].AttemptRecord.ID)
+	}
+	if settlement.params[0].Authorization.ReservationID != 8850 {
+		t.Fatalf("expected settlement reservation id %d, got %d", int64(8850), settlement.params[0].Authorization.ReservationID)
+	}
+	if len(authorizer.releaseParams) != 0 {
+		t.Fatalf("expected no authorization release after final usage settlement, got %d", len(authorizer.releaseParams))
 	}
 	if len(requestLog.createAttempts) != 1 {
 		t.Fatalf("expected no fallback attempt after final usage, got %d attempts", len(requestLog.createAttempts))
@@ -1195,7 +1751,10 @@ func TestChatCompletionServiceStreamChatCompletionFallsBackBeforeFirstChunk(t *t
 	classifier := &fakeRetryClassifier{retryable: true}
 	requestLog := newFakeRequestLogService()
 	settlement := newChatCompletionSettlementForTest()
-	service := NewChatCompletionService(
+	authorizer := &fakeChatAuthorizer{
+		authorization: ChatAuthorization{ReservationID: 8860},
+	}
+	service := newChatCompletionServiceForTestWithAuthorizer(
 		&fakeChatRouter{plan: routePlan(
 			routeCandidate("openai-primary", 101, "gpt-4.1"),
 			routeCandidate("openai-secondary", 102, "gpt-4.1"),
@@ -1209,6 +1768,7 @@ func TestChatCompletionServiceStreamChatCompletionFallsBackBeforeFirstChunk(t *t
 		classifier,
 		requestLog,
 		settlement,
+		authorizer,
 	)
 
 	chunks := make([]httpapi.ChatCompletionStreamResponse, 0)
@@ -1258,6 +1818,15 @@ func TestChatCompletionServiceStreamChatCompletionFallsBackBeforeFirstChunk(t *t
 	if settlement.params[0].AttemptRecord.ID != 2 {
 		t.Fatalf("expected second attempt to be settled, got attempt id %d", settlement.params[0].AttemptRecord.ID)
 	}
+	if len(authorizer.authorizeParams) != 1 {
+		t.Fatalf("expected one request-level authorization across stream fallback, got %d", len(authorizer.authorizeParams))
+	}
+	if settlement.params[0].Authorization.ReservationID != 8860 {
+		t.Fatalf("expected settlement reservation id %d, got %d", int64(8860), settlement.params[0].Authorization.ReservationID)
+	}
+	if len(authorizer.releaseParams) != 0 {
+		t.Fatalf("expected no authorization release after successful stream fallback settlement, got %d", len(authorizer.releaseParams))
+	}
 	if len(requestLog.markRequestFailedArgs) != 0 {
 		t.Fatalf("expected request not to fail after successful fallback, got %#v", requestLog.markRequestFailedArgs)
 	}
@@ -1288,7 +1857,10 @@ func TestChatCompletionServiceStreamChatCompletionDoesNotFallbackAfterFirstChunk
 	}
 	classifier := &fakeRetryClassifier{retryable: true}
 	requestLog := newFakeRequestLogService()
-	service := NewChatCompletionService(
+	authorizer := &fakeChatAuthorizer{
+		authorization: ChatAuthorization{ReservationID: 8870},
+	}
+	service := newChatCompletionServiceForTestWithAuthorizer(
 		&fakeChatRouter{plan: routePlan(
 			routeCandidate("openai-primary", 101, "gpt-4.1"),
 			routeCandidate("openai-secondary", 102, "gpt-4.1"),
@@ -1302,6 +1874,7 @@ func TestChatCompletionServiceStreamChatCompletionDoesNotFallbackAfterFirstChunk
 		classifier,
 		requestLog,
 		newChatCompletionSettlementForTest(),
+		authorizer,
 	)
 
 	chunks := make([]httpapi.ChatCompletionStreamResponse, 0)
@@ -1323,6 +1896,12 @@ func TestChatCompletionServiceStreamChatCompletionDoesNotFallbackAfterFirstChunk
 	}
 	if len(chunks) != 1 || chunks[0].Choices[0].Delta.Content != "partial" {
 		t.Fatalf("expected only partial chunk, got %#v", chunks)
+	}
+	if len(authorizer.releaseParams) != 1 {
+		t.Fatalf("expected authorization release after emitted stream error without final usage, got %d", len(authorizer.releaseParams))
+	}
+	if authorizer.releaseParams[0].ReservationID != 8870 {
+		t.Fatalf("expected released reservation id %d, got %d", int64(8870), authorizer.releaseParams[0].ReservationID)
 	}
 	if len(requestLog.createAttempts) != 1 {
 		t.Fatalf("expected only first attempt to be created, got %d", len(requestLog.createAttempts))
@@ -1361,7 +1940,10 @@ func TestChatCompletionServiceStreamChatCompletionMarksCanceledWithoutFallback(t
 	}
 	classifier := &fakeRetryClassifier{retryable: true}
 	requestLog := newFakeRequestLogService()
-	service := NewChatCompletionService(
+	authorizer := &fakeChatAuthorizer{
+		authorization: ChatAuthorization{ReservationID: 8880},
+	}
+	service := newChatCompletionServiceForTestWithAuthorizer(
 		&fakeChatRouter{plan: routePlan(
 			routeCandidate("openai-primary", 101, "gpt-4.1"),
 			routeCandidate("openai-secondary", 102, "gpt-4.1"),
@@ -1375,6 +1957,7 @@ func TestChatCompletionServiceStreamChatCompletionMarksCanceledWithoutFallback(t
 		classifier,
 		requestLog,
 		newChatCompletionSettlementForTest(),
+		authorizer,
 	)
 
 	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk httpapi.ChatCompletionStreamResponse) error {
@@ -1392,6 +1975,12 @@ func TestChatCompletionServiceStreamChatCompletionMarksCanceledWithoutFallback(t
 	}
 	if classifier.called != 0 {
 		t.Fatalf("expected retry classifier not to be called after client cancel, got %d", classifier.called)
+	}
+	if len(authorizer.releaseParams) != 1 {
+		t.Fatalf("expected authorization release after stream client cancel without final usage, got %d", len(authorizer.releaseParams))
+	}
+	if authorizer.releaseParams[0].ReservationID != 8880 {
+		t.Fatalf("expected released reservation id %d, got %d", int64(8880), authorizer.releaseParams[0].ReservationID)
 	}
 	if len(requestLog.markAttemptCanceledArgs) != 1 {
 		t.Fatalf("expected 1 attempt canceled call, got %d", len(requestLog.markAttemptCanceledArgs))

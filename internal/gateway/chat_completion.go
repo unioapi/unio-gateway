@@ -47,6 +47,8 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ht
 	}
 
 	var lastErr error
+	var authorization ChatAuthorization
+	authorizationCreated := false
 
 	for index, candidate := range plan.Candidates {
 		// 每个 candidate 都先创建 attempt，再调用 adapter。
@@ -64,13 +66,33 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ht
 				failure.WithMessage(fmt.Sprintf("gateway chat adapter %q not registered", candidate.AdapterKey)),
 			)
 
+			if releaseErr := s.releaseChatAuthorization(ctx, authorization); releaseErr != nil {
+				s.markRequestRecordFailed(ctx, requestRecord, "chat_authorization_release_failed", releaseErr)
+				return nil, releaseErr
+			}
+
 			s.markAttemptRecordFailed(ctx, attemptRecord, "adapter_not_registered", err)
 			s.markRequestRecordFailed(ctx, requestRecord, "adapter_not_registered", err)
 
 			return nil, err
 		}
 
-		// TODO(阶段7/production): [GAP-7-001] 非流式请求调用上游前没有余额预检或预授权，余额不足用户可能先产生平台上游成本再在 settlement 阶段失败；公开计费 API 前；引入余额 preflight 或 pre-authorize，并在 settlement 成功后确认扣费。
+		if !authorizationCreated {
+			authorization, err = s.chatAuthorizer.AuthorizeChat(ctx, ChatAuthorizeParams{
+				RequestRecord: requestRecord,
+				Principal:     principal,
+				Request:       req,
+				ModelDBID:     candidate.ModelDBID,
+			})
+			if err != nil {
+				s.markAttemptRecordFailed(ctx, attemptRecord, "chat_authorization_failed", err)
+				s.markRequestRecordFailed(ctx, requestRecord, "chat_authorization_failed", err)
+				return nil, err
+			}
+
+			authorizationCreated = true
+		}
+
 		adapterResp, err := chatAdapter.ChatCompletions(ctx, candidate.Channel, adapter.ChatRequest{
 			Model:            candidate.UpstreamModel,
 			Messages:         messages,
@@ -86,6 +108,11 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ht
 			// 客户端取消不是上游失败，也不应该触发 fallback。
 			// 此时还没有进入 settlement，不会写 usage、price snapshot 或 ledger。
 			if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+				if releaseErr := s.releaseChatAuthorization(ctx, authorization); releaseErr != nil {
+					s.markRequestRecordFailed(ctx, requestRecord, "chat_authorization_release_failed", releaseErr)
+					return nil, releaseErr
+				}
+
 				s.markRequestCanceled(ctx, requestRecord, attemptRecord, err)
 				return nil, err
 			}
@@ -93,8 +120,12 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ht
 			s.markAttemptRecordFailed(ctx, attemptRecord, "adapter_error", err)
 
 			if !s.retryClassifier.IsRetryable(err) {
-				s.markRequestRecordFailed(ctx, requestRecord, "adapter_error", err)
+				if releaseErr := s.releaseChatAuthorization(ctx, authorization); releaseErr != nil {
+					s.markRequestRecordFailed(ctx, requestRecord, "chat_authorization_release_failed", releaseErr)
+					return nil, releaseErr
+				}
 
+				s.markRequestRecordFailed(ctx, requestRecord, "adapter_error", err)
 				return nil, err
 			}
 			lastErr = err
@@ -107,6 +138,7 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ht
 			RequestRecord:         requestRecord,
 			AttemptRecord:         attemptRecord,
 			Principal:             principal,
+			Authorization:         authorization,
 			ResponseModelID:       req.Model,
 			ModelDBID:             candidate.ModelDBID,
 			FinalProviderID:       candidate.ProviderID,
@@ -142,6 +174,11 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ht
 	}
 
 	if lastErr != nil {
+		if releaseErr := s.releaseChatAuthorization(ctx, authorization); releaseErr != nil {
+			s.markRequestRecordFailed(ctx, requestRecord, "chat_authorization_release_failed", releaseErr)
+			return nil, releaseErr
+		}
+
 		s.markRequestRecordFailed(ctx, requestRecord, "adapter_error", lastErr)
 		return nil, lastErr
 	}

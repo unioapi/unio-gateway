@@ -48,6 +48,8 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ht
 	}
 
 	var lastErr error
+	var authorization ChatAuthorization
+	authorizationCreated := false
 
 	for index, candidate := range plan.Candidates {
 		// 每个 stream candidate 也必须先创建 attempt。
@@ -65,10 +67,31 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ht
 				failure.WithMessage(fmt.Sprintf("gateway stream chat adapter %q not registered", candidate.AdapterKey)),
 			)
 
+			if releaseErr := s.releaseChatAuthorization(ctx, authorization); releaseErr != nil {
+				s.markRequestRecordFailed(ctx, requestRecord, "chat_authorization_release_failed", releaseErr)
+				return releaseErr
+			}
+
 			s.markAttemptRecordFailed(ctx, attemptRecord, "adapter_not_registered", err)
 			s.markRequestRecordFailed(ctx, requestRecord, "adapter_not_registered", err)
 
 			return err
+		}
+
+		if !authorizationCreated {
+			authorization, err = s.chatAuthorizer.AuthorizeChat(ctx, ChatAuthorizeParams{
+				RequestRecord: requestRecord,
+				Principal:     principal,
+				Request:       req,
+				ModelDBID:     candidate.ModelDBID,
+			})
+			if err != nil {
+				s.markAttemptRecordFailed(ctx, attemptRecord, "chat_authorization_failed", err)
+				s.markRequestRecordFailed(ctx, requestRecord, "chat_authorization_failed", err)
+				return err
+			}
+
+			authorizationCreated = true
 		}
 
 		// emitted 表示是否已经尝试向客户端写出过 SSE chunk。
@@ -104,6 +127,7 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ht
 				RequestRecord:         requestRecord,
 				AttemptRecord:         attemptRecord,
 				Principal:             principal,
+				Authorization:         authorization,
 				ResponseModelID:       req.Model,
 				ModelDBID:             candidate.ModelDBID,
 				FinalProviderID:       candidate.ProviderID,
@@ -113,7 +137,6 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ht
 			})
 		}
 
-		// TODO(阶段7/production): [GAP-7-002] 流式请求调用上游前没有预授权，长输出或恶意断开可能让平台先承担上游成本；公开 stream 计费 API 前；基于 max_tokens/模型价格冻结余额，拿到 final usage 后 settle，多余部分 refund。
 		err = streamAdapter.StreamChatCompletions(ctx, candidate.Channel, adapter.ChatRequest{
 			Model:            candidate.UpstreamModel,
 			Messages:         messages,
@@ -174,8 +197,13 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ht
 
 			// 客户端取消不是上游失败，也不应该触发 fallback。
 			// 没有 final usage 时缺少可靠用量事实，当前阶段只记录 canceled，不扣费。
-			// 后续通过 pre-authorize / refund 或异常风控处理恶意取消风险。
+			// 后续通过冻结余额、release 或异常风控处理恶意取消风险。
 			if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+				if releaseErr := s.releaseChatAuthorization(ctx, authorization); releaseErr != nil {
+					s.markRequestRecordFailed(ctx, requestRecord, "chat_authorization_release_failed", releaseErr)
+					return releaseErr
+				}
+
 				s.markRequestCanceled(ctx, requestRecord, attemptRecord, err)
 				return err
 			}
@@ -185,12 +213,22 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ht
 			if emitted {
 				// SSE 已经写出后只能把当前请求标记为失败并结束。
 				// 此时 HTTP 层不能再改写普通 JSON error，也不能换 channel 重放已写出的内容。
+				if releaseErr := s.releaseChatAuthorization(ctx, authorization); releaseErr != nil {
+					s.markRequestRecordFailed(ctx, requestRecord, "chat_authorization_release_failed", releaseErr)
+					return releaseErr
+				}
+
 				s.markRequestRecordFailed(ctx, requestRecord, "stream_adapter_error_after_emit", err)
 				return err
 			}
 
 			// 首 chunk 前失败时，客户端还没有看到任何上游内容；只有这时才允许同模型 fallback。
 			if !s.retryClassifier.IsRetryable(err) {
+				if releaseErr := s.releaseChatAuthorization(ctx, authorization); releaseErr != nil {
+					s.markRequestRecordFailed(ctx, requestRecord, "chat_authorization_release_failed", releaseErr)
+					return releaseErr
+				}
+
 				s.markRequestRecordFailed(ctx, requestRecord, "stream_adapter_error", err)
 				return err
 			}
@@ -206,6 +244,12 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ht
 				failure.CodeGatewayStreamUsageMissing,
 				failure.WithMessage("gateway stream final usage is missing"),
 			)
+
+			if releaseErr := s.releaseChatAuthorization(ctx, authorization); releaseErr != nil {
+				s.markRequestRecordFailed(ctx, requestRecord, "chat_authorization_release_failed", releaseErr)
+				return releaseErr
+			}
+
 			s.markAttemptRecordFailed(ctx, attemptRecord, "stream_usage_missing", err)
 			s.markRequestRecordFailed(ctx, requestRecord, "stream_usage_missing", err)
 			return err
@@ -220,6 +264,11 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ht
 	}
 
 	if lastErr != nil {
+		if releaseErr := s.releaseChatAuthorization(ctx, authorization); releaseErr != nil {
+			s.markRequestRecordFailed(ctx, requestRecord, "chat_authorization_release_failed", releaseErr)
+			return releaseErr
+		}
+
 		s.markRequestRecordFailed(ctx, requestRecord, "stream_adapter_error", lastErr)
 		return lastErr
 	}

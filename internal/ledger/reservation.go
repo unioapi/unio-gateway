@@ -4,13 +4,15 @@ import (
 	"context"
 	"errors"
 
-	"github.com/ThankCat/unio-api/internal/failure"
-	"github.com/ThankCat/unio-api/internal/store/sqlc"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+
+	"github.com/ThankCat/unio-api/internal/failure"
+	"github.com/ThankCat/unio-api/internal/store/sqlc"
 )
 
-// Reservation 表示 ledger service 返回给调用方的余额预授权记录。
+// Reservation 表示一次请求的余额预授权事实。
+// 它记录冻结金额、最终扣费金额、释放金额，以及关联的扣费流水。
 type Reservation struct {
 	ID                   int64
 	UserID               int64
@@ -25,7 +27,7 @@ type Reservation struct {
 	Reason               string
 }
 
-// PreAuthorizeParams 表示余额预授权参数。
+// PreAuthorizeParams 表示创建余额预授权所需参数。
 type PreAuthorizeParams struct {
 	UserID          int64
 	RequestRecordID int64
@@ -35,17 +37,21 @@ type PreAuthorizeParams struct {
 	Reason          string
 }
 
-// CaptureParams 表示预授权结算扣费参数。
+// CaptureParams 表示把预授权转换为真实扣费所需参数。
+// ReservationID 可选；传入时用于校验调用方正在结算的就是这笔冻结记录。
 type CaptureParams struct {
 	RequestRecordID int64
+	ReservationID   *int64
 	Amount          pgtype.Numeric
 	IdempotencyKey  string
 	Reason          string
 }
 
-// ReleaseParams 表示释放预授权资金参数。
+// ReleaseParams 表示释放预授权资金所需参数。
+// ReservationID 可选；传入时用于避免释放错请求的冻结记录。
 type ReleaseParams struct {
 	RequestRecordID int64
+	ReservationID   *int64
 }
 
 // PreAuthorize 为一次请求冻结用户余额，并创建 reservation 事实。
@@ -108,81 +114,89 @@ func (s *Service) PreAuthorize(ctx context.Context, params PreAuthorizeParams) (
 	return reservationFromSQLC(created), nil
 }
 
-// Capture 将一次已预授权的请求结算为真实扣费。
-// 它会在同一个事务里完成三件事：
-// 1. 锁定 reservation，确认这次请求还处于 authorized 状态。
-// 2. 从用户余额中扣除实际消费金额，并释放整笔预授权金额。
-// 3. 写入 debit 账本流水，并把 reservation 标记为 captured。
+// Capture 将已预授权请求结算为真实扣费，并自行管理事务。
+// 需要和 usage、price snapshot、request 状态同事务提交时，应使用 CaptureWithQueries。
 func (s *Service) Capture(ctx context.Context, params CaptureParams) (Reservation, error) {
-	// capture 表示真实扣费，金额必须大于 0。
-	// 如果本次请求最终不产生费用，调用方应该走 Release，而不是用 0 金额 capture。
-	if !isPositiveNumeric(params.Amount) {
-		return Reservation{}, ledgerFailure(failure.CodeLedgerInvalidAmount, ErrInvalidAmount, ErrInvalidAmount.Error())
-	}
-
-	// 预授权结算会同时修改 user_balances、ledger_entries 和 ledger_reservations。
-	// 这三类事实必须同生共死，所以这里显式开启事务。
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return Reservation{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "begin ledger transaction")
 	}
-	// Commit 成功后 Rollback 会返回已完成事务错误，这里忽略即可。
-	// 这样所有提前 return 的错误分支都能自动回滚。
 	defer func() {
 		_ = tx.Rollback(ctx)
 	}()
 
 	txQueries := s.queries.WithTx(tx)
 
-	// request_record_id 在一次 gateway 请求内唯一。
-	// FOR UPDATE 用来串行化同一个 request 的 capture/release 并发竞争：
-	// 谁先拿到锁，谁决定 reservation 从 authorized 进入哪个终态。
-	reservation, err := txQueries.GetLedgerReservationByRequestRecordIDForUpdate(ctx, params.RequestRecordID)
+	captured, err := s.captureWithQueries(ctx, txQueries, params)
+	if err != nil {
+		return Reservation{}, err
+	}
+
+	// 只有余额、流水和 reservation 终态都更新成功，才提交本次 capture。
+	if err := tx.Commit(ctx); err != nil {
+		return Reservation{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "commit ledger transaction")
+	}
+
+	return captured, nil
+}
+
+// CaptureWithQueries 使用调用方传入的 queries 执行预授权结算扣费。
+// 调用方必须传入事务内 queries，确保账务事实和 request 状态一致提交。
+func (s *Service) CaptureWithQueries(ctx context.Context, queries *sqlc.Queries, params CaptureParams) (Reservation, error) {
+	return s.captureWithQueries(ctx, queries, params)
+}
+
+// captureWithQueries 执行 authorized -> captured 状态转移。
+// 它在调用方事务内扣真实余额、释放冻结余额，并写入 debit ledger entry。
+func (s *Service) captureWithQueries(ctx context.Context, queries *sqlc.Queries, params CaptureParams) (Reservation, error) {
+	// 0 金额请求应该 release reservation，不允许写 0 金额扣费流水。
+	if !isPositiveNumeric(params.Amount) {
+		return Reservation{}, ledgerFailure(failure.CodeLedgerInvalidAmount, ErrInvalidAmount, ErrInvalidAmount.Error())
+	}
+
+	// 锁住当前 reservation 行，避免同一请求的 capture/release 并发竞争。
+	reservation, err := queries.GetLedgerReservationByRequestRecordIDForUpdate(ctx, params.RequestRecordID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Reservation{}, ledgerFailure(failure.CodeLedgerReservationNotFound, ErrReservationNotFound, ErrReservationNotFound.Error())
 		}
+
 		return Reservation{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "lock ledger reservation")
+	}
+
+	// ReservationID 是调用方持有的冻结事实 ID，用于防止参数错乱。
+	if params.ReservationID != nil && reservation.ID != *params.ReservationID {
+		return Reservation{}, ledgerFailure(failure.CodeLedgerIdempotencyConflict, ErrIdempotencyConflict, ErrIdempotencyConflict.Error())
 	}
 
 	switch ReservationStatus(reservation.Status) {
 	case ReservationStatusCaptured:
-		// 结算请求可能因为网络重试重复进入。
-		// 如果已结算金额和本次金额一致，说明这是同一业务动作的幂等重放。
+		// 已 capture 且金额一致，视为幂等重放。
 		if !sameNumeric(reservation.CapturedAmount, params.Amount) {
 			return Reservation{}, ledgerFailure(failure.CodeLedgerIdempotencyConflict, ErrIdempotencyConflict, ErrIdempotencyConflict.Error())
-		}
-
-		if err := tx.Commit(ctx); err != nil {
-			return Reservation{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "commit ledger transaction")
 		}
 
 		return reservationFromSQLC(reservation), nil
 
 	case ReservationStatusReleased:
-		// 已释放的 reservation 不能再 capture。
-		// 否则会把一次失败或取消的请求重新扣费，破坏资金语义。
+		// 已 release 的 reservation 不能重新扣费。
 		return Reservation{}, ledgerFailure(failure.CodeLedgerIdempotencyConflict, ErrIdempotencyConflict, ErrIdempotencyConflict.Error())
 
 	case ReservationStatusAuthorized:
 		// authorized 是唯一允许首次 capture 的状态。
-		// 下面会把它推进到 captured，之后这笔 reservation 不允许再回到 authorized。
 
 	default:
-		// reservation.status 由数据库 CHECK 约束保护。
-		// 走到这里通常表示代码和 schema 的状态枚举已经不一致，需要按存储错误处理。
 		return Reservation{}, ledgerFailure(failure.CodeLedgerStoreFailed, errors.New("ledger: unexpected reservation status"), "unexpected reservation status")
 	}
 
-	// 实际扣费不能超过预授权金额。
-	// 允许小于预授权金额：例如先按最大预算冻结，实际 usage 结算后只扣一部分。
+	// TODO(阶段7/production): [GAP-7-014] 当前 capture 拒绝 actual_amount > authorized_amount，无法按最终规则 capture 已冻结金额并把差额记为平台核销；公开计费 API 前；支持 write-off 账务事实后，actual 超出冻结金额时请求仍应成功收口。
+	// 实际扣费可小于预授权金额，但当前不能超过冻结金额。
 	if !numericLessOrEqual(params.Amount, reservation.AuthorizedAmount) {
 		return Reservation{}, ledgerFailure(failure.CodeLedgerInvalidAmount, ErrInvalidAmount, ErrInvalidAmount.Error())
 	}
 
-	// 锁住余额行，读取扣费前余额。
-	// balance_before/balance_after 是账本流水的一部分，必须和本事务里的余额更新严格对应。
-	before, err := txQueries.GetUserBalanceForUpdate(ctx, sqlc.GetUserBalanceForUpdateParams{
+	// balance_before/after 必须和本事务内的余额更新严格对应。
+	before, err := queries.GetUserBalanceForUpdate(ctx, sqlc.GetUserBalanceForUpdateParams{
 		UserID:   reservation.UserID,
 		Currency: reservation.Currency,
 	})
@@ -190,11 +204,8 @@ func (s *Service) Capture(ctx context.Context, params CaptureParams) (Reservatio
 		return Reservation{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "lock user balance")
 	}
 
-	// 预授权结算不能复用普通 Debit：
-	// Debit 只减少 balance，而 Capture 必须同时减少 balance 和 reserved_balance。
-	// 这里扣除的 balance 是实际消费金额，释放的 reserved_balance 是整笔预授权金额。
-	// 如果实际消费小于预授权金额，差额会通过 released_amount 记录在 reservation 上。
-	after, err := txQueries.CaptureUserReservedBalance(ctx, sqlc.CaptureUserReservedBalanceParams{
+	// Capture 同时扣真实余额并释放整笔冻结余额；差额记录到 reservation.released_amount。
+	after, err := queries.CaptureUserReservedBalance(ctx, sqlc.CaptureUserReservedBalanceParams{
 		CapturedAmount:   params.Amount,
 		AuthorizedAmount: reservation.AuthorizedAmount,
 		UserID:           reservation.UserID,
@@ -205,9 +216,8 @@ func (s *Service) Capture(ctx context.Context, params CaptureParams) (Reservatio
 	}
 
 	requestRecordID := reservation.RequestRecordID
-	// 真实扣费必须写 ledger entry，因为 balance 发生了变化。
-	// 这条 debit 流水是后续审计、用户账单和 request log 对账的核心事实。
-	entry, err := txQueries.CreateLedgerEntry(ctx, sqlc.CreateLedgerEntryParams{
+	// 真实余额发生变化时必须写 debit ledger entry，作为扣费审计事实。
+	entry, err := queries.CreateLedgerEntry(ctx, sqlc.CreateLedgerEntryParams{
 		UserID:          reservation.UserID,
 		RequestRecordID: int64PtrToPgtypeInt8(&requestRecordID),
 		EntryType:       string(EntryTypeDebit),
@@ -219,9 +229,7 @@ func (s *Service) Capture(ctx context.Context, params CaptureParams) (Reservatio
 		Reason:          params.Reason,
 	})
 	if err != nil {
-		// reservation 行已经被 FOR UPDATE 锁住。
-		// 正常并发重试会在锁释放后看到 captured 状态，不会走到这里。
-		// 因此这里的唯一冲突通常表示幂等键被其他业务请求复用。
+		// reservation 已加锁；这里的唯一冲突通常表示幂等键被其他业务复用。
 		if isUniqueViolation(err) {
 			return Reservation{}, ledgerFailure(failure.CodeLedgerIdempotencyConflict, ErrIdempotencyConflict, ErrIdempotencyConflict.Error())
 		}
@@ -229,10 +237,8 @@ func (s *Service) Capture(ctx context.Context, params CaptureParams) (Reservatio
 		return Reservation{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "create capture ledger entry")
 	}
 
-	// 最后再更新 reservation 终态，并把 capture_ledger_entry_id 指向刚创建的 debit 流水。
-	// 这样 reservation 和 ledger entry 之间形成可追溯关系：
-	// request -> reservation -> debit ledger entry。
-	captured, err := txQueries.CaptureLedgerReservation(ctx, sqlc.CaptureLedgerReservationParams{
+	// reservation 终态必须指向刚创建的 debit ledger entry，形成 request -> reservation -> ledger 的链路。
+	captured, err := queries.CaptureLedgerReservation(ctx, sqlc.CaptureLedgerReservationParams{
 		CapturedAmount: params.Amount,
 		CaptureLedgerEntryID: pgtype.Int8{
 			Int64: entry.ID,
@@ -244,33 +250,46 @@ func (s *Service) Capture(ctx context.Context, params CaptureParams) (Reservatio
 		return Reservation{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "capture ledger reservation")
 	}
 
-	// 只有余额、流水、reservation 三者都更新成功，才提交本次 capture。
-	if err := tx.Commit(ctx); err != nil {
-		return Reservation{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "commit ledger transaction")
-	}
-
 	return reservationFromSQLC(captured), nil
 }
 
 // Release 释放一次尚未结算的预授权金额。
 // 它只减少 reserved_balance，不写 ledger entry，因为用户真实余额 balance 没有变化。
 func (s *Service) Release(ctx context.Context, params ReleaseParams) (Reservation, error) {
-	// release 会同时修改 user_balances.reserved_balance 和 ledger_reservations。
-	// 两者必须在同一个事务里完成，避免出现 reservation 已释放但冻结余额还在的状态。
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return Reservation{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "begin ledger transaction")
 	}
-	// Commit 成功后的 Rollback 会被忽略；错误路径自动回滚。
 	defer func() {
 		_ = tx.Rollback(ctx)
 	}()
 
 	txQueries := s.queries.WithTx(tx)
 
-	// 和 Capture 一样，Release 也按 request_record_id 锁 reservation。
-	// 这可以保证同一个请求的 capture/release 并发到达时，只有一个终态会成功落库。
-	reservation, err := txQueries.GetLedgerReservationByRequestRecordIDForUpdate(ctx, params.RequestRecordID)
+	released, err := s.releaseWithQueries(ctx, txQueries, params)
+	if err != nil {
+		return Reservation{}, err
+	}
+
+	// 只有冻结余额释放和 reservation 终态都更新成功，才提交本次 release。
+	if err := tx.Commit(ctx); err != nil {
+		return Reservation{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "commit ledger transaction")
+	}
+
+	return released, nil
+}
+
+// ReleaseWithQueries 使用调用方传入的 queries 释放预授权资金。
+// 调用方必须传入事务内 queries，确保 request 状态和 reservation 终态一致提交。
+func (s *Service) ReleaseWithQueries(ctx context.Context, queries *sqlc.Queries, params ReleaseParams) (Reservation, error) {
+	return s.releaseWithQueries(ctx, queries, params)
+}
+
+// releaseWithQueries 执行 authorized -> released 状态转移。
+// 它只释放冻结余额，不写 ledger entry。
+func (s *Service) releaseWithQueries(ctx context.Context, queries *sqlc.Queries, params ReleaseParams) (Reservation, error) {
+	// 锁住 reservation，串行化同一请求的 capture/release 竞争。
+	reservation, err := queries.GetLedgerReservationByRequestRecordIDForUpdate(ctx, params.RequestRecordID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Reservation{}, ledgerFailure(failure.CodeLedgerReservationNotFound, ErrReservationNotFound, ErrReservationNotFound.Error())
@@ -278,34 +297,29 @@ func (s *Service) Release(ctx context.Context, params ReleaseParams) (Reservatio
 		return Reservation{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "lock ledger reservation")
 	}
 
+	// ReservationID 是调用方持有的冻结事实 ID，用于防止参数错乱。
+	if params.ReservationID != nil && reservation.ID != *params.ReservationID {
+		return Reservation{}, ledgerFailure(failure.CodeLedgerIdempotencyConflict, ErrIdempotencyConflict, ErrIdempotencyConflict.Error())
+	}
+
 	switch ReservationStatus(reservation.Status) {
 	case ReservationStatusReleased:
-		// release 是按 request_record_id 做幂等的。
-		// 重试释放同一笔 reservation，不应该重复减少 reserved_balance。
-		if err := tx.Commit(ctx); err != nil {
-			return Reservation{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "commit ledger transaction")
-		}
-
+		// 已 release 视为幂等重放。
 		return reservationFromSQLC(reservation), nil
 
 	case ReservationStatusCaptured:
-		// 已经结算扣费的 reservation 不能再释放。
-		// 释放 captured reservation 会让 reserved_balance 和真实扣费事实不一致。
+		// 已 capture 的 reservation 不能再释放。
 		return Reservation{}, ledgerFailure(failure.CodeLedgerIdempotencyConflict, ErrIdempotencyConflict, ErrIdempotencyConflict.Error())
 
 	case ReservationStatusAuthorized:
 		// authorized 是唯一允许首次 release 的状态。
-		// 下面只释放冻结金额，不产生扣费流水。
 
 	default:
-		// reservation.status 由数据库 CHECK 约束保护。
-		// 这里兜底处理 schema 和代码状态枚举不一致的异常情况。
 		return Reservation{}, ledgerFailure(failure.CodeLedgerStoreFailed, errors.New("ledger: unexpected reservation status"), "unexpected reservation status")
 	}
 
-	// Release 只减少 reserved_balance，不减少 balance。
-	// 因为这表示请求没有产生真实费用，或者请求失败后需要解除冻结。
-	_, err = txQueries.ReleaseUserReservedBalance(ctx, sqlc.ReleaseUserReservedBalanceParams{
+	// Release 不改变真实余额，只减少冻结余额。
+	_, err = queries.ReleaseUserReservedBalance(ctx, sqlc.ReleaseUserReservedBalanceParams{
 		Amount:   reservation.AuthorizedAmount,
 		UserID:   reservation.UserID,
 		Currency: reservation.Currency,
@@ -314,16 +328,10 @@ func (s *Service) Release(ctx context.Context, params ReleaseParams) (Reservatio
 		return Reservation{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "release user reserved balance")
 	}
 
-	// 把 reservation 推进到 released 终态。
-	// released_amount 等于 authorized_amount，表示整笔冻结金额已经释放。
-	released, err := txQueries.ReleaseLedgerReservation(ctx, reservation.ID)
+	// released_amount 等于 authorized_amount，表示整笔冻结金额已释放。
+	released, err := queries.ReleaseLedgerReservation(ctx, reservation.ID)
 	if err != nil {
 		return Reservation{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "release ledger reservation")
-	}
-
-	// 余额冻结释放和 reservation 终态都成功后，才提交本次 release。
-	if err := tx.Commit(ctx); err != nil {
-		return Reservation{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "commit ledger transaction")
 	}
 
 	return reservationFromSQLC(released), nil

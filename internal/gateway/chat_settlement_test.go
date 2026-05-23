@@ -29,11 +29,12 @@ type fakeChatBillingCalculator struct {
 	err        error
 }
 
-// fakeChatLedgerDebiter 是 chat settlement 测试使用的 ledger debiter 替身。
-type fakeChatLedgerDebiter struct {
-	params  []ledger.DebitParams
-	queries []*sqlc.Queries
-	err     error
+// fakeChatLedgerCapturer 是 chat settlement 测试使用的 ledger reservation 替身。
+type fakeChatLedgerCapturer struct {
+	captureParams []ledger.CaptureParams
+	releaseParams []ledger.ReleaseParams
+	queries       []*sqlc.Queries
+	err           error
 }
 
 // Calculate 记录 billing 入参，并返回测试预设结算结果。
@@ -47,15 +48,35 @@ func (c *fakeChatBillingCalculator) Calculate(usage billing.Usage, price billing
 	return c.settlement, nil
 }
 
-// DebitWithQueries 记录事务内 ledger debit 参数，并返回测试预设错误。
-func (d *fakeChatLedgerDebiter) DebitWithQueries(ctx context.Context, queries *sqlc.Queries, params ledger.DebitParams) (ledger.Entry, error) {
-	d.queries = append(d.queries, queries)
-	d.params = append(d.params, params)
-	if d.err != nil {
-		return ledger.Entry{}, d.err
+// CaptureWithQueries 记录事务内 ledger capture 参数，并返回测试预设错误。
+func (c *fakeChatLedgerCapturer) CaptureWithQueries(ctx context.Context, queries *sqlc.Queries, params ledger.CaptureParams) (ledger.Reservation, error) {
+	c.queries = append(c.queries, queries)
+	c.captureParams = append(c.captureParams, params)
+	if c.err != nil {
+		return ledger.Reservation{}, c.err
 	}
 
-	return ledger.Entry{ID: 1, UserID: params.UserID, Amount: params.Amount, Currency: params.Currency}, nil
+	return ledger.Reservation{ID: derefInt64(params.ReservationID), RequestRecordID: params.RequestRecordID, AuthorizedAmount: params.Amount, CapturedAmount: params.Amount}, nil
+}
+
+// ReleaseWithQueries 记录事务内 ledger release 参数，并返回测试预设错误。
+func (c *fakeChatLedgerCapturer) ReleaseWithQueries(ctx context.Context, queries *sqlc.Queries, params ledger.ReleaseParams) (ledger.Reservation, error) {
+	c.queries = append(c.queries, queries)
+	c.releaseParams = append(c.releaseParams, params)
+	if c.err != nil {
+		return ledger.Reservation{}, c.err
+	}
+
+	return ledger.Reservation{ID: derefInt64(params.ReservationID), RequestRecordID: params.RequestRecordID}, nil
+}
+
+// derefInt64 返回可选 int64 指针的值，nil 时返回 0。
+func derefInt64(value *int64) int64 {
+	if value == nil {
+		return 0
+	}
+
+	return *value
 }
 
 // chatSettlementDBDeps 保存 chat settlement 集成测试依赖。
@@ -71,6 +92,7 @@ type chatSettlementDBDeps struct {
 	channelID     int64
 	modelID       int64
 	priceID       int64
+	reservationID int64
 	requestRecord sqlc.RequestRecord
 	attemptRecord sqlc.RequestAttempt
 }
@@ -116,6 +138,7 @@ func (d *chatSettlementDBDeps) cleanup() {
 	ctx := context.Background()
 
 	if d.requestRecord.ID != 0 {
+		_, _ = d.pool.Exec(ctx, `DELETE FROM ledger_reservations WHERE request_record_id = $1`, d.requestRecord.ID)
 		_, _ = d.pool.Exec(ctx, `DELETE FROM ledger_entries WHERE request_record_id = $1`, d.requestRecord.ID)
 		_, _ = d.pool.Exec(ctx, `DELETE FROM price_snapshots WHERE request_record_id = $1`, d.requestRecord.ID)
 		_, _ = d.pool.Exec(ctx, `DELETE FROM usage_records WHERE request_record_id = $1`, d.requestRecord.ID)
@@ -267,6 +290,19 @@ func (d *chatSettlementDBDeps) seed(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("add user balance: %v", err)
 	}
+
+	reservation, err := ledger.NewService(d.pool, d.queries).PreAuthorize(d.ctx, ledger.PreAuthorizeParams{
+		UserID:          user.ID,
+		RequestRecordID: requestRecord.ID,
+		Amount:          testNumeric(1_0000000000, -10),
+		Currency:        "USD",
+		IdempotencyKey:  fmt.Sprintf("chat-settlement-reserve-%d", suffix),
+		Reason:          "chat settlement test reservation",
+	})
+	if err != nil {
+		t.Fatalf("create ledger reservation: %v", err)
+	}
+	d.reservationID = reservation.ID
 }
 
 // params 创建 chat settlement 测试参数。
@@ -290,7 +326,13 @@ func (d *chatSettlementDBDeps) params() ChatSettlementParams {
 			UpstreamModel:   d.attemptRecord.UpstreamModel,
 			Status:          requestlog.AttemptStatus(d.attemptRecord.Status),
 		},
-		Principal:             &auth.APIKeyPrincipal{UserID: d.userID, ProjectID: d.projectID, APIKeyID: d.apiKeyID},
+		Principal: &auth.APIKeyPrincipal{UserID: d.userID, ProjectID: d.projectID, APIKeyID: d.apiKeyID},
+		Authorization: ChatAuthorization{
+			ReservationID:   d.reservationID,
+			RequestRecordID: d.requestRecord.ID,
+			Amount:          testNumeric(1_0000000000, -10),
+			Currency:        "USD",
+		},
 		ResponseModelID:       "openai/gpt-4.1",
 		ModelDBID:             d.modelID,
 		FinalProviderID:       d.providerID,
@@ -456,18 +498,21 @@ func TestChatSettlementSettlesSuccessfulChat(t *testing.T) {
 	}
 }
 
-func TestChatSettlementSkipsLedgerDebitForZeroAmount(t *testing.T) {
+func TestChatSettlementReleasesReservationForZeroAmount(t *testing.T) {
 	deps := newChatSettlementDBDeps(t)
 	billingCalculator := chatSettlementBilling(testNumeric(0, -10))
-	ledgerDebiter := &fakeChatLedgerDebiter{}
-	service := NewChatSettlementService(deps.pool, deps.queries, billingCalculator, ledgerDebiter)
+	ledgerCapturer := &fakeChatLedgerCapturer{}
+	service := NewChatSettlementService(deps.pool, deps.queries, billingCalculator, ledgerCapturer)
 
 	if err := service.SettleSuccessfulChat(deps.ctx, deps.params()); err != nil {
 		t.Fatalf("settle successful chat: %v", err)
 	}
 
-	if len(ledgerDebiter.params) != 0 {
-		t.Fatalf("expected no ledger debit for zero amount, got %d", len(ledgerDebiter.params))
+	if len(ledgerCapturer.captureParams) != 0 {
+		t.Fatalf("expected no ledger capture for zero amount, got %d", len(ledgerCapturer.captureParams))
+	}
+	if len(ledgerCapturer.releaseParams) != 1 {
+		t.Fatalf("expected one ledger release for zero amount, got %d", len(ledgerCapturer.releaseParams))
 	}
 	if status := requestStatus(t, deps.ctx, deps.pool, deps.requestRecord.ID); status != string(requestlog.RequestStatusSucceeded) {
 		t.Fatalf("expected request succeeded, got %q", status)
@@ -480,23 +525,23 @@ func TestChatSettlementSkipsLedgerDebitForZeroAmount(t *testing.T) {
 	}
 }
 
-func TestChatSettlementRollsBackFactsWhenLedgerDebitFails(t *testing.T) {
+func TestChatSettlementRollsBackFactsWhenLedgerCaptureFails(t *testing.T) {
 	deps := newChatSettlementDBDeps(t)
-	ledgerErr := errors.New("ledger debit failed")
-	ledgerDebiter := &fakeChatLedgerDebiter{err: ledgerErr}
+	ledgerErr := errors.New("ledger capture failed")
+	ledgerCapturer := &fakeChatLedgerCapturer{err: ledgerErr}
 	service := NewChatSettlementService(
 		deps.pool,
 		deps.queries,
 		chatSettlementBilling(testNumeric(61_000000, -10)),
-		ledgerDebiter,
+		ledgerCapturer,
 	)
 
 	err := service.SettleSuccessfulChat(deps.ctx, deps.params())
 	if !errors.Is(err, ledgerErr) {
 		t.Fatalf("expected ledger error, got %v", err)
 	}
-	if len(ledgerDebiter.params) != 1 {
-		t.Fatalf("expected one ledger debit attempt, got %d", len(ledgerDebiter.params))
+	if len(ledgerCapturer.captureParams) != 1 {
+		t.Fatalf("expected one ledger capture attempt, got %d", len(ledgerCapturer.captureParams))
 	}
 
 	if _, err := deps.queries.GetUsageRecordByRequest(deps.ctx, deps.requestRecord.ID); !errors.Is(err, pgx.ErrNoRows) {
@@ -518,15 +563,18 @@ func TestChatSettlementRollsBackFactsWhenBillingFails(t *testing.T) {
 	billingErr := errors.New("billing calculation failed")
 	billingCalculator := chatSettlementBilling(testNumeric(61_000000, -10))
 	billingCalculator.err = billingErr
-	ledgerDebiter := &fakeChatLedgerDebiter{}
-	service := NewChatSettlementService(deps.pool, deps.queries, billingCalculator, ledgerDebiter)
+	ledgerCapturer := &fakeChatLedgerCapturer{}
+	service := NewChatSettlementService(deps.pool, deps.queries, billingCalculator, ledgerCapturer)
 
 	err := service.SettleSuccessfulChat(deps.ctx, deps.params())
 	if !errors.Is(err, billingErr) {
 		t.Fatalf("expected billing error, got %v", err)
 	}
-	if len(ledgerDebiter.params) != 0 {
-		t.Fatalf("expected no ledger debit after billing error, got %d", len(ledgerDebiter.params))
+	if len(ledgerCapturer.captureParams) != 0 {
+		t.Fatalf("expected no ledger capture after billing error, got %d", len(ledgerCapturer.captureParams))
+	}
+	if len(ledgerCapturer.releaseParams) != 0 {
+		t.Fatalf("expected no ledger release after billing error, got %d", len(ledgerCapturer.releaseParams))
 	}
 	if _, err := deps.queries.GetUsageRecordByRequest(deps.ctx, deps.requestRecord.ID); !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("expected usage record rollback, got %v", err)

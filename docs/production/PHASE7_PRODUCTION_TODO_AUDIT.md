@@ -12,6 +12,14 @@ docs/production/TODO_REGISTER.md
 
 所有 production TODO 已补充稳定 `GAP-*` 编号，并以 TODO register 为当前事实来源。本文档保留为阶段 7 审计快照，后续新增、关闭和改期生产欠账时，应优先维护 TODO register、章节 `PLAN.md` 和章节 `STATUS.md`。
 
+2026-05-23 更新：
+
+```text
+GAP-7-001、GAP-7-002、GAP-7-011 已由 gateway authorization baseline 关闭。
+余额策略后续按 GAP-7-014 收口：部分余额授权 + 平台差额核销。
+本文后续条目仍保留原始审计快照，不作为当前状态事实来源。
+```
+
 ## 背景
 
 本报告记录一次针对 Unio API 阶段 1-7 已实现代码的生产欠账审计。

@@ -81,7 +81,8 @@ ledger entry
 
 1. 支持 credit/debit ledger entry。
 2. debit 使用事务更新 user balance。
-3. ledger reservation pre-authorize/capture/release 已完成，后续接入 gateway 调用上游前冻结余额。
+3. ledger reservation pre-authorize/capture/release 已完成，并已接入 gateway request-level authorization。
+4. 后续补部分余额授权、差额核销和 settlement 幂等。
 
 关联 GAP：
 
@@ -100,7 +101,8 @@ ledger entry
 2. 创建 price snapshot。
 3. 创建 ledger debit。
 4. 标记 request/attempt succeeded。
-5. 后续补余额预检、预授权和 settlement 幂等。
+5. 调用上游前 request-level authorization 已接入。
+6. 后续补部分余额授权、差额核销和 settlement 幂等。
 
 关联 GAP：
 
@@ -131,7 +133,8 @@ ledger entry
 1. 有 final usage 时执行 settlement。
 2. 客户端取消但已拿到 final usage 时仍 settlement。
 3. 无 final usage 时不强行估算扣费。
-4. 后续补预授权、异常策略和风控。
+4. 调用上游前 request-level authorization 已接入。
+5. 后续补部分余额授权、差额核销、异常策略和风控。
 
 关联 GAP：
 
@@ -144,32 +147,40 @@ ledger entry
 ## 当前必须收口任务
 
 <a id="task-7-17-preauthorization"></a>
-### TASK-7.17 余额预检查与预授权最小闭环
+### TASK-7.17 余额预检查与冻结闭环
 
 状态：in_progress
 
 范围：
 
-1. 请求调用上游前检查用户余额。
-2. 非流式请求支持余额 preflight 或 reservation。
-3. 流式请求根据模型价格和 `max_tokens` 做预授权。
-4. 为后续 project 预算或用量上限预留统一判断入口。
-5. 成功后按真实 usage capture。
-6. 失败、取消、无 final usage 时 release 或进入异常状态。
-7. 所有余额动作都必须可审计。
+1. 请求调用上游前检查用户可用余额。
+2. 非流式和流式请求已接入 request-level authorization。
+3. 成功后按真实 usage capture，失败、取消、无 final usage 时 release 或进入异常状态。
+4. 最终产品规则必须拆分 `estimated_amount` 与 `authorized_amount`。
+5. 当 `available_balance <= 0` 时，调用上游前拒绝。
+6. 当 `0 < available_balance < estimated_amount` 时，冻结全部可用余额并允许请求继续。
+7. 当 `actual_amount > authorized_amount` 时，capture 已冻结金额，差额记为平台 `written_off_amount` / `platform_loss`，上游成功且有 usage 的请求仍应成功收口。
+8. 为后续 project 预算或用量上限预留统一判断入口。
+9. 所有余额、核销和异常动作都必须可审计。
 
 生产风险：
 
 ```text
-没有预授权时，余额不足用户可能先消耗上游成本，再在结算阶段失败。
-stream 长输出和恶意断开也无法控损。
+当前 baseline authorization 已能在调用上游前冻结余额，但仍要求全额冻结 estimated amount。
+这会导致低余额用户“有余额但花不出去”，且 actual_amount > authorized_amount 时会被普通 settlement failed 拦截。
+公开计费 API 前必须落地部分余额授权和平台差额核销，避免反人类余额体验和卡住 reservation。
 ```
 
 关联 GAP：
 
+- [GAP-7-004](../../production/TODO_REGISTER.md#gap-7-004)
+- [GAP-7-013](../../production/TODO_REGISTER.md#gap-7-013)
+- [GAP-7-014](../../production/TODO_REGISTER.md#gap-7-014)
+
+已关闭 GAP：
+
 - [GAP-7-001](../../production/TODO_REGISTER.md#gap-7-001)
 - [GAP-7-002](../../production/TODO_REGISTER.md#gap-7-002)
-- [GAP-7-004](../../production/TODO_REGISTER.md#gap-7-004)
 - [GAP-7-011](../../production/TODO_REGISTER.md#gap-7-011)
 
 

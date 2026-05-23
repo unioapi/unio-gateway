@@ -36,6 +36,7 @@ type ChatCompletionService struct {
 	retryClassifier RetryClassifier
 	requestLog      requestlog.Service
 	chatSettlement  ChatSettlementExecutor
+	chatAuthorizer  ChatAuthorizer
 }
 
 // NewChatCompletionService 创建聊天补全 gateway service。
@@ -45,6 +46,7 @@ func NewChatCompletionService(
 	retryClassifier RetryClassifier,
 	requestLog requestlog.Service,
 	chatSettlement ChatSettlementExecutor,
+	chatAuthorizer ChatAuthorizer,
 ) *ChatCompletionService {
 	if retryClassifier == nil {
 		retryClassifier = NeverRetryClassifier{}
@@ -55,12 +57,15 @@ func NewChatCompletionService(
 	if chatSettlement == nil {
 		panic("gateway: chat settlement service is required")
 	}
-
+	if chatAuthorizer == nil {
+		panic("gateway: chat authorizer service is required")
+	}
 	return &ChatCompletionService{
 		router:          router,
 		registry:        registry,
 		retryClassifier: retryClassifier,
 		requestLog:      requestLog,
 		chatSettlement:  chatSettlement,
+		chatAuthorizer:  chatAuthorizer,
 	}
 }

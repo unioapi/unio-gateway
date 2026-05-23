@@ -1,20 +1,19 @@
 # Project Status
 
-更新时间：2026-05-22
+更新时间：2026-05-23
 
 实现主线：
 
 ```text
 阶段 7：计费与账本
-当前建议小节：7.17 余额预检查与预授权最小闭环
+当前建议小节：7.17 余额预检查与冻结闭环
 ```
 
 当前协作焦点：
 
 ```text
-阶段 7 预授权底座已推进到 billing/ledger 层。
-当前暂停继续接 gateway，准备交接给其他 AI。
-下一节第一步先拆分 internal/billing/service.go，保持行为不变。
+阶段 7 billing 拆分、ledger reservation、冻结金额估算和 gateway authorization baseline 已完成。
+当前继续 TASK-7.17：落地部分余额授权和平台差额核销。
 ```
 
 说明：
@@ -38,13 +37,15 @@ Release blockers 表示公开生产前必须关闭，不等于每次学习或复
 7. 阶段 5 学习交接已写入 [phase-05-adapter-boundary/HANDOFF.md](chapters/phase-05-adapter-boundary/HANDOFF.md)，下一次可从 `internal/adapter/sse` 开始学习。
 8. Failure 结构化错误基础已接入主要模块，并写入 [phase-08-observability-stability/HANDOFF.md](chapters/phase-08-observability-stability/HANDOFF.md)，后续 provider error classification、retry/fallback 和 observability 以此为基础继续推进。
 9. 阶段 7 ledger reservation schema、`reserved_balance`、`PreAuthorize`、`Capture`、`Release` 已完成。
-10. 阶段 7 billing 预授权估算 `EstimateAuthorization` 已完成。
+10. 阶段 7 billing 冻结金额估算 `EstimateAuthorizationAmount` 已完成。
+11. 阶段 7 gateway request-level authorization 已接入非流式和流式调用链，失败、取消、无 final usage 和 fallback 失败路径已 release。
 
 重要产品判断：
 
 1. tool calling、function calling、streaming tool delta、structured output 和 multimodal input 都是商业 API 网关必须支持的能力。
 2. 当前 text-only MVP 不假装支持这些能力；SSE parser 已补稳，后续进入正式实现前仍必须设计 tool/multimodal DTO、adapter contract、stream delta、usage/billing 和 fallback 语义。
 3. 阶段 6 已收口；credential 正式解析和 provider/project 后台策略推迟到阶段 9，预算约束推迟到阶段 7。
+4. 阶段 7 计费产品规则已定：部分余额授权 + 平台差额核销；不允许用户负余额、隐性欠费或充值后追扣旧账。
 
 验证状态：
 
@@ -52,7 +53,7 @@ Release blockers 表示公开生产前必须关闭，不等于每次学习或复
 go test ./...
 ```
 
-最近一次验证通过：2026-05-22。
+最近一次验证通过：2026-05-23。
 
 ## 阶段总览
 
@@ -64,7 +65,7 @@ go test ./...
 | 阶段 4 | [OpenAI-compatible API](chapters/phase-04-openai-compatible-api/STATUS.md) | partial | `/v1/models`、`/v1/chat/completions`、SSE 基础入口、严格 JSON 和 Chat DTO text-only 校验已完成；project 模型可见性和 SSE 写出后观测随阶段 6/7/8 收口。 |
 | 阶段 5 | [Adapter 边界](chapters/phase-05-adapter-boundary/STATUS.md) | partial | adapter 接口、OpenAI 非流式/流式、usage 映射、当前 HTTP DTO 可透传参数 contract 和项目级 SSE event reader 已完成；provider error metadata 进入阶段 8 观测主线。 |
 | 阶段 6 | [模型与渠道](chapters/phase-06-model-channel-routing/STATUS.md) | done | provider/channel/model/routing/fallback、project 模型 allow-list/deny-list、adapter/routing/gateway/http/server app bootstrap 和启动期 provider.adapter preflight 已接入；credential 正式解析和 provider/project 后台策略推迟到阶段 9，预算约束推迟到阶段 7。 |
-| 阶段 7 | [计费与账本](chapters/phase-07-billing-ledger/STATUS.md) | in_progress | request/attempt/usage/ledger/settlement、stream final usage、ledger reservation 和 billing 预授权估算已完成；gateway 预授权接入、状态机、幂等和成本快照仍是当前 P0/P1。 |
+| 阶段 7 | [计费与账本](chapters/phase-07-billing-ledger/STATUS.md) | in_progress | request/attempt/usage/ledger/settlement、stream final usage、ledger reservation、billing 冻结金额估算和 gateway authorization baseline 已完成；部分余额授权/平台差额核销、状态机、幂等和成本快照仍是当前 P0/P1。 |
 | 阶段 8 | [可观测性与稳定性](chapters/phase-08-observability-stability/STATUS.md) | planned | 尚未正式进入。当前只有少量 adapter metadata 相关前置 TODO。 |
 | 阶段 9 | [后台管理](chapters/phase-09-admin/STATUS.md) | planned | 尚未正式进入。进入前必须先处理 credential resolver 和后台管理边界。 |
 
@@ -72,8 +73,8 @@ go test ./...
 
 当前不应进入生产公开计费 API，原因：
 
-1. 非流式请求没有余额预检或预授权。
-2. 流式请求没有预授权、capture、release 闭环。
+1. 部分余额授权和平台差额核销未落地；当前低余额用户会被全额冻结门槛拦截，actual 超过冻结金额无法成功收口。
+2. provider/model tokenizer 未接入，prompt token 仍为临时估算。
 3. settlement 缺少请求级幂等完成检测。
 4. request/attempt 终态更新缺少状态机守卫。
 5. 无 final usage 的 stream 中断策略还不能覆盖平台成本控制。
@@ -81,15 +82,12 @@ go test ./...
 
 ## 下一步
 
-当前有两类下一步，按协作目标选择：
-
-1. 交接给其他 AI 后，先按教学/重构 TODO 拆分 `internal/billing/service.go`，保持行为不变。
-2. 拆分完成后，回到 [7.17 余额预检查与预授权最小闭环](chapters/phase-07-billing-ledger/PLAN.md#task-7-17-preauthorization)，接入 gateway 调用上游前冻结余额。
+下一步回到 [7.17 余额预检查与冻结闭环](chapters/phase-07-billing-ledger/PLAN.md#task-7-17-preauthorization)，实现部分余额授权和平台差额核销。
 
 阶段 7 下一小节目标：
 
-1. 明确余额不足请求在调用上游前的拒绝策略。
-2. 为非流式和流式统一设计 reservation/pre-authorization。
-3. 成功后按真实 usage capture。
+1. 拆分 `estimated_amount` 和 `authorized_amount`。
+2. `available_balance <= 0` 时拒绝；`0 < available_balance < estimated_amount` 时冻结可用余额并允许请求继续。
+3. 成功后按真实 usage 计算 actual amount，capture 已冻结金额，差额写平台核销。
 4. 失败、取消、无 final usage 时按策略 release 或保留异常记录。
-5. 保证 ledger-first 和幂等语义不被破坏。
+5. 保证 ledger-first、write-off 可审计和幂等语义不被破坏。

@@ -18,6 +18,11 @@ func NewChatGateway(db gateway.ChatTxBeginner, queries *sqlc.Queries, router gat
 		billing.Service{},
 		ledgerService,
 	)
+	chatAuthorizationServer := gateway.NewChatAuthorizationService(
+		queries,
+		billing.Service{},
+		ledgerService,
+	)
 
 	return gateway.NewChatCompletionService(
 		router,
@@ -25,5 +30,6 @@ func NewChatGateway(db gateway.ChatTxBeginner, queries *sqlc.Queries, router gat
 		nil,
 		requestLogStore,
 		chatSettlementService,
+		chatAuthorizationServer,
 	)
 }

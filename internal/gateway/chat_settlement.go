@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
+
 	"github.com/ThankCat/unio-api/internal/adapter"
 	"github.com/ThankCat/unio-api/internal/auth"
 	"github.com/ThankCat/unio-api/internal/billing"
@@ -12,8 +15,6 @@ import (
 	"github.com/ThankCat/unio-api/internal/ledger"
 	"github.com/ThankCat/unio-api/internal/requestlog"
 	"github.com/ThankCat/unio-api/internal/store/sqlc"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // ChatTxBeginner 定义 chat settlement 开启数据库事务所需能力。
@@ -21,9 +22,10 @@ type ChatTxBeginner interface {
 	Begin(ctx context.Context) (pgx.Tx, error)
 }
 
-// ChatLedgerDebiter 定义 chat settlement 扣减用户余额所需能力。
-type ChatLedgerDebiter interface {
-	DebitWithQueries(ctx context.Context, queries *sqlc.Queries, params ledger.DebitParams) (ledger.Entry, error)
+// ChatLedgerCapturer 定义 chat settlement 确认扣费或释放冻结余额所需能力。
+type ChatLedgerCapturer interface {
+	CaptureWithQueries(ctx context.Context, queries *sqlc.Queries, params ledger.CaptureParams) (ledger.Reservation, error)
+	ReleaseWithQueries(ctx context.Context, queries *sqlc.Queries, params ledger.ReleaseParams) (ledger.Reservation, error)
 }
 
 // ChatBillingCalculator 定义 chat settlement 计算请求金额所需能力。
@@ -36,11 +38,11 @@ type ChatSettlementService struct {
 	db                ChatTxBeginner
 	queries           *sqlc.Queries
 	billingCalculator ChatBillingCalculator
-	ledgerDebiter     ChatLedgerDebiter
+	ledgerCapturer    ChatLedgerCapturer
 }
 
 // NewChatSettlementService 创建 chat 请求结算 service。
-func NewChatSettlementService(db ChatTxBeginner, queries *sqlc.Queries, billingCalculator ChatBillingCalculator, ledgerDebiter ChatLedgerDebiter) *ChatSettlementService {
+func NewChatSettlementService(db ChatTxBeginner, queries *sqlc.Queries, billingCalculator ChatBillingCalculator, ledgerCapturer ChatLedgerCapturer) *ChatSettlementService {
 	if db == nil {
 		panic("gateway: chat settlement tx beginner is required")
 	}
@@ -50,15 +52,15 @@ func NewChatSettlementService(db ChatTxBeginner, queries *sqlc.Queries, billingC
 	if billingCalculator == nil {
 		panic("gateway: chat billing calculator is required")
 	}
-	if ledgerDebiter == nil {
-		panic("gateway: chat ledger debiter is required")
+	if ledgerCapturer == nil {
+		panic("gateway: chat ledger capturer is required")
 	}
 
 	return &ChatSettlementService{
 		db:                db,
 		queries:           queries,
 		billingCalculator: billingCalculator,
-		ledgerDebiter:     ledgerDebiter,
+		ledgerCapturer:    ledgerCapturer,
 	}
 }
 
@@ -68,6 +70,7 @@ type ChatSettlementParams struct {
 	RequestRecord         requestlog.RequestRecord
 	AttemptRecord         requestlog.AttemptRecord
 	Principal             *auth.APIKeyPrincipal
+	Authorization         ChatAuthorization
 	ResponseModelID       string
 	ModelDBID             int64
 	FinalProviderID       int64
@@ -179,13 +182,22 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 		return err
 	}
 
+	reservationID := params.Authorization.ReservationID
+
 	// ledger_entries.amount 要求大于 0；零金额请求保留 usage 和 price snapshot，但不写余额流水。
-	if !numericIsZero(settlement.Amount) {
-		_, err = s.ledgerDebiter.DebitWithQueries(ctx, txQueries, ledger.DebitParams{
-			UserID:          params.Principal.UserID,
-			RequestRecordID: &params.RequestRecord.ID,
+	if numericIsZero(settlement.Amount) {
+		_, err := s.ledgerCapturer.ReleaseWithQueries(ctx, txQueries, ledger.ReleaseParams{
+			RequestRecordID: params.RequestRecord.ID,
+			ReservationID:   &reservationID,
+		})
+		if err != nil {
+			return err
+		}
+	} else {
+		_, err = s.ledgerCapturer.CaptureWithQueries(ctx, txQueries, ledger.CaptureParams{
+			RequestRecordID: params.RequestRecord.ID,
+			ReservationID:   &reservationID,
 			Amount:          settlement.Amount,
-			Currency:        settlement.Currency,
 			IdempotencyKey:  fmt.Sprintf("chat:settle:%d", params.RequestRecord.ID),
 			Reason:          "chat completion settlement",
 		})

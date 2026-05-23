@@ -268,7 +268,7 @@ const (
 	// CodeLedgerStoreFailed 表示 ledger 事务或存储操作失败。
 	CodeLedgerStoreFailed Code = "ledger_store_failed"
 
-	// CodeLedgerReservationNotFound 表示请求没有可结算的余额预授权记录。
+	// CodeLedgerReservationNotFound 表示请求没有可结算的余额冻结记录。
 	CodeLedgerReservationNotFound Code = "ledger_reservation_not_found"
 )
 
@@ -281,6 +281,9 @@ const (
 
 	// CodeGatewayChatSettlementFailed 表示 chat 成功响应后的结算失败。
 	CodeGatewayChatSettlementFailed Code = "gateway_chat_settlement_failed"
+
+	// CodeGatewayChatAuthorizationFailed 表示 chat 调用上游前冻结余额失败。
+	CodeGatewayChatAuthorizationFailed Code = "gateway_chat_authorization_failed"
 )
 
 const (
