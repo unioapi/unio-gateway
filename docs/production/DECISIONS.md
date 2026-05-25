@@ -156,3 +156,34 @@ settlement 不能再把 actual_amount > authorized_amount 当作普通失败；
 
 该规则已由 [GAP-7-014](TODO_REGISTER.md#gap-7-014) 在 2026-05-25 落地，后续仍需用 tokenizer、模型 max_tokens、核销上限和告警继续降低平台风险。
 ```
+
+## DEC-007 Settlement 失败补偿归属 worker
+
+状态：accepted
+
+决策：
+
+```text
+上游已经成功并返回可靠 usage 后，如果 SettleSuccessfulChat 失败，不能简单 release 冻结余额。
+这类失败应通过后续 worker 持久化 recovery job 和幂等 settlement 重试收口。
+
+当前阶段暂不实现 gateway goroutine 补偿，也不在 tokenizer 小节插队实现 worker。
+```
+
+原因：
+
+```text
+上游成功后 provider 侧可能已经产生成本，release 会把应收款变成平台损失。
+但 settlement 失败又可能导致 reservation 长期 authorized、reserved_balance 悬挂。
+
+goroutine 不是可靠账务补偿机制：进程退出会丢任务，多实例下也难以审计和去重。
+补偿任务必须落到数据库事实，并由 worker 使用幂等逻辑重试。
+```
+
+影响：
+
+```text
+GAP-7-007 和 GAP-7-012 继续作为公开计费前 release blocker。
+后续进入 worker/recovery 线前，必须先设计 settlement 幂等边界。
+下一小节仍优先处理 GAP-7-013 tokenizer 估算替换。
+```

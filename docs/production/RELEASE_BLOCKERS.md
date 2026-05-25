@@ -7,8 +7,8 @@
 | ID | GAP | 阶段 | 阻断原因 | 关联任务 |
 | --- | --- | --- | --- | --- |
 | RB-005 | [GAP-7-003](TODO_REGISTER.md#gap-7-003) | 阶段 7 | request/attempt 终态缺少状态机守卫，并发更新可能覆盖账务事实。 | [TASK-7.18](../chapters/phase-07-billing-ledger/PLAN.md#task-7-18-request-state-machine) |
-| RB-007 | [GAP-7-007](TODO_REGISTER.md#gap-7-007) | 阶段 7 | settlement 缺少请求级幂等完成检测，补偿任务可能把已成功请求误标失败。 | [TASK-7.19](../chapters/phase-07-billing-ledger/PLAN.md#task-7-19-settlement-idempotency) |
-| RB-009 | [GAP-7-012](TODO_REGISTER.md#gap-7-012) | 阶段 7 | 外部事务内并发 debit 幂等冲突可能导致 settlement 失败且无法稳定重入。 | [TASK-7.19](../chapters/phase-07-billing-ledger/PLAN.md#task-7-19-settlement-idempotency) |
+| RB-007 | [GAP-7-007](TODO_REGISTER.md#gap-7-007) | 阶段 7 | settlement 缺少请求级幂等完成检测；上游成功后的 settlement 失败可能导致冻结余额悬挂，后续需由 worker recovery 持久化补偿并幂等重试。 | [TASK-7.19](../chapters/phase-07-billing-ledger/PLAN.md#task-7-19-settlement-idempotency) |
+| RB-009 | [GAP-7-012](TODO_REGISTER.md#gap-7-012) | 阶段 7 | 外部事务内并发 debit 幂等冲突可能导致 settlement 失败且无法稳定重入，worker recovery 前必须解决。 | [TASK-7.19](../chapters/phase-07-billing-ledger/PLAN.md#task-7-19-settlement-idempotency) |
 
 ## 使用规则
 

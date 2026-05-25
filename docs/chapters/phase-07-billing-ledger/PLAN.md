@@ -220,6 +220,9 @@ prompt token 仍为临时估算。
 2. 重复 settlement 时检测既有 usage/snapshot/ledger。
 3. 并发 settlement 不能把已成功请求误标失败。
 4. 外部事务内的 ledger 幂等冲突需要稳定重入策略。
+5. 上游成功且有可靠 usage 后，settlement 失败不能直接 release 冻结余额。
+6. settlement recovery 后续应由 worker 持久化任务处理，不使用 gateway goroutine。
+7. recovery worker 重试 settlement 前，必须先保证 usage、price snapshot、ledger capture 和 request 状态更新幂等。
 
 关联 GAP：
 

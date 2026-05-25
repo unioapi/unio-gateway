@@ -25,7 +25,7 @@
 | 任务 | 状态 | 说明 |
 | --- | --- | --- |
 | TASK-7.18 | todo | request/attempt 状态机守卫。 |
-| TASK-7.19 | todo | settlement 幂等。 |
+| TASK-7.19 | todo | settlement 幂等；上游成功后的 settlement 失败 recovery 暂不插队，后续进入 worker/recovery 线时处理。 |
 | TASK-7.20 | todo | provider/channel 成本价和 cost snapshot。 |
 | TASK-7.21 | todo | safe/internal error 与 usage source 审计。 |
 | TASK-7.22 | todo | price effective window 约束。 |
@@ -40,4 +40,4 @@ rg -n "GAP-7-" docs/production/TODO_REGISTER.md cmd internal migrations sql
 
 1. 接入 provider/model tokenizer，替换 prompt token 临时估算。
 2. 进入 request/attempt 状态机守卫前，复核当前阶段所有 P0 release blocker。
-3. 推进 settlement 请求级幂等。
+3. settlement recovery 暂不做，等进入 worker/settlement 幂等线时处理。

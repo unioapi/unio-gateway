@@ -33,6 +33,25 @@
 
 本班次不要再恢复旧表名 `ledger_write_offs`；后台、报表和后续查询都应该围绕 `ledger_billing_exceptions` 读取。
 
+## 本次新增决策
+
+settlement 成功语义后的失败暂时不在当前小节实现补偿 worker。
+
+具体判断：
+
+```text
+上游已经成功并返回可靠 usage 后，如果 SettleSuccessfulChat 失败，不能简单 release 冻结余额。
+因为 provider 侧可能已经产生成本，业务语义应优先补偿重试 settlement/capture。
+
+当前接受这个风险暂时存在：
+request 会被标记 failed，reservation 可能保持 authorized，reserved_balance 可能悬挂。
+
+该问题不使用 gateway goroutine 处理。
+后续进入 worker/settlement recovery 线时，用数据库持久化 recovery job + 幂等 settlement 重试收口。
+```
+
+因此下一节不切到 recovery worker，继续做 `GAP-7-013` tokenizer 估算替换。
+
 已经完成：
 
 1. request record 和 attempt record 基础链路。
@@ -123,6 +142,7 @@ request succeeded
 1. 接入 provider/model tokenizer，替换 prompt token 临时估算。
 2. 进入 request/attempt 状态机守卫和 settlement 幂等前，复核剩余 P0 blocker。
 3. 后续后台/报表查询需要同时读取 `ledger_billing_exceptions` 中的 `write_off` 与 `risk_exposure` 事件。
+4. settlement recovery 暂时不做，等进入 `cmd/worker` / recovery job 小节时再处理。
 
 必须先处理的 GAP：
 
@@ -136,6 +156,7 @@ request succeeded
 4. [TODO_REGISTER.md](../../production/TODO_REGISTER.md)
 5. [RELEASE_BLOCKERS.md](../../production/RELEASE_BLOCKERS.md)
 6. [DECISIONS.md](../../production/DECISIONS.md#dec-006-部分余额放行与平台差额核销)
+7. [DECISIONS.md](../../production/DECISIONS.md#dec-007-settlement-失败补偿归属-worker)
 
 当前关键文件：
 
@@ -163,6 +184,7 @@ request succeeded
 8. reservation 表方案已经落地，下一步不要再重开“reservation 表还是 reservation ledger”的设计。
 9. 所有补偿和重试都要考虑幂等。
 10. `Capture` 的 0 金额场景应走 `Release`，不是写 0 金额 ledger entry。
+11. 上游成功且有可靠 usage 后 settlement 失败，不要直接 release；后续必须用 worker 持久化补偿任务和幂等 settlement 重试处理。
 
 ## 最近验证
 

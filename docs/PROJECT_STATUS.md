@@ -48,6 +48,7 @@ Release blockers 表示公开生产前必须关闭，不等于每次学习或复
 2. 当前 text-only MVP 不假装支持这些能力；SSE parser 已补稳，后续进入正式实现前仍必须设计 tool/multimodal DTO、adapter contract、stream delta、usage/billing 和 fallback 语义。
 3. 阶段 6 已收口；credential 正式解析和 provider/project 后台策略推迟到阶段 9，预算约束推迟到阶段 7。
 4. 阶段 7 计费产品规则已定：部分余额授权 + 平台差额核销；不允许用户负余额、隐性欠费或充值后追扣旧账。
+5. 上游成功且已有可靠 usage 后，settlement 失败不能简单 release 冻结余额；该问题暂时不实现 goroutine 补偿，后续进入 worker/settlement recovery 线时用持久化任务和幂等重试收口。
 
 验证状态：
 
@@ -79,10 +80,11 @@ go test ./...
 2. settlement 缺少请求级幂等完成检测。
 3. request/attempt 终态更新缺少状态机守卫。
 4. stream 写出后错误观测仍依赖 request 状态和后续 observability 收口。
+5. 上游成功后 settlement 失败仍可能导致冻结余额悬挂；该问题保留为 worker/recovery 阶段处理，不在当前 tokenizer 小节实现。
 
 ## 下一步
 
-下一步继续 [7.17 余额预检查与冻结闭环](chapters/phase-07-billing-ledger/PLAN.md#task-7-17-preauthorization)，替换 prompt token 临时估算，然后推进 request/attempt 状态机守卫。
+下一步继续 [7.17 余额预检查与冻结闭环](chapters/phase-07-billing-ledger/PLAN.md#task-7-17-preauthorization)，先替换 prompt token 临时估算。settlement recovery 暂不插队，等进入 worker/settlement 幂等线时处理。
 
 阶段 7 下一小节目标：
 
