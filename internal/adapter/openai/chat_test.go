@@ -66,6 +66,10 @@ func assertUpstreamChatRequestParams(t *testing.T, req chatCompletionRequest) {
 	}
 }
 
+func intPtr(v int) *int {
+	return &v
+}
+
 func TestAdapterChatCompletionsCallsUpstream(t *testing.T) {
 	var gotAuthorization string
 	var gotContentType string
@@ -96,10 +100,10 @@ func TestAdapterChatCompletionsCallsUpstream(t *testing.T) {
 			Choices: []chatChoice{
 				{Message: chatMessage{Role: "assistant", Content: "hello from fake upstream"}},
 			},
-			Usage: chatCompletionUsage{
-				PromptTokens:     11,
-				CompletionTokens: 12,
-				TotalTokens:      23,
+			Usage: &chatCompletionUsage{
+				PromptTokens:     intPtr(11),
+				CompletionTokens: intPtr(12),
+				TotalTokens:      intPtr(23),
 				PromptTokensDetails: chatPromptTokensDetails{
 					CachedTokens: 7,
 				},
@@ -175,6 +179,71 @@ func TestAdapterChatCompletionsCallsUpstream(t *testing.T) {
 	}
 	if got.Usage.ReasoningTokens != 3 {
 		t.Fatalf("got reasoning_tokens %d, want 3", got.Usage.ReasoningTokens)
+	}
+}
+
+func TestAdapterChatCompletionsReturnsErrorForMissingUsage(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "missing usage object",
+			body: `{
+				"id": "chatcmpl_missing_usage",
+				"model": "gpt-4.1",
+				"choices": [
+					{"message": {"role": "assistant", "content": "hello"}}
+				]
+			}`,
+		},
+		{
+			name: "missing required usage token field",
+			body: `{
+				"id": "chatcmpl_missing_usage_field",
+				"model": "gpt-4.1",
+				"choices": [
+					{"message": {"role": "assistant", "content": "hello"}}
+				],
+				"usage": {
+					"completion_tokens": 12,
+					"total_tokens": 23
+				}
+			}`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				if _, err := w.Write([]byte(tc.body)); err != nil {
+					t.Fatalf("write response body: %v", err)
+				}
+			}))
+			defer server.Close()
+
+			openAIAdapter := NewAdapter(server.Client())
+
+			_, err := openAIAdapter.ChatCompletions(context.Background(), channel.Runtime{
+				BaseURL: server.URL + "/v1",
+				APIKey:  "test-secret",
+				Timeout: 30 * time.Second,
+			}, adapter.ChatRequest{
+				Model: "gpt-4.1",
+				Messages: []adapter.ChatMessage{
+					{Role: "user", Content: "hello"},
+				},
+			})
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+
+			if failure.CodeOf(err) != failure.CodeAdapterInvalidResponse {
+				t.Fatalf("expected failure code %q, got %q", failure.CodeAdapterInvalidResponse, failure.CodeOf(err))
+			}
+		})
 	}
 }
 
@@ -324,9 +393,9 @@ func TestAdapterStreamChatCompletionsParsesUpstreamSSE(t *testing.T) {
 				Model:   "gpt-4.1",
 				Choices: []chatStreamChoice{},
 				Usage: &chatCompletionUsage{
-					PromptTokens:     11,
-					CompletionTokens: 12,
-					TotalTokens:      23,
+					PromptTokens:     intPtr(11),
+					CompletionTokens: intPtr(12),
+					TotalTokens:      intPtr(23),
 					PromptTokensDetails: chatPromptTokensDetails{
 						CachedTokens: 7,
 					},

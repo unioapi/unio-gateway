@@ -74,6 +74,7 @@ RETURNING
     authorized_amount,
     captured_amount,
     released_amount,
+    estimated_amount,
     capture_ledger_entry_id,
     idempotency_key,
     reason,
@@ -101,6 +102,7 @@ func (q *Queries) CaptureLedgerReservation(ctx context.Context, arg CaptureLedge
 		&i.AuthorizedAmount,
 		&i.CapturedAmount,
 		&i.ReleasedAmount,
+		&i.EstimatedAmount,
 		&i.CaptureLedgerEntryID,
 		&i.IdempotencyKey,
 		&i.Reason,
@@ -245,6 +247,7 @@ INSERT INTO ledger_reservations (
     request_record_id,
     currency,
     status,
+    estimated_amount,
     authorized_amount,
     idempotency_key,
     reason
@@ -256,7 +259,8 @@ VALUES (
            'authorized',
            $4,
            $5,
-           $6
+           $6,
+           $7
        )
 RETURNING
     id,
@@ -267,6 +271,7 @@ RETURNING
     authorized_amount,
     captured_amount,
     released_amount,
+    estimated_amount,
     capture_ledger_entry_id,
     idempotency_key,
     reason,
@@ -280,6 +285,7 @@ type CreateLedgerReservationParams struct {
 	UserID           int64
 	RequestRecordID  int64
 	Currency         string
+	EstimatedAmount  pgtype.Numeric
 	AuthorizedAmount pgtype.Numeric
 	IdempotencyKey   string
 	Reason           string
@@ -290,6 +296,7 @@ func (q *Queries) CreateLedgerReservation(ctx context.Context, arg CreateLedgerR
 		arg.UserID,
 		arg.RequestRecordID,
 		arg.Currency,
+		arg.EstimatedAmount,
 		arg.AuthorizedAmount,
 		arg.IdempotencyKey,
 		arg.Reason,
@@ -304,6 +311,7 @@ func (q *Queries) CreateLedgerReservation(ctx context.Context, arg CreateLedgerR
 		&i.AuthorizedAmount,
 		&i.CapturedAmount,
 		&i.ReleasedAmount,
+		&i.EstimatedAmount,
 		&i.CaptureLedgerEntryID,
 		&i.IdempotencyKey,
 		&i.Reason,
@@ -311,6 +319,128 @@ func (q *Queries) CreateLedgerReservation(ctx context.Context, arg CreateLedgerR
 		&i.UpdatedAt,
 		&i.CapturedAt,
 		&i.ReleasedAt,
+	)
+	return i, err
+}
+
+const createLedgerRiskExposureException = `-- name: CreateLedgerRiskExposureException :one
+INSERT INTO ledger_billing_exceptions (
+    user_id, request_record_id, reservation_id, event_type,
+    actual_amount, captured_amount, platform_amount,
+    currency, reason_code, reason
+)
+VALUES (
+   $1,
+   $2,
+   $3,
+   'risk_exposure',
+   NULL,
+   0,
+   $4::numeric,
+   $5,
+   $6,
+   $7
+       )
+ON CONFLICT (reservation_id) DO UPDATE
+    SET reason_code = ledger_billing_exceptions.reason_code
+RETURNING id, user_id, request_record_id, reservation_id, event_type, actual_amount, captured_amount, platform_amount, currency, reason_code, reason, created_at
+`
+
+type CreateLedgerRiskExposureExceptionParams struct {
+	UserID          int64
+	RequestRecordID int64
+	ReservationID   int64
+	PlatformAmount  pgtype.Numeric
+	Currency        string
+	ReasonCode      string
+	Reason          string
+}
+
+func (q *Queries) CreateLedgerRiskExposureException(ctx context.Context, arg CreateLedgerRiskExposureExceptionParams) (LedgerBillingException, error) {
+	row := q.db.QueryRow(ctx, createLedgerRiskExposureException,
+		arg.UserID,
+		arg.RequestRecordID,
+		arg.ReservationID,
+		arg.PlatformAmount,
+		arg.Currency,
+		arg.ReasonCode,
+		arg.Reason,
+	)
+	var i LedgerBillingException
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.RequestRecordID,
+		&i.ReservationID,
+		&i.EventType,
+		&i.ActualAmount,
+		&i.CapturedAmount,
+		&i.PlatformAmount,
+		&i.Currency,
+		&i.ReasonCode,
+		&i.Reason,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const createLedgerWriteOffException = `-- name: CreateLedgerWriteOffException :one
+INSERT INTO ledger_billing_exceptions (
+    user_id, request_record_id, reservation_id, event_type,
+    actual_amount, captured_amount, platform_amount,
+    currency, reason_code, reason
+)
+VALUES (
+   $1,
+   $2,
+   $3,
+   'write_off',
+   $4::numeric,
+   $5::numeric,
+   $4::numeric - $5::numeric,
+   $6,
+   $7,
+   $8
+       )
+RETURNING id, user_id, request_record_id, reservation_id, event_type, actual_amount, captured_amount, platform_amount, currency, reason_code, reason, created_at
+`
+
+type CreateLedgerWriteOffExceptionParams struct {
+	UserID          int64
+	RequestRecordID int64
+	ReservationID   int64
+	ActualAmount    pgtype.Numeric
+	CapturedAmount  pgtype.Numeric
+	Currency        string
+	ReasonCode      string
+	Reason          string
+}
+
+func (q *Queries) CreateLedgerWriteOffException(ctx context.Context, arg CreateLedgerWriteOffExceptionParams) (LedgerBillingException, error) {
+	row := q.db.QueryRow(ctx, createLedgerWriteOffException,
+		arg.UserID,
+		arg.RequestRecordID,
+		arg.ReservationID,
+		arg.ActualAmount,
+		arg.CapturedAmount,
+		arg.Currency,
+		arg.ReasonCode,
+		arg.Reason,
+	)
+	var i LedgerBillingException
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.RequestRecordID,
+		&i.ReservationID,
+		&i.EventType,
+		&i.ActualAmount,
+		&i.CapturedAmount,
+		&i.PlatformAmount,
+		&i.Currency,
+		&i.ReasonCode,
+		&i.Reason,
+		&i.CreatedAt,
 	)
 	return i, err
 }
@@ -371,6 +501,32 @@ func (q *Queries) EnsureUserBalance(ctx context.Context, arg EnsureUserBalancePa
 	return err
 }
 
+const getLedgerBillingExceptionByReservationID = `-- name: GetLedgerBillingExceptionByReservationID :one
+SELECT id, user_id, request_record_id, reservation_id, event_type, actual_amount, captured_amount, platform_amount, currency, reason_code, reason, created_at
+FROM ledger_billing_exceptions
+WHERE reservation_id = $1
+`
+
+func (q *Queries) GetLedgerBillingExceptionByReservationID(ctx context.Context, reservationID int64) (LedgerBillingException, error) {
+	row := q.db.QueryRow(ctx, getLedgerBillingExceptionByReservationID, reservationID)
+	var i LedgerBillingException
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.RequestRecordID,
+		&i.ReservationID,
+		&i.EventType,
+		&i.ActualAmount,
+		&i.CapturedAmount,
+		&i.PlatformAmount,
+		&i.Currency,
+		&i.ReasonCode,
+		&i.Reason,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getLedgerEntryByIdempotencyKey = `-- name: GetLedgerEntryByIdempotencyKey :one
 SELECT
     id,
@@ -419,6 +575,7 @@ SELECT
     authorized_amount,
     captured_amount,
     released_amount,
+    estimated_amount,
     capture_ledger_entry_id,
     idempotency_key,
     reason,
@@ -442,6 +599,7 @@ func (q *Queries) GetLedgerReservationByIdempotencyKey(ctx context.Context, idem
 		&i.AuthorizedAmount,
 		&i.CapturedAmount,
 		&i.ReleasedAmount,
+		&i.EstimatedAmount,
 		&i.CaptureLedgerEntryID,
 		&i.IdempotencyKey,
 		&i.Reason,
@@ -463,6 +621,7 @@ SELECT
     authorized_amount,
     captured_amount,
     released_amount,
+    estimated_amount,
     capture_ledger_entry_id,
     idempotency_key,
     reason,
@@ -486,6 +645,7 @@ func (q *Queries) GetLedgerReservationByRequestRecordID(ctx context.Context, req
 		&i.AuthorizedAmount,
 		&i.CapturedAmount,
 		&i.ReleasedAmount,
+		&i.EstimatedAmount,
 		&i.CaptureLedgerEntryID,
 		&i.IdempotencyKey,
 		&i.Reason,
@@ -507,6 +667,7 @@ SELECT
     authorized_amount,
     captured_amount,
     released_amount,
+    estimated_amount,
     capture_ledger_entry_id,
     idempotency_key,
     reason,
@@ -531,6 +692,7 @@ func (q *Queries) GetLedgerReservationByRequestRecordIDForUpdate(ctx context.Con
 		&i.AuthorizedAmount,
 		&i.CapturedAmount,
 		&i.ReleasedAmount,
+		&i.EstimatedAmount,
 		&i.CaptureLedgerEntryID,
 		&i.IdempotencyKey,
 		&i.Reason,
@@ -757,6 +919,7 @@ RETURNING
     authorized_amount,
     captured_amount,
     released_amount,
+    estimated_amount,
     capture_ledger_entry_id,
     idempotency_key,
     reason,
@@ -778,6 +941,7 @@ func (q *Queries) ReleaseLedgerReservation(ctx context.Context, id int64) (Ledge
 		&i.AuthorizedAmount,
 		&i.CapturedAmount,
 		&i.ReleasedAmount,
+		&i.EstimatedAmount,
 		&i.CaptureLedgerEntryID,
 		&i.IdempotencyKey,
 		&i.Reason,
@@ -824,6 +988,81 @@ func (q *Queries) ReleaseUserReservedBalance(ctx context.Context, arg ReleaseUse
 		&i.ReservedBalance,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const reserveAvailableUserBalance = `-- name: ReserveAvailableUserBalance :one
+WITH locked_balance AS (
+    SELECT
+        ub.id,
+        LEAST(
+            ub.balance - ub.reserved_balance,
+            $1::numeric(20, 10)
+        )::numeric(20, 10) AS authorized_amount
+    FROM user_balances ub
+    WHERE ub.user_id = $2
+      AND ub.currency = $3
+        FOR UPDATE
+),
+     updated AS (
+         UPDATE user_balances ub
+             SET
+                 reserved_balance = ub.reserved_balance + lb.authorized_amount,
+                 updated_at = now()
+             FROM locked_balance lb
+             WHERE ub.id = lb.id
+                 AND lb.authorized_amount > 0
+             RETURNING
+                 ub.id,
+                 ub.user_id,
+                 ub.currency,
+                 ub.balance,
+                 ub.reserved_balance,
+                 ub.created_at,
+                 ub.updated_at,
+                 lb.authorized_amount
+     )
+SELECT id,
+       user_id,
+       currency,
+       balance,
+       reserved_balance,
+       created_at,
+       updated_at,
+       authorized_amount
+FROM updated
+`
+
+type ReserveAvailableUserBalanceParams struct {
+	EstimatedAmount pgtype.Numeric
+	UserID          int64
+	Currency        string
+}
+
+type ReserveAvailableUserBalanceRow struct {
+	ID               int64
+	UserID           int64
+	Currency         string
+	Balance          pgtype.Numeric
+	ReservedBalance  pgtype.Numeric
+	CreatedAt        pgtype.Timestamptz
+	UpdatedAt        pgtype.Timestamptz
+	AuthorizedAmount pgtype.Numeric
+}
+
+func (q *Queries) ReserveAvailableUserBalance(ctx context.Context, arg ReserveAvailableUserBalanceParams) (ReserveAvailableUserBalanceRow, error) {
+	row := q.db.QueryRow(ctx, reserveAvailableUserBalance, arg.EstimatedAmount, arg.UserID, arg.Currency)
+	var i ReserveAvailableUserBalanceRow
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Currency,
+		&i.Balance,
+		&i.ReservedBalance,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.AuthorizedAmount,
 	)
 	return i, err
 }

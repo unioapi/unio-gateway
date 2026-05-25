@@ -91,11 +91,13 @@ type fakeChatSettlementExecutor struct {
 
 // fakeChatAuthorizer 是 gateway 测试使用的 chat authorization 替身。
 type fakeChatAuthorizer struct {
-	authorizeParams []ChatAuthorizeParams
-	releaseParams   []ChatReleaseAuthorizationParams
-	authorization   ChatAuthorization
-	authorizeErr    error
-	releaseErr      error
+	authorizeParams               []ChatAuthorizeParams
+	releaseParams                 []ChatReleaseAuthorizationParams
+	releaseBillingExceptionParams []ChatReleaseBillingExceptionParams
+	authorization                 ChatAuthorization
+	authorizeErr                  error
+	releaseErr                    error
+	releaseBillingExceptionErr    error
 }
 
 // newFakeRequestLogService 创建测试用 requestlog.Service。
@@ -135,6 +137,12 @@ func (a *fakeChatAuthorizer) AuthorizeChat(ctx context.Context, params ChatAutho
 func (a *fakeChatAuthorizer) ReleaseChat(ctx context.Context, params ChatReleaseAuthorizationParams) error {
 	a.releaseParams = append(a.releaseParams, params)
 	return a.releaseErr
+}
+
+// ReleaseChatForBillingException 记录异常释放冻结余额参数，并返回测试预设错误。
+func (a *fakeChatAuthorizer) ReleaseChatForBillingException(ctx context.Context, params ChatReleaseBillingExceptionParams) error {
+	a.releaseBillingExceptionParams = append(a.releaseBillingExceptionParams, params)
+	return a.releaseBillingExceptionErr
 }
 
 // CreateRequest 记录创建 request record 的参数并返回 pending 记录。
@@ -1255,6 +1263,9 @@ func TestChatCompletionServiceStreamChatCompletionRoutesAndCallsAdapter(t *testi
 	if len(authorizer.releaseParams) != 0 {
 		t.Fatalf("expected no authorization release on successful stream settlement, got %d", len(authorizer.releaseParams))
 	}
+	if len(authorizer.releaseBillingExceptionParams) != 0 {
+		t.Fatalf("expected no billing exception release on successful stream settlement, got %d", len(authorizer.releaseBillingExceptionParams))
+	}
 }
 
 func TestChatCompletionServiceStreamChatCompletionReturnsMissingAdapterWithoutRetry(t *testing.T) {
@@ -1500,11 +1511,17 @@ func TestChatCompletionServiceStreamChatCompletionFailsWithoutFinalUsage(t *test
 	if len(settlement.params) != 0 {
 		t.Fatalf("expected settlement not to run without final usage, got %d calls", len(settlement.params))
 	}
-	if len(authorizer.releaseParams) != 1 {
-		t.Fatalf("expected authorization release without final usage, got %d", len(authorizer.releaseParams))
+	if len(authorizer.releaseParams) != 0 {
+		t.Fatalf("expected no normal authorization release without final usage, got %d", len(authorizer.releaseParams))
 	}
-	if authorizer.releaseParams[0].ReservationID != 8801 {
-		t.Fatalf("expected released reservation id %d, got %d", int64(8801), authorizer.releaseParams[0].ReservationID)
+	if len(authorizer.releaseBillingExceptionParams) != 1 {
+		t.Fatalf("expected billing exception release without final usage, got %d", len(authorizer.releaseBillingExceptionParams))
+	}
+	if authorizer.releaseBillingExceptionParams[0].ReservationID != 8801 {
+		t.Fatalf("expected released reservation id %d, got %d", int64(8801), authorizer.releaseBillingExceptionParams[0].ReservationID)
+	}
+	if authorizer.releaseBillingExceptionParams[0].ReasonCode != "stream_final_usage_missing" {
+		t.Fatalf("expected stream_final_usage_missing reason code, got %q", authorizer.releaseBillingExceptionParams[0].ReasonCode)
 	}
 	if len(requestLog.markAttemptFailedArgs) != 1 {
 		t.Fatalf("expected attempt to fail once, got %d", len(requestLog.markAttemptFailedArgs))
@@ -1897,11 +1914,17 @@ func TestChatCompletionServiceStreamChatCompletionDoesNotFallbackAfterFirstChunk
 	if len(chunks) != 1 || chunks[0].Choices[0].Delta.Content != "partial" {
 		t.Fatalf("expected only partial chunk, got %#v", chunks)
 	}
-	if len(authorizer.releaseParams) != 1 {
-		t.Fatalf("expected authorization release after emitted stream error without final usage, got %d", len(authorizer.releaseParams))
+	if len(authorizer.releaseParams) != 0 {
+		t.Fatalf("expected no normal authorization release after emitted stream error, got %d", len(authorizer.releaseParams))
 	}
-	if authorizer.releaseParams[0].ReservationID != 8870 {
-		t.Fatalf("expected released reservation id %d, got %d", int64(8870), authorizer.releaseParams[0].ReservationID)
+	if len(authorizer.releaseBillingExceptionParams) != 1 {
+		t.Fatalf("expected billing exception release after emitted stream error without final usage, got %d", len(authorizer.releaseBillingExceptionParams))
+	}
+	if authorizer.releaseBillingExceptionParams[0].ReservationID != 8870 {
+		t.Fatalf("expected released reservation id %d, got %d", int64(8870), authorizer.releaseBillingExceptionParams[0].ReservationID)
+	}
+	if authorizer.releaseBillingExceptionParams[0].ReasonCode != "stream_interrupted_without_final_usage" {
+		t.Fatalf("expected stream_interrupted_without_final_usage reason code, got %q", authorizer.releaseBillingExceptionParams[0].ReasonCode)
 	}
 	if len(requestLog.createAttempts) != 1 {
 		t.Fatalf("expected only first attempt to be created, got %d", len(requestLog.createAttempts))
@@ -1976,11 +1999,17 @@ func TestChatCompletionServiceStreamChatCompletionMarksCanceledWithoutFallback(t
 	if classifier.called != 0 {
 		t.Fatalf("expected retry classifier not to be called after client cancel, got %d", classifier.called)
 	}
-	if len(authorizer.releaseParams) != 1 {
-		t.Fatalf("expected authorization release after stream client cancel without final usage, got %d", len(authorizer.releaseParams))
+	if len(authorizer.releaseParams) != 0 {
+		t.Fatalf("expected no normal authorization release after stream client cancel without final usage, got %d", len(authorizer.releaseParams))
 	}
-	if authorizer.releaseParams[0].ReservationID != 8880 {
-		t.Fatalf("expected released reservation id %d, got %d", int64(8880), authorizer.releaseParams[0].ReservationID)
+	if len(authorizer.releaseBillingExceptionParams) != 1 {
+		t.Fatalf("expected billing exception release after stream client cancel without final usage, got %d", len(authorizer.releaseBillingExceptionParams))
+	}
+	if authorizer.releaseBillingExceptionParams[0].ReservationID != 8880 {
+		t.Fatalf("expected released reservation id %d, got %d", int64(8880), authorizer.releaseBillingExceptionParams[0].ReservationID)
+	}
+	if authorizer.releaseBillingExceptionParams[0].ReasonCode != "stream_client_canceled_without_final_usage" {
+		t.Fatalf("expected stream_client_canceled_without_final_usage reason code, got %q", authorizer.releaseBillingExceptionParams[0].ReasonCode)
 	}
 	if len(requestLog.markAttemptCanceledArgs) != 1 {
 		t.Fatalf("expected 1 attempt canceled call, got %d", len(requestLog.markAttemptCanceledArgs))

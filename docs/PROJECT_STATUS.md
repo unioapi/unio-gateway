@@ -1,6 +1,6 @@
 # Project Status
 
-更新时间：2026-05-23
+更新时间：2026-05-25
 
 实现主线：
 
@@ -13,7 +13,7 @@
 
 ```text
 阶段 7 billing 拆分、ledger reservation、冻结金额估算和 gateway authorization baseline 已完成。
-当前继续 TASK-7.17：落地部分余额授权和平台差额核销。
+当前继续 TASK-7.17：部分余额授权、平台差额核销和无 final usage 风险敞口记录已完成；下一步替换 prompt token 临时估算。
 ```
 
 说明：
@@ -38,7 +38,9 @@ Release blockers 表示公开生产前必须关闭，不等于每次学习或复
 8. Failure 结构化错误基础已接入主要模块，并写入 [phase-08-observability-stability/HANDOFF.md](chapters/phase-08-observability-stability/HANDOFF.md)，后续 provider error classification、retry/fallback 和 observability 以此为基础继续推进。
 9. 阶段 7 ledger reservation schema、`reserved_balance`、`PreAuthorize`、`Capture`、`Release` 已完成。
 10. 阶段 7 billing 冻结金额估算 `EstimateAuthorizationAmount` 已完成。
-11. 阶段 7 gateway request-level authorization 已接入非流式和流式调用链，失败、取消、无 final usage 和 fallback 失败路径已 release。
+11. 阶段 7 gateway request-level authorization 已接入非流式和流式调用链，普通失败路径会 release，可能产生上游成本但无 final usage 的 stream 路径会 exception release。
+12. 阶段 7 部分余额授权和平台差额核销已完成：`estimated_amount` 与 `authorized_amount` 已拆分，低余额可冻结全部可用余额并继续请求，`actual_amount > authorized_amount` 时写入 `ledger_billing_exceptions` 的 `write_off` 平台核销事实。
+13. 阶段 7 无 final usage 的 stream 风险敞口已落地：客户端取消、emit 后中断和正常结束但缺 final usage 会释放用户冻结余额，并写入 `ledger_billing_exceptions` 的 `risk_exposure` 事实。
 
 重要产品判断：
 
@@ -53,7 +55,7 @@ Release blockers 表示公开生产前必须关闭，不等于每次学习或复
 go test ./...
 ```
 
-最近一次验证通过：2026-05-23。
+最近一次验证通过：2026-05-25。
 
 ## 阶段总览
 
@@ -65,7 +67,7 @@ go test ./...
 | 阶段 4 | [OpenAI-compatible API](chapters/phase-04-openai-compatible-api/STATUS.md) | partial | `/v1/models`、`/v1/chat/completions`、SSE 基础入口、严格 JSON 和 Chat DTO text-only 校验已完成；project 模型可见性和 SSE 写出后观测随阶段 6/7/8 收口。 |
 | 阶段 5 | [Adapter 边界](chapters/phase-05-adapter-boundary/STATUS.md) | partial | adapter 接口、OpenAI 非流式/流式、usage 映射、当前 HTTP DTO 可透传参数 contract 和项目级 SSE event reader 已完成；provider error metadata 进入阶段 8 观测主线。 |
 | 阶段 6 | [模型与渠道](chapters/phase-06-model-channel-routing/STATUS.md) | done | provider/channel/model/routing/fallback、project 模型 allow-list/deny-list、adapter/routing/gateway/http/server app bootstrap 和启动期 provider.adapter preflight 已接入；credential 正式解析和 provider/project 后台策略推迟到阶段 9，预算约束推迟到阶段 7。 |
-| 阶段 7 | [计费与账本](chapters/phase-07-billing-ledger/STATUS.md) | in_progress | request/attempt/usage/ledger/settlement、stream final usage、ledger reservation、billing 冻结金额估算和 gateway authorization baseline 已完成；部分余额授权/平台差额核销、状态机、幂等和成本快照仍是当前 P0/P1。 |
+| 阶段 7 | [计费与账本](chapters/phase-07-billing-ledger/STATUS.md) | in_progress | request/attempt/usage/ledger/settlement、stream final usage、ledger reservation、billing 冻结金额估算、gateway authorization baseline、部分余额授权、平台差额核销和无 final usage 风险敞口记录已完成；状态机、幂等、tokenizer 和成本快照仍是当前 P0/P1。 |
 | 阶段 8 | [可观测性与稳定性](chapters/phase-08-observability-stability/STATUS.md) | planned | 尚未正式进入。当前只有少量 adapter metadata 相关前置 TODO。 |
 | 阶段 9 | [后台管理](chapters/phase-09-admin/STATUS.md) | planned | 尚未正式进入。进入前必须先处理 credential resolver 和后台管理边界。 |
 
@@ -73,21 +75,17 @@ go test ./...
 
 当前不应进入生产公开计费 API，原因：
 
-1. 部分余额授权和平台差额核销未落地；当前低余额用户会被全额冻结门槛拦截，actual 超过冻结金额无法成功收口。
-2. provider/model tokenizer 未接入，prompt token 仍为临时估算。
-3. settlement 缺少请求级幂等完成检测。
-4. request/attempt 终态更新缺少状态机守卫。
-5. 无 final usage 的 stream 中断策略还不能覆盖平台成本控制。
-6. stream 写出后错误观测仍依赖 request 状态和后续 observability 收口。
+1. provider/model tokenizer 未接入，prompt token 仍为临时估算。
+2. settlement 缺少请求级幂等完成检测。
+3. request/attempt 终态更新缺少状态机守卫。
+4. stream 写出后错误观测仍依赖 request 状态和后续 observability 收口。
 
 ## 下一步
 
-下一步回到 [7.17 余额预检查与冻结闭环](chapters/phase-07-billing-ledger/PLAN.md#task-7-17-preauthorization)，实现部分余额授权和平台差额核销。
+下一步继续 [7.17 余额预检查与冻结闭环](chapters/phase-07-billing-ledger/PLAN.md#task-7-17-preauthorization)，替换 prompt token 临时估算，然后推进 request/attempt 状态机守卫。
 
 阶段 7 下一小节目标：
 
-1. 拆分 `estimated_amount` 和 `authorized_amount`。
-2. `available_balance <= 0` 时拒绝；`0 < available_balance < estimated_amount` 时冻结可用余额并允许请求继续。
-3. 成功后按真实 usage 计算 actual amount，capture 已冻结金额，差额写平台核销。
-4. 失败、取消、无 final usage 时按策略 release 或保留异常记录。
-5. 保证 ledger-first、write-off 可审计和幂等语义不被破坏。
+1. 接入 provider/model tokenizer，替换 prompt token 临时估算。
+2. 继续推进 request/attempt 状态机守卫。
+3. 继续推进 settlement 请求级幂等。

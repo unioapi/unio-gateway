@@ -24,6 +24,9 @@ type ChatAuthorizer interface {
 	AuthorizeChat(ctx context.Context, params ChatAuthorizeParams) (ChatAuthorization, error)
 	// ReleaseChat 在请求没有进入可扣费成功语义时释放冻结余额。
 	ReleaseChat(ctx context.Context, params ChatReleaseAuthorizationParams) error
+	// ReleaseChatForBillingException 释放冻结余额，并记录平台账务异常事实。
+	// 它用于上游可能已经产生成本、但本次请求没有可靠 usage、不能向用户扣费的场景。
+	ReleaseChatForBillingException(ctx context.Context, params ChatReleaseBillingExceptionParams) error
 }
 
 // ChatAuthorizeParams 表示一次 chat 请求冻结余额所需的业务事实。
@@ -35,13 +38,29 @@ type ChatAuthorizeParams struct {
 	ModelDBID     int64
 }
 
-// ChatAuthorization 表示一次已经创建成功的请求级资金冻结。
+// ChatReleaseBillingExceptionParams 表示异常释放 chat 冻结余额所需参数。
+// ReasonCode 是稳定原因码，供后续审计和告警聚合；Reason 是面向内部排查的说明。
+type ChatReleaseBillingExceptionParams struct {
+	RequestRecordID int64
+	ReservationID   int64
+	ReasonCode      string
+	Reason          string
+}
+
+// ChatAuthorization 表示一次已经创建成功地请求级资金冻结。
 // ReservationID 后续交给 settlement，用来 capture 同一笔冻结资金。
 type ChatAuthorization struct {
-	ReservationID   int64
-	RequestRecordID int64
-	Amount          pgtype.Numeric
-	Currency        string
+	ReservationID    int64
+	RequestRecordID  int64
+	EstimatedAmount  pgtype.Numeric
+	AuthorizedAmount pgtype.Numeric
+	Currency         string
+
+	// PriceID 是 authorization 时读取到的 prices.id，后续写入 price_snapshots.price_id。
+	PriceID int64
+
+	// Price 是 authorization 时使用的售卖价副本，后续 settlement 用它计算最终费用。
+	Price billing.PriceSnapshot
 }
 
 // ChatReleaseAuthorizationParams 表示释放一次冻结余额所需参数。
@@ -65,6 +84,9 @@ type ChatAuthorizationBilling interface {
 type ChatAuthorizationLedger interface {
 	PreAuthorize(ctx context.Context, params ledger.PreAuthorizeParams) (ledger.Reservation, error)
 	Release(ctx context.Context, params ledger.ReleaseParams) (ledger.Reservation, error)
+	// ReleaseWithBillingException 在释放冻结余额的同时记录平台账务异常。
+	// gateway 通过它保留“没有扣用户钱，但平台可能承担成本”的审计事实。
+	ReleaseWithBillingException(ctx context.Context, params ledger.ReleaseWithBillingExceptionParams) (ledger.Reservation, error)
 }
 
 // ChatAuthorizationService 负责 chat 请求调用上游前的余额冻结。
@@ -111,32 +133,25 @@ func (s *ChatAuthorizationService) AuthorizeChat(ctx context.Context, params Cha
 		)
 	}
 
-	// 这里是控损估算，不是最终计费依据。
+	authorizationPrice := billingPriceSnapshotFromActivePrice(price)
+
+	// 这里是控损估算，不是最终 usage；但价格必须和最终 settlement 使用同一份。
 	settlement, err := s.billing.EstimateAuthorizationAmount(
 		billing.AuthorizationEstimate{
 			PromptTokens:        estimatePromptTokensForAuthorization(params.Request.Messages),
 			MaxCompletionTokens: estimateMaxCompletionTokens(params.Request),
 		},
-		billing.PriceSnapshot{
-			Currency:             price.Currency,
-			PricingUnit:          price.PricingUnit,
-			InputPrice:           price.InputPrice,
-			OutputPrice:          price.OutputPrice,
-			CachedInputPrice:     price.CachedInputPrice,
-			ReasoningOutputPrice: price.ReasoningOutputPrice,
-			FormulaVersion:       billing.FormulaVersionV1,
-		},
+		authorizationPrice,
 	)
 	if err != nil {
 		return ChatAuthorization{}, err
 	}
 
-	// TODO(阶段7/production): [GAP-7-014] 当前 authorization 必须全额冻结 estimated amount，低余额用户会被直接拒绝，未实现“部分冻结可用余额 + 平台差额核销”的最终产品规则；公开计费 API 前；拆分 estimated_amount 和 authorized_amount，available>0 时冻结可用余额并记录平台风险敞口。
 	// 用 request_record_id 做幂等边界，避免同一请求重复冻结余额。
 	reservation, err := s.ledger.PreAuthorize(ctx, ledger.PreAuthorizeParams{
 		UserID:          params.Principal.UserID,
 		RequestRecordID: params.RequestRecord.ID,
-		Amount:          settlement.Amount,
+		EstimatedAmount: settlement.Amount,
 		Currency:        settlement.Currency,
 		IdempotencyKey:  fmt.Sprintf("chat:authorize:%d", params.RequestRecord.ID),
 		Reason:          "chat completion authorization",
@@ -146,10 +161,13 @@ func (s *ChatAuthorizationService) AuthorizeChat(ctx context.Context, params Cha
 	}
 
 	return ChatAuthorization{
-		ReservationID:   reservation.ID,
-		RequestRecordID: reservation.RequestRecordID,
-		Amount:          reservation.AuthorizedAmount,
-		Currency:        reservation.Currency,
+		ReservationID:    reservation.ID,
+		RequestRecordID:  reservation.RequestRecordID,
+		EstimatedAmount:  reservation.EstimatedAmount,
+		AuthorizedAmount: reservation.AuthorizedAmount,
+		Currency:         reservation.Currency,
+		PriceID:          price.ID,
+		Price:            authorizationPrice,
 	}, nil
 }
 
@@ -180,6 +198,19 @@ func (s *ChatCompletionService) releaseChatAuthorization(ctx context.Context, au
 	})
 }
 
+// ReleaseChatForBillingException 释放 chat 冻结余额，并记录平台账务异常事实。
+// 它只处理无法可靠结算的异常路径，不用于正常失败释放或成功扣费。
+func (s *ChatAuthorizationService) ReleaseChatForBillingException(ctx context.Context, params ChatReleaseBillingExceptionParams) error {
+	reservationID := params.ReservationID
+	_, err := s.ledger.ReleaseWithBillingException(ctx, ledger.ReleaseWithBillingExceptionParams{
+		RequestRecordID: params.RequestRecordID,
+		ReservationID:   &reservationID,
+		ReasonCode:      params.ReasonCode,
+		Reason:          params.Reason,
+	})
+	return err
+}
+
 // TODO(阶段7/production): [GAP-7-013] 冻结余额时 prompt token 目前使用临时估算，可能导致冻结金额不准；接入 provider/model tokenizer 前；替换为按模型维度的 token 估算器。
 func estimatePromptTokensForAuthorization(message []httpapi.ChatMessage) int64 {
 	var total int64
@@ -199,4 +230,36 @@ func estimateMaxCompletionTokens(req httpapi.ChatCompletionRequest) int64 {
 		return int64(*req.MaxTokens)
 	}
 	return defaultAuthorizationMaxCompletionTokens
+}
+
+// billingPriceSnapshotFromActivePrice 把当前生效价格转换为冻结和结算共用的价格快照。
+// 这样请求过程中价格变化时，最终扣费仍使用 authorization 时看到的同一份价格。
+func billingPriceSnapshotFromActivePrice(price sqlc.Price) billing.PriceSnapshot {
+	return billing.PriceSnapshot{
+		Currency:             price.Currency,
+		PricingUnit:          price.PricingUnit,
+		InputPrice:           price.InputPrice,
+		OutputPrice:          price.OutputPrice,
+		CachedInputPrice:     price.CachedInputPrice,
+		ReasoningOutputPrice: price.ReasoningOutputPrice,
+		FormulaVersion:       billing.FormulaVersionV1,
+	}
+}
+
+// releaseChatAuthorizationForBillingException 脱离客户端取消上下文释放冻结余额并记录异常事实。
+// 它用于 stream 已经可能产生上游成本、但没有 final usage，因而不能扣用户余额的边界。
+func (s *ChatCompletionService) releaseChatAuthorizationForBillingException(ctx context.Context, authorization ChatAuthorization, reasonCode string, reason string) error {
+	if authorization.RequestRecordID == 0 || authorization.ReservationID == 0 {
+		return nil
+	}
+
+	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+
+	return s.chatAuthorizer.ReleaseChatForBillingException(releaseCtx, ChatReleaseBillingExceptionParams{
+		RequestRecordID: authorization.RequestRecordID,
+		ReservationID:   authorization.ReservationID,
+		ReasonCode:      reasonCode,
+		Reason:          reason,
+	})
 }

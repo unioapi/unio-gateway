@@ -56,7 +56,7 @@ func (c *fakeChatLedgerCapturer) CaptureWithQueries(ctx context.Context, queries
 		return ledger.Reservation{}, c.err
 	}
 
-	return ledger.Reservation{ID: derefInt64(params.ReservationID), RequestRecordID: params.RequestRecordID, AuthorizedAmount: params.Amount, CapturedAmount: params.Amount}, nil
+	return ledger.Reservation{ID: derefInt64(params.ReservationID), RequestRecordID: params.RequestRecordID, AuthorizedAmount: params.ActualAmount, CapturedAmount: params.ActualAmount}, nil
 }
 
 // ReleaseWithQueries 记录事务内 ledger release 参数，并返回测试预设错误。
@@ -138,6 +138,7 @@ func (d *chatSettlementDBDeps) cleanup() {
 	ctx := context.Background()
 
 	if d.requestRecord.ID != 0 {
+		_, _ = d.pool.Exec(ctx, `DELETE FROM ledger_billing_exceptions WHERE request_record_id = $1`, d.requestRecord.ID)
 		_, _ = d.pool.Exec(ctx, `DELETE FROM ledger_reservations WHERE request_record_id = $1`, d.requestRecord.ID)
 		_, _ = d.pool.Exec(ctx, `DELETE FROM ledger_entries WHERE request_record_id = $1`, d.requestRecord.ID)
 		_, _ = d.pool.Exec(ctx, `DELETE FROM price_snapshots WHERE request_record_id = $1`, d.requestRecord.ID)
@@ -164,6 +165,7 @@ func (d *chatSettlementDBDeps) cleanup() {
 		_, _ = d.pool.Exec(ctx, `DELETE FROM projects WHERE id = $1`, d.projectID)
 	}
 	if d.userID != 0 {
+		_, _ = d.pool.Exec(ctx, `DELETE FROM ledger_billing_exceptions WHERE user_id = $1`, d.userID)
 		_, _ = d.pool.Exec(ctx, `DELETE FROM ledger_entries WHERE user_id = $1`, d.userID)
 		_, _ = d.pool.Exec(ctx, `DELETE FROM user_balances WHERE user_id = $1`, d.userID)
 		_, _ = d.pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, d.userID)
@@ -294,7 +296,7 @@ func (d *chatSettlementDBDeps) seed(t *testing.T) {
 	reservation, err := ledger.NewService(d.pool, d.queries).PreAuthorize(d.ctx, ledger.PreAuthorizeParams{
 		UserID:          user.ID,
 		RequestRecordID: requestRecord.ID,
-		Amount:          testNumeric(1_0000000000, -10),
+		EstimatedAmount: testNumeric(1_0000000000, -10),
 		Currency:        "USD",
 		IdempotencyKey:  fmt.Sprintf("chat-settlement-reserve-%d", suffix),
 		Reason:          "chat settlement test reservation",
@@ -328,10 +330,13 @@ func (d *chatSettlementDBDeps) params() ChatSettlementParams {
 		},
 		Principal: &auth.APIKeyPrincipal{UserID: d.userID, ProjectID: d.projectID, APIKeyID: d.apiKeyID},
 		Authorization: ChatAuthorization{
-			ReservationID:   d.reservationID,
-			RequestRecordID: d.requestRecord.ID,
-			Amount:          testNumeric(1_0000000000, -10),
-			Currency:        "USD",
+			ReservationID:    d.reservationID,
+			RequestRecordID:  d.requestRecord.ID,
+			EstimatedAmount:  testNumeric(1_0000000000, -10),
+			AuthorizedAmount: testNumeric(1_0000000000, -10),
+			Currency:         "USD",
+			PriceID:          d.priceID,
+			Price:            chatSettlementAuthorizationPrice(),
 		},
 		ResponseModelID:       "openai/gpt-4.1",
 		ModelDBID:             d.modelID,
@@ -410,6 +415,19 @@ func chatSettlementBilling(amount pgtype.Numeric) *fakeChatBillingCalculator {
 	}
 }
 
+// chatSettlementAuthorizationPrice 返回 seed 中创建价格对应的 billing 快照。
+func chatSettlementAuthorizationPrice() billing.PriceSnapshot {
+	return billing.PriceSnapshot{
+		Currency:             "USD",
+		PricingUnit:          billing.PricingUnitPer1MTokens,
+		InputPrice:           testNumeric(2_0000000000, -10),
+		OutputPrice:          testNumeric(8_0000000000, -10),
+		CachedInputPrice:     testNumeric(5000000000, -10),
+		ReasoningOutputPrice: testNumeric(12_0000000000, -10),
+		FormulaVersion:       billing.FormulaVersionV1,
+	}
+}
+
 // requestStatus 查询 request record 当前状态。
 func requestStatus(t *testing.T, ctx context.Context, pool *pgxpool.Pool, requestRecordID int64) string {
 	t.Helper()
@@ -437,6 +455,41 @@ func attemptStatus(t *testing.T, ctx context.Context, pool *pgxpool.Pool, attemp
 // testNumeric 创建测试用 pgtype.Numeric。
 func testNumeric(value int64, exp int32) pgtype.Numeric {
 	return pgtype.Numeric{Int: big.NewInt(value), Exp: exp, Valid: true}
+}
+
+// assertNumericEqual 校验 NUMERIC 值相等，忽略 PostgreSQL 返回的 scale 差异。
+func assertNumericEqual(t *testing.T, got pgtype.Numeric, want pgtype.Numeric) {
+	t.Helper()
+
+	if got.Valid != want.Valid {
+		t.Fatalf("expected numeric valid=%v, got valid=%v", want.Valid, got.Valid)
+	}
+	if !want.Valid {
+		return
+	}
+	if got.Int == nil || want.Int == nil {
+		t.Fatalf("expected numeric ints to be set, got=%v want=%v", got.Int, want.Int)
+	}
+
+	if numericRat(got).Cmp(numericRat(want)) != 0 {
+		t.Fatalf("expected numeric %s, got %s", numericRat(want).String(), numericRat(got).String())
+	}
+}
+
+func numericRat(value pgtype.Numeric) *big.Rat {
+	rat := new(big.Rat).SetInt(value.Int)
+	scale := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(absInt32(value.Exp))), nil)
+	if value.Exp < 0 {
+		return rat.Quo(rat, new(big.Rat).SetInt(scale))
+	}
+	return rat.Mul(rat, new(big.Rat).SetInt(scale))
+}
+
+func absInt32(value int32) int32 {
+	if value < 0 {
+		return -value
+	}
+	return value
 }
 
 func TestChatSettlementSettlesSuccessfulChat(t *testing.T) {
@@ -496,6 +549,62 @@ func TestChatSettlementSettlesSuccessfulChat(t *testing.T) {
 	if billingUsage.CachedTokens != 3 || billingUsage.ReasoningTokens != 2 {
 		t.Fatalf("expected billing cached/reasoning usage 3/2, got %d/%d", billingUsage.CachedTokens, billingUsage.ReasoningTokens)
 	}
+}
+
+func TestChatSettlementUsesAuthorizationPriceWhenActivePriceChanges(t *testing.T) {
+	deps := newChatSettlementDBDeps(t)
+	params := deps.params()
+
+	newPrice, err := deps.queries.CreatePrice(deps.ctx, sqlc.CreatePriceParams{
+		ModelID:              deps.modelID,
+		Currency:             "USD",
+		PricingUnit:          billing.PricingUnitPer1MTokens,
+		InputPrice:           testNumeric(99_0000000000, -10),
+		OutputPrice:          testNumeric(199_0000000000, -10),
+		CachedInputPrice:     testNumeric(49_0000000000, -10),
+		ReasoningOutputPrice: testNumeric(299_0000000000, -10),
+		Status:               "enabled",
+		EffectiveFrom:        pgtype.Timestamptz{Time: time.Now().Add(-time.Minute), Valid: true},
+		EffectiveTo:          pgtype.Timestamptz{Valid: false},
+	})
+	if err != nil {
+		t.Fatalf("create replacement price: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = deps.pool.Exec(context.Background(), `DELETE FROM prices WHERE id = $1`, newPrice.ID)
+	})
+
+	billingCalculator := chatSettlementBilling(testNumeric(61_000000, -10))
+	ledgerCapturer := &fakeChatLedgerCapturer{}
+	service := NewChatSettlementService(deps.pool, deps.queries, billingCalculator, ledgerCapturer)
+
+	if err := service.SettleSuccessfulChat(deps.ctx, params); err != nil {
+		t.Fatalf("settle successful chat: %v", err)
+	}
+
+	snapshot, err := deps.queries.GetPriceSnapshotByRequest(deps.ctx, deps.requestRecord.ID)
+	if err != nil {
+		t.Fatalf("get price snapshot: %v", err)
+	}
+	if !snapshot.PriceID.Valid || snapshot.PriceID.Int64 != deps.priceID {
+		t.Fatalf("expected authorization price id %d, got valid=%v value=%d", deps.priceID, snapshot.PriceID.Valid, snapshot.PriceID.Int64)
+	}
+	if snapshot.PriceID.Int64 == newPrice.ID {
+		t.Fatalf("expected settlement not to use replacement price id %d", newPrice.ID)
+	}
+
+	assertNumericEqual(t, snapshot.InputPrice, params.Authorization.Price.InputPrice)
+	assertNumericEqual(t, snapshot.OutputPrice, params.Authorization.Price.OutputPrice)
+	assertNumericEqual(t, snapshot.CachedInputPrice, params.Authorization.Price.CachedInputPrice)
+	assertNumericEqual(t, snapshot.ReasoningOutputPrice, params.Authorization.Price.ReasoningOutputPrice)
+
+	if len(billingCalculator.prices) != 1 {
+		t.Fatalf("expected one billing price, got %d", len(billingCalculator.prices))
+	}
+	assertNumericEqual(t, billingCalculator.prices[0].InputPrice, params.Authorization.Price.InputPrice)
+	assertNumericEqual(t, billingCalculator.prices[0].OutputPrice, params.Authorization.Price.OutputPrice)
+	assertNumericEqual(t, billingCalculator.prices[0].CachedInputPrice, params.Authorization.Price.CachedInputPrice)
+	assertNumericEqual(t, billingCalculator.prices[0].ReasoningOutputPrice, params.Authorization.Price.ReasoningOutputPrice)
 }
 
 func TestChatSettlementReleasesReservationForZeroAmount(t *testing.T) {

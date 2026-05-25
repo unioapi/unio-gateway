@@ -228,6 +228,7 @@ INSERT INTO ledger_reservations (
     request_record_id,
     currency,
     status,
+    estimated_amount,
     authorized_amount,
     idempotency_key,
     reason
@@ -237,6 +238,7 @@ VALUES (
            sqlc.arg(request_record_id),
            sqlc.arg(currency),
            'authorized',
+           sqlc.arg(estimated_amount),
            sqlc.arg(authorized_amount),
            sqlc.arg(idempotency_key),
            sqlc.arg(reason)
@@ -250,6 +252,7 @@ RETURNING
     authorized_amount,
     captured_amount,
     released_amount,
+    estimated_amount,
     capture_ledger_entry_id,
     idempotency_key,
     reason,
@@ -268,6 +271,7 @@ SELECT
     authorized_amount,
     captured_amount,
     released_amount,
+    estimated_amount,
     capture_ledger_entry_id,
     idempotency_key,
     reason,
@@ -288,6 +292,7 @@ SELECT
     authorized_amount,
     captured_amount,
     released_amount,
+    estimated_amount,
     capture_ledger_entry_id,
     idempotency_key,
     reason,
@@ -308,6 +313,7 @@ SELECT
     authorized_amount,
     captured_amount,
     released_amount,
+    estimated_amount,
     capture_ledger_entry_id,
     idempotency_key,
     reason,
@@ -380,6 +386,7 @@ RETURNING
     authorized_amount,
     captured_amount,
     released_amount,
+    estimated_amount,
     capture_ledger_entry_id,
     idempotency_key,
     reason,
@@ -406,6 +413,7 @@ RETURNING
     authorized_amount,
     captured_amount,
     released_amount,
+    estimated_amount,
     capture_ledger_entry_id,
     idempotency_key,
     reason,
@@ -413,3 +421,91 @@ RETURNING
     updated_at,
     captured_at,
     released_at;
+
+-- name: ReserveAvailableUserBalance :one
+WITH locked_balance AS (
+    SELECT
+        ub.id,
+        LEAST(
+            ub.balance - ub.reserved_balance,
+            sqlc.arg(estimated_amount)::numeric(20, 10)
+        )::numeric(20, 10) AS authorized_amount
+    FROM user_balances ub
+    WHERE ub.user_id = sqlc.arg(user_id)
+      AND ub.currency = sqlc.arg(currency)
+        FOR UPDATE
+),
+     updated AS (
+         UPDATE user_balances ub
+             SET
+                 reserved_balance = ub.reserved_balance + lb.authorized_amount,
+                 updated_at = now()
+             FROM locked_balance lb
+             WHERE ub.id = lb.id
+                 AND lb.authorized_amount > 0
+             RETURNING
+                 ub.id,
+                 ub.user_id,
+                 ub.currency,
+                 ub.balance,
+                 ub.reserved_balance,
+                 ub.created_at,
+                 ub.updated_at,
+                 lb.authorized_amount
+     )
+SELECT id,
+       user_id,
+       currency,
+       balance,
+       reserved_balance,
+       created_at,
+       updated_at,
+       authorized_amount
+FROM updated;
+
+-- name: CreateLedgerWriteOffException :one
+INSERT INTO ledger_billing_exceptions (
+    user_id, request_record_id, reservation_id, event_type,
+    actual_amount, captured_amount, platform_amount,
+    currency, reason_code, reason
+)
+VALUES (
+   sqlc.arg(user_id),
+   sqlc.arg(request_record_id),
+   sqlc.arg(reservation_id),
+   'write_off',
+   sqlc.arg(actual_amount)::numeric,
+   sqlc.arg(captured_amount)::numeric,
+   sqlc.arg(actual_amount)::numeric - sqlc.arg(captured_amount)::numeric,
+   sqlc.arg(currency),
+   sqlc.arg(reason_code),
+   sqlc.arg(reason)
+       )
+RETURNING *;
+
+-- name: CreateLedgerRiskExposureException :one
+INSERT INTO ledger_billing_exceptions (
+    user_id, request_record_id, reservation_id, event_type,
+    actual_amount, captured_amount, platform_amount,
+    currency, reason_code, reason
+)
+VALUES (
+   sqlc.arg(user_id),
+   sqlc.arg(request_record_id),
+   sqlc.arg(reservation_id),
+   'risk_exposure',
+   NULL,
+   0,
+   sqlc.arg(platform_amount)::numeric,
+   sqlc.arg(currency),
+   sqlc.arg(reason_code),
+   sqlc.arg(reason)
+       )
+ON CONFLICT (reservation_id) DO UPDATE
+    SET reason_code = ledger_billing_exceptions.reason_code
+RETURNING *;
+
+-- name: GetLedgerBillingExceptionByReservationID :one
+SELECT *
+FROM ledger_billing_exceptions
+WHERE reservation_id = sqlc.arg(reservation_id);

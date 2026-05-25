@@ -8,6 +8,7 @@ CREATE TABLE ledger_reservations (
     authorized_amount NUMERIC(20, 10) NOT NULL CHECK (authorized_amount > 0),
     captured_amount NUMERIC(20, 10) NOT NULL DEFAULT 0 CHECK (captured_amount >= 0),
     released_amount NUMERIC(20, 10) NOT NULL DEFAULT 0 CHECK (released_amount >= 0),
+    estimated_amount NUMERIC(20, 10) NOT NULL CHECK ( estimated_amount > 0 ),
     capture_ledger_entry_id BIGINT UNIQUE,
     idempotency_key TEXT NOT NULL UNIQUE CHECK (idempotency_key <> ''),
     reason TEXT NOT NULL CHECK (reason <> ''),
@@ -16,6 +17,11 @@ CREATE TABLE ledger_reservations (
     captured_at TIMESTAMPTZ,
     released_at TIMESTAMPTZ,
     UNIQUE (request_record_id),
+    CONSTRAINT uq_ledger_reservations_id_user_request
+        UNIQUE (id, user_id, request_record_id),
+    CONSTRAINT ck_ledger_reservations_authorized_not_above_estimated CHECK (
+        authorized_amount <= estimated_amount
+        ),
     CONSTRAINT fk_ledger_reservations_request_user FOREIGN KEY (request_record_id, user_id) REFERENCES request_records (id, user_id),
     CONSTRAINT ck_ledger_reservations_amount_sum CHECK (
      captured_amount + released_amount <= authorized_amount
@@ -67,3 +73,43 @@ CREATE INDEX idx_ledger_reservations_user_created_at
 CREATE INDEX idx_ledger_reservations_authorized_created_at
     ON ledger_reservations(created_at, id)
     WHERE status = 'authorized';
+
+
+CREATE TABLE ledger_billing_exceptions (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id),
+    request_record_id BIGINT NOT NULL,
+    reservation_id BIGINT NOT NULL,
+    event_type TEXT NOT NULL CHECK ( event_type IN ('write_off', 'risk_exposure')),
+    actual_amount NUMERIC(20, 10) CHECK (actual_amount IS NULL OR actual_amount > 0),
+    captured_amount NUMERIC(20, 10) NOT NULL CHECK (captured_amount >= 0),
+    platform_amount NUMERIC(20, 10) NOT NULL CHECK (platform_amount > 0),
+    currency TEXT NOT NULL CHECK (currency <> ''),
+    reason_code TEXT NOT NULL CHECK (reason_code <> ''),
+    reason TEXT NOT NULL CHECK (reason <> ''),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (request_record_id),
+    UNIQUE (reservation_id),
+    CONSTRAINT fk_ledger_billing_exceptions_request_user
+        FOREIGN KEY (request_record_id, user_id)
+            REFERENCES request_records(id, user_id),
+    CONSTRAINT fk_ledger_billing_exceptions_reservation
+        FOREIGN KEY (reservation_id, user_id, request_record_id)
+            REFERENCES ledger_reservations(id, user_id, request_record_id),
+    CONSTRAINT ck_ledger_billing_exceptions_amounts CHECK (
+        (
+            event_type = 'write_off'
+                AND actual_amount IS NOT NULL
+                AND captured_amount < actual_amount
+                AND platform_amount = actual_amount - captured_amount
+            )
+            OR (
+            event_type = 'risk_exposure'
+                AND actual_amount IS NULL
+                AND captured_amount = 0
+            )
+        )
+);
+
+CREATE INDEX idx_ledger_billing_exceptions_user_created_at
+    ON ledger_billing_exceptions(user_id, created_at DESC, id DESC);

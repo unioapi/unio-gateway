@@ -22,6 +22,7 @@ type Reservation struct {
 	AuthorizedAmount     pgtype.Numeric
 	CapturedAmount       pgtype.Numeric
 	ReleasedAmount       pgtype.Numeric
+	EstimatedAmount      pgtype.Numeric
 	CaptureLedgerEntryID *int64
 	IdempotencyKey       string
 	Reason               string
@@ -31,7 +32,7 @@ type Reservation struct {
 type PreAuthorizeParams struct {
 	UserID          int64
 	RequestRecordID int64
-	Amount          pgtype.Numeric
+	EstimatedAmount pgtype.Numeric
 	Currency        string
 	IdempotencyKey  string
 	Reason          string
@@ -42,7 +43,7 @@ type PreAuthorizeParams struct {
 type CaptureParams struct {
 	RequestRecordID int64
 	ReservationID   *int64
-	Amount          pgtype.Numeric
+	ActualAmount    pgtype.Numeric
 	IdempotencyKey  string
 	Reason          string
 }
@@ -54,9 +55,18 @@ type ReleaseParams struct {
 	ReservationID   *int64
 }
 
+// ReleaseWithBillingExceptionParams 表示释放冻结余额并记录账务异常事实所需参数。
+// 它用于没有可靠 usage、不能扣用户钱，但平台可能已有成本或风险敞口的场景。
+type ReleaseWithBillingExceptionParams struct {
+	RequestRecordID int64
+	ReservationID   *int64
+	ReasonCode      string
+	Reason          string
+}
+
 // PreAuthorize 为一次请求冻结用户余额，并创建 reservation 事实。
 func (s *Service) PreAuthorize(ctx context.Context, params PreAuthorizeParams) (Reservation, error) {
-	if !isPositiveNumeric(params.Amount) {
+	if !isPositiveNumeric(params.EstimatedAmount) {
 		return Reservation{}, ledgerFailure(failure.CodeLedgerInvalidAmount, ErrInvalidAmount, ErrInvalidAmount.Error())
 	}
 
@@ -72,7 +82,7 @@ func (s *Service) PreAuthorize(ctx context.Context, params PreAuthorizeParams) (
 
 	existing, err := txQueries.GetLedgerReservationByIdempotencyKey(ctx, params.IdempotencyKey)
 	if err == nil {
-		if err := ensureIdempotentReservationMatches(existing, params.UserID, params.RequestRecordID, params.Amount, params.Currency); err != nil {
+		if err := ensureIdempotentReservationMatches(existing, params.UserID, params.RequestRecordID, params.EstimatedAmount, params.Currency); err != nil {
 			return Reservation{}, err
 		}
 		return reservationFromSQLC(existing), nil
@@ -81,30 +91,32 @@ func (s *Service) PreAuthorize(ctx context.Context, params PreAuthorizeParams) (
 		return Reservation{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "lookup reservation idempotency key")
 	}
 
+	reserved, err := txQueries.ReserveAvailableUserBalance(ctx, sqlc.ReserveAvailableUserBalanceParams{
+		UserID:          params.UserID,
+		Currency:        params.Currency,
+		EstimatedAmount: params.EstimatedAmount,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return s.resolveReservationUnavailable(ctx, tx, params)
+		}
+		return Reservation{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "reserve available user balance")
+	}
+
 	created, err := txQueries.CreateLedgerReservation(ctx, sqlc.CreateLedgerReservationParams{
 		UserID:           params.UserID,
 		RequestRecordID:  params.RequestRecordID,
 		Currency:         params.Currency,
-		AuthorizedAmount: params.Amount,
+		EstimatedAmount:  params.EstimatedAmount,
+		AuthorizedAmount: reserved.AuthorizedAmount,
 		IdempotencyKey:   params.IdempotencyKey,
 		Reason:           params.Reason,
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
-			return s.resolveReservationCreateConflict(ctx, tx, params.IdempotencyKey, params.UserID, params.RequestRecordID, params.Amount, params.Currency)
+			return s.resolveReservationCreateConflict(ctx, tx, params.IdempotencyKey, params.UserID, params.RequestRecordID, params.EstimatedAmount, params.Currency)
 		}
 		return Reservation{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "create ledger reservation")
-	}
-
-	if _, err := txQueries.ReserveUserBalance(ctx, sqlc.ReserveUserBalanceParams{
-		Amount:   params.Amount,
-		UserID:   params.UserID,
-		Currency: params.Currency,
-	}); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return Reservation{}, ledgerFailure(failure.CodeLedgerInsufficientBalance, ErrInsufficientBalance, ErrInsufficientBalance.Error())
-		}
-		return Reservation{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "reserve user balance")
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -150,7 +162,7 @@ func (s *Service) CaptureWithQueries(ctx context.Context, queries *sqlc.Queries,
 // 它在调用方事务内扣真实余额、释放冻结余额，并写入 debit ledger entry。
 func (s *Service) captureWithQueries(ctx context.Context, queries *sqlc.Queries, params CaptureParams) (Reservation, error) {
 	// 0 金额请求应该 release reservation，不允许写 0 金额扣费流水。
-	if !isPositiveNumeric(params.Amount) {
+	if !isPositiveNumeric(params.ActualAmount) {
 		return Reservation{}, ledgerFailure(failure.CodeLedgerInvalidAmount, ErrInvalidAmount, ErrInvalidAmount.Error())
 	}
 
@@ -169,14 +181,37 @@ func (s *Service) captureWithQueries(ctx context.Context, queries *sqlc.Queries,
 		return Reservation{}, ledgerFailure(failure.CodeLedgerIdempotencyConflict, ErrIdempotencyConflict, ErrIdempotencyConflict.Error())
 	}
 
+	// 用户最多扣已冻结金额；真实金额超出冻结金额时，差额进入平台核销，不形成用户欠费。
+	capturedAmount := numericMin(params.ActualAmount, reservation.AuthorizedAmount)
+	writeOffRequired := numericGreaterThan(params.ActualAmount, reservation.AuthorizedAmount)
+
 	switch ReservationStatus(reservation.Status) {
 	case ReservationStatusCaptured:
 		// 已 capture 且金额一致，视为幂等重放。
-		if !sameNumeric(reservation.CapturedAmount, params.Amount) {
+		if !sameNumeric(reservation.CapturedAmount, capturedAmount) {
 			return Reservation{}, ledgerFailure(failure.CodeLedgerIdempotencyConflict, ErrIdempotencyConflict, ErrIdempotencyConflict.Error())
 		}
 
-		return reservationFromSQLC(reservation), nil
+		exception, err := queries.GetLedgerBillingExceptionByReservationID(ctx, reservation.ID)
+		if err == nil {
+			if exception.EventType != string(BillingExceptionEventTypeWriteOff) ||
+				!writeOffRequired ||
+				!sameNumeric(exception.ActualAmount, params.ActualAmount) ||
+				!sameNumeric(exception.CapturedAmount, capturedAmount) {
+				return Reservation{}, ledgerFailure(failure.CodeLedgerIdempotencyConflict, ErrIdempotencyConflict, ErrIdempotencyConflict.Error())
+			}
+
+			return reservationFromSQLC(reservation), nil
+		}
+
+		if errors.Is(err, pgx.ErrNoRows) {
+			if writeOffRequired {
+				return Reservation{}, ledgerFailure(failure.CodeLedgerIdempotencyConflict, ErrIdempotencyConflict, ErrIdempotencyConflict.Error())
+			}
+			return reservationFromSQLC(reservation), nil
+		}
+
+		return Reservation{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "lookup ledger billing exception")
 
 	case ReservationStatusReleased:
 		// 已 release 的 reservation 不能重新扣费。
@@ -187,12 +222,6 @@ func (s *Service) captureWithQueries(ctx context.Context, queries *sqlc.Queries,
 
 	default:
 		return Reservation{}, ledgerFailure(failure.CodeLedgerStoreFailed, errors.New("ledger: unexpected reservation status"), "unexpected reservation status")
-	}
-
-	// TODO(阶段7/production): [GAP-7-014] 当前 capture 拒绝 actual_amount > authorized_amount，无法按最终规则 capture 已冻结金额并把差额记为平台核销；公开计费 API 前；支持 write-off 账务事实后，actual 超出冻结金额时请求仍应成功收口。
-	// 实际扣费可小于预授权金额，但当前不能超过冻结金额。
-	if !numericLessOrEqual(params.Amount, reservation.AuthorizedAmount) {
-		return Reservation{}, ledgerFailure(failure.CodeLedgerInvalidAmount, ErrInvalidAmount, ErrInvalidAmount.Error())
 	}
 
 	// balance_before/after 必须和本事务内的余额更新严格对应。
@@ -206,7 +235,7 @@ func (s *Service) captureWithQueries(ctx context.Context, queries *sqlc.Queries,
 
 	// Capture 同时扣真实余额并释放整笔冻结余额；差额记录到 reservation.released_amount。
 	after, err := queries.CaptureUserReservedBalance(ctx, sqlc.CaptureUserReservedBalanceParams{
-		CapturedAmount:   params.Amount,
+		CapturedAmount:   capturedAmount,
 		AuthorizedAmount: reservation.AuthorizedAmount,
 		UserID:           reservation.UserID,
 		Currency:         reservation.Currency,
@@ -221,7 +250,7 @@ func (s *Service) captureWithQueries(ctx context.Context, queries *sqlc.Queries,
 		UserID:          reservation.UserID,
 		RequestRecordID: int64PtrToPgtypeInt8(&requestRecordID),
 		EntryType:       string(EntryTypeDebit),
-		Amount:          params.Amount,
+		Amount:          capturedAmount,
 		Currency:        reservation.Currency,
 		BalanceBefore:   before.Balance,
 		BalanceAfter:    after.Balance,
@@ -239,7 +268,7 @@ func (s *Service) captureWithQueries(ctx context.Context, queries *sqlc.Queries,
 
 	// reservation 终态必须指向刚创建的 debit ledger entry，形成 request -> reservation -> ledger 的链路。
 	captured, err := queries.CaptureLedgerReservation(ctx, sqlc.CaptureLedgerReservationParams{
-		CapturedAmount: params.Amount,
+		CapturedAmount: capturedAmount,
 		CaptureLedgerEntryID: pgtype.Int8{
 			Int64: entry.ID,
 			Valid: true,
@@ -248,6 +277,22 @@ func (s *Service) captureWithQueries(ctx context.Context, queries *sqlc.Queries,
 	})
 	if err != nil {
 		return Reservation{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "capture ledger reservation")
+	}
+
+	if writeOffRequired {
+		_, err := queries.CreateLedgerWriteOffException(ctx, sqlc.CreateLedgerWriteOffExceptionParams{
+			UserID:          reservation.UserID,
+			RequestRecordID: reservation.RequestRecordID,
+			ReservationID:   reservation.ID,
+			ActualAmount:    params.ActualAmount,
+			CapturedAmount:  capturedAmount,
+			Currency:        reservation.Currency,
+			ReasonCode:      "authorization_underfunded",
+			Reason:          "actual amount exceeded authorized amount",
+		})
+		if err != nil {
+			return Reservation{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "create ledger billing exception")
+		}
 	}
 
 	return reservationFromSQLC(captured), nil
@@ -274,6 +319,45 @@ func (s *Service) Release(ctx context.Context, params ReleaseParams) (Reservatio
 	// 只有冻结余额释放和 reservation 终态都更新成功，才提交本次 release。
 	if err := tx.Commit(ctx); err != nil {
 		return Reservation{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "commit ledger transaction")
+	}
+
+	return released, nil
+}
+
+// ReleaseWithBillingException 释放冻结余额，并在同一事务内记录平台账务异常。
+// 当前用于 stream 无 final usage 的风险敞口记录；它不扣用户余额，也不写 debit ledger entry。
+func (s *Service) ReleaseWithBillingException(ctx context.Context, params ReleaseWithBillingExceptionParams) (Reservation, error) {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return Reservation{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "begin ledger billing exception transaction")
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	txQueries := s.queries.WithTx(tx)
+
+	released, err := s.releaseWithQueries(ctx, txQueries, ReleaseParams{
+		RequestRecordID: params.RequestRecordID,
+		ReservationID:   params.ReservationID,
+	})
+	if err != nil {
+		return Reservation{}, err
+	}
+
+	_, err = txQueries.CreateLedgerRiskExposureException(ctx, sqlc.CreateLedgerRiskExposureExceptionParams{
+		UserID:          released.UserID,
+		RequestRecordID: released.RequestRecordID,
+		ReservationID:   released.ID,
+		PlatformAmount:  released.AuthorizedAmount,
+		Currency:        released.Currency,
+		ReasonCode:      params.ReasonCode,
+		Reason:          params.Reason,
+	})
+	if err != nil {
+		return Reservation{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "create ledger billing exception")
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return Reservation{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "commit ledger billing exception transaction")
 	}
 
 	return released, nil
@@ -366,6 +450,23 @@ func (s *Service) resolveReservationCreateConflict(ctx context.Context, tx pgx.T
 	return Reservation{}, ledgerFailure(failure.CodeLedgerStoreFailed, pgx.ErrNoRows, "resolve reservation create conflict")
 }
 
+func (s *Service) resolveReservationUnavailable(ctx context.Context, tx pgx.Tx, params PreAuthorizeParams) (Reservation, error) {
+	_ = tx.Rollback(ctx)
+
+	existing, err := s.queries.GetLedgerReservationByIdempotencyKey(ctx, params.IdempotencyKey)
+	if err == nil {
+		if err := ensureIdempotentReservationMatches(existing, params.UserID, params.RequestRecordID, params.EstimatedAmount, params.Currency); err != nil {
+			return Reservation{}, err
+		}
+		return reservationFromSQLC(existing), nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return Reservation{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "lookup committed reservation idempotency key")
+	}
+
+	return Reservation{}, ledgerFailure(failure.CodeLedgerInsufficientBalance, ErrInsufficientBalance, ErrInsufficientBalance.Error())
+}
+
 // reservationFromSQLC 将 sqlc 预扣除记录转换为 ledger 领域 DTO。
 func reservationFromSQLC(row sqlc.LedgerReservation) Reservation {
 	return Reservation{
@@ -377,6 +478,7 @@ func reservationFromSQLC(row sqlc.LedgerReservation) Reservation {
 		AuthorizedAmount:     row.AuthorizedAmount,
 		CapturedAmount:       row.CapturedAmount,
 		ReleasedAmount:       row.ReleasedAmount,
+		EstimatedAmount:      row.EstimatedAmount,
 		CaptureLedgerEntryID: pgtypeInt8ToInt64Ptr(row.CaptureLedgerEntryID),
 		IdempotencyKey:       row.IdempotencyKey,
 		Reason:               row.Reason,
@@ -393,7 +495,7 @@ func ensureIdempotentReservationMatches(row sqlc.LedgerReservation, userID int64
 	if row.Currency != currency {
 		return ledgerFailure(failure.CodeLedgerIdempotencyConflict, ErrIdempotencyConflict, ErrIdempotencyConflict.Error())
 	}
-	if !sameNumeric(row.AuthorizedAmount, amount) {
+	if !sameNumeric(row.EstimatedAmount, amount) {
 		return ledgerFailure(failure.CodeLedgerIdempotencyConflict, ErrIdempotencyConflict, ErrIdempotencyConflict.Error())
 	}
 

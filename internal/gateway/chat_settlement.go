@@ -133,30 +133,26 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 		)
 	}
 
-	// 按 routing 选中的模型数据库主键查询当前生效售卖价；不能用对外 model_id 字符串直接查价格。
-	price, err := txQueries.FindActivePriceForModel(ctx, sqlc.FindActivePriceForModelParams{
-		ModelID: params.ModelDBID,
-		AtTime:  pgtype.Timestamptz{Time: now, Valid: true},
-	})
-	if err != nil {
-		return failure.Wrap(
+	if params.Authorization.PriceID <= 0 {
+		return failure.New(
 			failure.CodeGatewayChatSettlementFailed,
-			err,
-			failure.WithMessage("create price snapshot"),
+			failure.WithMessage("chat settlement missing authorization price id"),
 		)
 	}
 
-	// 将当前价格复制成请求级快照，保证后续价格调整不会改变历史请求的结算依据。
+	authorizationPrice := params.Authorization.Price
+
+	// 将 authorization 使用的价格复制成请求级快照，保证冻结和结算使用同一份价格。
 	snapshot, err := txQueries.CreatePriceSnapshot(ctx, sqlc.CreatePriceSnapshotParams{
 		RequestRecordID:      params.RequestRecord.ID,
-		PriceID:              pgtype.Int8{Int64: price.ID, Valid: true},
-		Currency:             price.Currency,
-		PricingUnit:          price.PricingUnit,
-		InputPrice:           price.InputPrice,
-		OutputPrice:          price.OutputPrice,
-		CachedInputPrice:     price.CachedInputPrice,
-		ReasoningOutputPrice: price.ReasoningOutputPrice,
-		FormulaVersion:       billing.FormulaVersionV1,
+		PriceID:              pgtype.Int8{Int64: params.Authorization.PriceID, Valid: true},
+		Currency:             authorizationPrice.Currency,
+		PricingUnit:          authorizationPrice.PricingUnit,
+		InputPrice:           authorizationPrice.InputPrice,
+		OutputPrice:          authorizationPrice.OutputPrice,
+		CachedInputPrice:     authorizationPrice.CachedInputPrice,
+		ReasoningOutputPrice: authorizationPrice.ReasoningOutputPrice,
+		FormulaVersion:       authorizationPrice.FormulaVersion,
 	})
 	if err != nil {
 		return err
@@ -197,7 +193,7 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 		_, err = s.ledgerCapturer.CaptureWithQueries(ctx, txQueries, ledger.CaptureParams{
 			RequestRecordID: params.RequestRecord.ID,
 			ReservationID:   &reservationID,
-			Amount:          settlement.Amount,
+			ActualAmount:    settlement.Amount,
 			IdempotencyKey:  fmt.Sprintf("chat:settle:%d", params.RequestRecord.ID),
 			Reason:          "chat completion settlement",
 		})

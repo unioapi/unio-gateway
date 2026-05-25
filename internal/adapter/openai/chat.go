@@ -122,11 +122,16 @@ func (a *Adapter) ChatCompletions(ctx context.Context, ch channel.Runtime, req a
 		)
 	}
 
+	usage, err := chatUsageFromOpenAI(upstreamRespBody.Usage)
+	if err != nil {
+		return nil, err
+	}
+
 	return &adapter.ChatResponse{
 		ID:      upstreamRespBody.ID,
 		Model:   upstreamRespBody.Model,
 		Content: upstreamRespBody.Choices[0].Message.Content,
-		Usage:   chatUsageFromOpenAI(upstreamRespBody.Usage),
+		Usage:   usage,
 	}, nil
 }
 
@@ -237,7 +242,10 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 
 		if len(streamResp.Choices) == 0 {
 			if streamResp.Usage != nil {
-				usage := chatUsageFromOpenAI(*streamResp.Usage)
+				usage, err := chatUsageFromOpenAI(streamResp.Usage)
+				if err != nil {
+					return err
+				}
 
 				if err := emit(adapter.ChatStreamChunk{
 					ID:    streamResp.ID,
@@ -292,12 +300,41 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 }
 
 // chatUsageFromOpenAI 将 OpenAI usage DTO 转成 adapter 内部 usage DTO。
-func chatUsageFromOpenAI(usage chatCompletionUsage) adapter.ChatUsage {
+// 非流式成功响应和 stream final usage 都必须提供完整 usage，避免缺字段被当成 0 元请求。
+func chatUsageFromOpenAI(usage *chatCompletionUsage) (adapter.ChatUsage, error) {
+	if usage == nil {
+		return adapter.ChatUsage{}, failure.New(
+			failure.CodeAdapterInvalidResponse,
+			failure.WithMessage("openai adapter missing chat completion usage"),
+		)
+	}
+
+	if usage.PromptTokens == nil || usage.CompletionTokens == nil || usage.TotalTokens == nil {
+		return adapter.ChatUsage{}, failure.New(
+			failure.CodeAdapterInvalidResponse,
+			failure.WithMessage("openai adapter missing required chat completion usage token fields"),
+		)
+	}
+
+	if *usage.PromptTokens <= 0 || *usage.CompletionTokens < 0 || *usage.TotalTokens <= 0 {
+		return adapter.ChatUsage{}, failure.New(
+			failure.CodeAdapterInvalidResponse,
+			failure.WithMessage("openai adapter invalid chat completion usage token counts"),
+		)
+	}
+
+	if *usage.TotalTokens != *usage.PromptTokens+*usage.CompletionTokens {
+		return adapter.ChatUsage{}, failure.New(
+			failure.CodeAdapterInvalidResponse,
+			failure.WithMessage("openai adapter inconsistent chat completion usage token counts"),
+		)
+	}
+
 	return adapter.ChatUsage{
-		PromptTokens:     usage.PromptTokens,
-		CompletionTokens: usage.CompletionTokens,
-		TotalTokens:      usage.TotalTokens,
+		PromptTokens:     *usage.PromptTokens,
+		CompletionTokens: *usage.CompletionTokens,
+		TotalTokens:      *usage.TotalTokens,
 		CachedTokens:     usage.PromptTokensDetails.CachedTokens,
 		ReasoningTokens:  usage.CompletionTokensDetails.ReasoningTokens,
-	}
+	}, nil
 }

@@ -199,7 +199,12 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ht
 			// 没有 final usage 时缺少可靠用量事实，当前阶段只记录 canceled，不扣费。
 			// 后续通过冻结余额、release 或异常风控处理恶意取消风险。
 			if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
-				if releaseErr := s.releaseChatAuthorization(ctx, authorization); releaseErr != nil {
+				if releaseErr := s.releaseChatAuthorizationForBillingException(
+					ctx,
+					authorization,
+					"stream_client_canceled_without_final_usage",
+					"stream client canceled before final usage",
+				); releaseErr != nil {
 					s.markRequestRecordFailed(ctx, requestRecord, "chat_authorization_release_failed", releaseErr)
 					return releaseErr
 				}
@@ -213,7 +218,12 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ht
 			if emitted {
 				// SSE 已经写出后只能把当前请求标记为失败并结束。
 				// 此时 HTTP 层不能再改写普通 JSON error，也不能换 channel 重放已写出的内容。
-				if releaseErr := s.releaseChatAuthorization(ctx, authorization); releaseErr != nil {
+				if releaseErr := s.releaseChatAuthorizationForBillingException(
+					ctx,
+					authorization,
+					"stream_interrupted_without_final_usage",
+					"stream interrupted after emit before final usage",
+				); releaseErr != nil {
 					s.markRequestRecordFailed(ctx, requestRecord, "chat_authorization_release_failed", releaseErr)
 					return releaseErr
 				}
@@ -245,7 +255,12 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ht
 				failure.WithMessage("gateway stream final usage is missing"),
 			)
 
-			if releaseErr := s.releaseChatAuthorization(ctx, authorization); releaseErr != nil {
+			if releaseErr := s.releaseChatAuthorizationForBillingException(
+				ctx,
+				authorization,
+				"stream_final_usage_missing",
+				"stream ended without final usage",
+			); releaseErr != nil {
 				s.markRequestRecordFailed(ctx, requestRecord, "chat_authorization_release_failed", releaseErr)
 				return releaseErr
 			}

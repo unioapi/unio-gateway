@@ -55,3 +55,23 @@ func numericLessOrEqual(left pgtype.Numeric, right pgtype.Numeric) bool {
 
 	return leftRat.Cmp(rightRat) <= 0
 }
+
+// numericGreaterThan 判断 left 是否大于 right
+func numericGreaterThan(left pgtype.Numeric, right pgtype.Numeric) bool {
+	leftRat, leftOK := numericRat(left)
+	rightRat, rightOK := numericRat(right)
+	if !leftOK || !rightOK {
+		return false
+	}
+
+	return leftRat.Cmp(rightRat) > 0
+}
+
+// numericMin 获取最小值
+func numericMin(left pgtype.Numeric, right pgtype.Numeric) pgtype.Numeric {
+	if numericLessOrEqual(left, right) {
+		return left
+	}
+
+	return right
+}

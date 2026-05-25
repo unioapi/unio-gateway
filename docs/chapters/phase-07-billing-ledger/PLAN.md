@@ -132,14 +132,13 @@ ledger entry
 
 1. 有 final usage 时执行 settlement。
 2. 客户端取消但已拿到 final usage 时仍 settlement。
-3. 无 final usage 时不强行估算扣费。
+3. 无 final usage 时不强行估算扣费；已经可能产生上游成本的路径释放用户冻结余额，并记录 `risk_exposure`。
 4. 调用上游前 request-level authorization 已接入。
-5. 后续补部分余额授权、差额核销、异常策略和风控。
+5. 后续补状态机守卫、settlement 幂等和观测字段。
 
 关联 GAP：
 
 - [GAP-7-002](../../production/TODO_REGISTER.md#gap-7-002)
-- [GAP-7-004](../../production/TODO_REGISTER.md#gap-7-004)
 - [GAP-7-006](../../production/TODO_REGISTER.md#gap-7-006)
 - [GAP-7-011](../../production/TODO_REGISTER.md#gap-7-011)
 
@@ -163,25 +162,34 @@ ledger entry
 8. 为后续 project 预算或用量上限预留统一判断入口。
 9. 所有余额、核销和异常动作都必须可审计。
 
-生产风险：
+已完成：
 
 ```text
-当前 baseline authorization 已能在调用上游前冻结余额，但仍要求全额冻结 estimated amount。
-这会导致低余额用户“有余额但花不出去”，且 actual_amount > authorized_amount 时会被普通 settlement failed 拦截。
-公开计费 API 前必须落地部分余额授权和平台差额核销，避免反人类余额体验和卡住 reservation。
+authorization 已拆分 estimated_amount 与 authorized_amount。
+available_balance <= 0 时仍会在调用上游前拒绝。
+0 < available_balance < estimated_amount 时会冻结全部可用余额并允许请求继续。
+actual_amount > authorized_amount 时会 capture 已冻结金额，并写入 ledger_billing_exceptions 的 write_off 事件作为平台核销事实。
+stream 已经可能产生上游成本但没有 final usage 时会 release 用户冻结余额，并写入 ledger_billing_exceptions 的 risk_exposure 事件。
+上游成功且有可靠 usage 的请求可按成功账务事实收口，不形成用户负余额或隐性欠费。
+```
+
+剩余风险：
+
+```text
+prompt token 仍为临时估算。
 ```
 
 关联 GAP：
 
-- [GAP-7-004](../../production/TODO_REGISTER.md#gap-7-004)
 - [GAP-7-013](../../production/TODO_REGISTER.md#gap-7-013)
-- [GAP-7-014](../../production/TODO_REGISTER.md#gap-7-014)
 
 已关闭 GAP：
 
 - [GAP-7-001](../../production/TODO_REGISTER.md#gap-7-001)
 - [GAP-7-002](../../production/TODO_REGISTER.md#gap-7-002)
+- [GAP-7-004](../../production/TODO_REGISTER.md#gap-7-004)
 - [GAP-7-011](../../production/TODO_REGISTER.md#gap-7-011)
+- [GAP-7-014](../../production/TODO_REGISTER.md#gap-7-014)
 
 
 <a id="task-7-18-request-state-machine"></a>

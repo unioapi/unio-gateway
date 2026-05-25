@@ -154,5 +154,5 @@ authorization 必须拆分 estimated_amount 与 authorized_amount。
 settlement 不能再把 actual_amount > authorized_amount 当作普通失败；
 应 capture 已冻结金额，记录 write-off 账务事实，并在上游成功且有 usage 时让 request 成功收口。
 
-实现前由 GAP-7-014 作为公开计费 API 阻断项跟踪。
+该规则已由 [GAP-7-014](TODO_REGISTER.md#gap-7-014) 在 2026-05-25 落地，后续仍需用 tokenizer、模型 max_tokens、核销上限和告警继续降低平台风险。
 ```

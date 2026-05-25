@@ -1,10 +1,37 @@
 # Phase 7 Handoff - Billing Ledger
 
-更新时间：2026-05-23
+更新时间：2026-05-25
 
 ## 当前状态
 
 阶段 7 尚未完成，不应进入阶段 8。
+
+## 本班次交接重点
+
+本班次围绕计费边界和账务收口做了 6 个生产修正：
+
+1. 非流式 OpenAI usage 缺失不再被当成 0 usage 成功请求。
+   - `internal/adapter/openai/dto.go` 将 usage 改为指针语义。
+   - 缺少 usage 或 token 字段时，adapter 返回稳定 failure。
+2. authorization 和 settlement 不再读取两次不同价格。
+   - `ChatAuthorization` 保存 authorization 时的 `PriceID` 和 `billing.PriceSnapshot`。
+   - settlement 使用 authorization 快照创建 `price_snapshots` 并计算费用。
+3. 余额不足错误已映射成用户友好的 OpenAI-compatible `insufficient_quota`。
+   - HTTP 状态码为 429。
+   - 内部仍通过 `failure.CodeLedgerInsufficientBalance` 判断。
+4. `GAP-7-014` 已关闭。
+   - authorization 拆分 `estimated_amount` 与 `authorized_amount`。
+   - `available_balance <= 0` 时拒绝。
+   - `0 < available_balance < estimated_amount` 时冻结全部可用余额并继续请求。
+   - `actual_amount > authorized_amount` 时只 capture 已冻结金额，差额写 `write_off`。
+5. `GAP-7-004` 已关闭。
+   - 已经可能产生上游成本但没有 final usage 的 stream 路径不扣用户钱。
+   - 释放冻结余额，并写 `risk_exposure` 审计事实。
+6. 账务异常统一进 `ledger_billing_exceptions`。
+   - `event_type = write_off`：真实费用已知但超过冻结金额。
+   - `event_type = risk_exposure`：真实费用未知但平台可能已有成本风险。
+
+本班次不要再恢复旧表名 `ledger_write_offs`；后台、报表和后续查询都应该围绕 `ledger_billing_exceptions` 读取。
 
 已经完成：
 
@@ -24,18 +51,18 @@
 14. `billing.Service.EstimateAuthorizationAmount` 已实现，可按预估 prompt/max completion 和当前价格计算调用上游前需要冻结的金额。
 15. `ChatAuthorizer` 已装入 `ChatCompletionService`，非流式和流式调用上游前都会创建 request-level authorization。
 16. 非流式成功 settlement 会带上同一笔 `ChatAuthorization`；取消、non-retryable error、fallback 全失败、fallback adapter missing 会 release。
-17. 流式成功 settlement 会带上同一笔 `ChatAuthorization`；取消、emit 后 error、non-retryable error、missing final usage、fallback 全失败、fallback adapter missing 会 release。
+17. 流式成功 settlement 会带上同一笔 `ChatAuthorization`；普通失败和 fallback 失败路径会 release，可能产生上游成本但没有 final usage 的路径会 exception release。
 18. gateway authorization 行为测试已覆盖成功、不调用 adapter、fallback、取消、release、settlement failure 等关键路径。
+19. `GAP-7-014` 已关闭：authorization 已拆分 `estimated_amount` 与 `authorized_amount`，低余额可冻结全部可用余额并继续请求，`actual_amount > authorized_amount` 时 capture 已冻结金额并写入 `ledger_billing_exceptions` 的 `write_off` 平台核销事实。
+20. `GAP-7-004` 已关闭：可能产生上游成本但没有 final usage 的 stream 路径会释放用户冻结余额，并写入 `ledger_billing_exceptions` 的 `risk_exposure` 事实。
 
 仍需收口：
 
-1. 部分余额授权和平台差额核销，见 [GAP-7-014](../../production/TODO_REGISTER.md#gap-7-014)。
-2. provider/model tokenizer，替换 prompt token 临时估算，见 [GAP-7-013](../../production/TODO_REGISTER.md#gap-7-013)。
-3. 无 final usage 的商业策略和异常风控，见 [GAP-7-004](../../production/TODO_REGISTER.md#gap-7-004)。
-4. request/attempt 状态机守卫。
-5. settlement 请求级幂等。
-6. error message 和 usage source 审计字段。
-7. 成本价和价格生效窗口。
+1. provider/model tokenizer，替换 prompt token 临时估算，见 [GAP-7-013](../../production/TODO_REGISTER.md#gap-7-013)。
+2. request/attempt 状态机守卫。
+3. settlement 请求级幂等。
+4. error message 和 usage source 审计字段。
+5. 成本价和价格生效窗口。
 
 ## 已定死的新方案
 
@@ -76,33 +103,30 @@ written_off_amount = max(actual_amount - captured_amount, 0)
 request succeeded
 ```
 
-当前代码还不是这个逻辑：
+当前代码已落地这个逻辑：
 
-1. `ChatAuthorizationService.AuthorizeChat` 仍要求按 estimated amount 全额冻结，余额不足会直接失败。
-2. `ledger.captureWithQueries` 仍拒绝 `actual_amount > authorized_amount`。
-3. 缺少 write-off / platform loss 的账务事实表或字段。
+1. `ChatAuthorizationService.AuthorizeChat` 传入 `estimated_amount`，`ledger.PreAuthorize` 根据可用余额写入真实 `authorized_amount`。
+2. `ledger.captureWithQueries` 使用 `captured_amount = min(actual_amount, authorized_amount)`。
+3. `actual_amount > authorized_amount` 时会写入 `ledger_billing_exceptions` 的 `write_off` 事件，记录平台核销事实。
+4. 无 final usage 的 stream 客户端取消、emit 后中断和正常结束缺 final usage 会写入 `ledger_billing_exceptions` 的 `risk_exposure` 事件。
 
 ## 下一步
 
 下一节第一步：
 
 ```text
-7.17 余额预检查与冻结闭环：实现 GAP-7-014 部分余额授权和平台差额核销。
+7.17 余额预检查与冻结闭环：替换 GAP-7-013 prompt token 临时估算。
 ```
 
 建议接入顺序：
 
-1. 设计 write-off 账务事实：至少能记录 request_record_id、reservation_id、actual_amount、captured_amount、written_off_amount、currency、reason。
-2. authorization 拆分 `estimated_amount` 与 `authorized_amount`，低余额时冻结可用余额而不是直接失败。
-3. settlement 拆分 actual amount 和 capture amount；actual 超过 authorized 时 capture 冻结金额并写 write-off。
-4. request 成功收口必须和 usage、price snapshot、capture、write-off 同事务提交。
-5. 补非流式和流式测试：低余额放行、余额为 0 拒绝、actual 小于/等于/大于冻结金额。
+1. 接入 provider/model tokenizer，替换 prompt token 临时估算。
+2. 进入 request/attempt 状态机守卫和 settlement 幂等前，复核剩余 P0 blocker。
+3. 后续后台/报表查询需要同时读取 `ledger_billing_exceptions` 中的 `write_off` 与 `risk_exposure` 事件。
 
 必须先处理的 GAP：
 
-- [GAP-7-014](../../production/TODO_REGISTER.md#gap-7-014)
 - [GAP-7-013](../../production/TODO_REGISTER.md#gap-7-013)
-- [GAP-7-004](../../production/TODO_REGISTER.md#gap-7-004)
 
 相关文档：
 
@@ -131,10 +155,10 @@ request succeeded
 
 1. 不要退回“用户必须自己算 token 才能调用”的产品体验。
 2. 不要实现隐性欠费、负余额或充值后追扣；如果未来要做信用额度，必须另开决策和账务模型。
-3. `estimated_amount` 和 `authorized_amount` 是两个概念；当前代码把它们等同，是 [GAP-7-014](../../production/TODO_REGISTER.md#gap-7-014) 要修的核心。
+3. `estimated_amount` 和 `authorized_amount` 是两个概念；当前代码已拆分二者，后续不要重新把预估金额等同于实际冻结金额。
 4. 上游成功且有可靠 usage 时，`actual_amount > authorized_amount` 不应再导致普通 settlement failed。
 5. write-off 必须是可审计账务事实，不能只写日志。
-6. stream 不能只复用非流式后扣费模型，需要 authorization、release、capture 和 write-off 语义。
+6. stream 不能只复用非流式后扣费模型，需要 authorization、release、capture、write-off 和 risk-exposure 语义。
 7. ledger-first 不能被绕过，余额变化和核销都必须有账务事实。
 8. reservation 表方案已经落地，下一步不要再重开“reservation 表还是 reservation ledger”的设计。
 9. 所有补偿和重试都要考虑幂等。
@@ -148,4 +172,4 @@ request succeeded
 go test -count=1 ./...
 ```
 
-结果：通过，时间为 2026-05-23。
+结果：通过，时间为 2026-05-25。

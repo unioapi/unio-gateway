@@ -45,6 +45,21 @@ type ChannelModel struct {
 	UpdatedAt     pgtype.Timestamptz
 }
 
+type LedgerBillingException struct {
+	ID              int64
+	UserID          int64
+	RequestRecordID int64
+	ReservationID   int64
+	EventType       string
+	ActualAmount    pgtype.Numeric
+	CapturedAmount  pgtype.Numeric
+	PlatformAmount  pgtype.Numeric
+	Currency        string
+	ReasonCode      string
+	Reason          string
+	CreatedAt       pgtype.Timestamptz
+}
+
 type LedgerEntry struct {
 	ID              int64
 	UserID          int64
@@ -68,6 +83,7 @@ type LedgerReservation struct {
 	AuthorizedAmount     pgtype.Numeric
 	CapturedAmount       pgtype.Numeric
 	ReleasedAmount       pgtype.Numeric
+	EstimatedAmount      pgtype.Numeric
 	CaptureLedgerEntryID pgtype.Int8
 	IdempotencyKey       string
 	Reason               string

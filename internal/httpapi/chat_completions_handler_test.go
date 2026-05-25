@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/ThankCat/unio-api/internal/auth"
+	"github.com/ThankCat/unio-api/internal/failure"
 	"github.com/ThankCat/unio-api/internal/httpx"
 	"github.com/ThankCat/unio-api/internal/routing"
 )
@@ -508,6 +509,58 @@ func TestRouterV1ChatCompletionMapsRoutingErrors(t *testing.T) {
 				t.Fatalf("expected error param %q, got %#v", tc.wantParam, body.Error.Param)
 			}
 		})
+	}
+}
+
+func TestRouterV1ChatCompletionMapsInsufficientQuota(t *testing.T) {
+	authenticator := &fakeAPIKeyAuthenticator{
+		principal: &auth.APIKeyPrincipal{
+			APIKeyID:  1,
+			ProjectID: 1,
+			KeyPrefix: "unio_sk_test",
+		},
+	}
+	service := &fakeChatCompletionService{
+		err: failure.New(failure.CodeLedgerInsufficientBalance),
+	}
+	handler := newTestRouter(authenticator, service, nil)
+
+	buf := new(bytes.Buffer)
+	reqBody := ChatCompletionRequest{
+		Model: "openai/gpt-4.1",
+		Messages: []ChatMessage{
+			{Role: "user", Content: "Hello"},
+		},
+	}
+	if err := json.NewEncoder(buf).Encode(reqBody); err != nil {
+		t.Fatalf("encode request body: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", buf)
+	req.Header.Set("Authorization", "Bearer unio_sk_test")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected status %d, got %d", http.StatusTooManyRequests, rec.Code)
+	}
+
+	var body httpx.ErrorResponse
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response body: %v", err)
+	}
+	if body.Error.Code != "insufficient_quota" {
+		t.Fatalf("expected error code %q, got %q", "insufficient_quota", body.Error.Code)
+	}
+	if body.Error.Type != "insufficient_quota" {
+		t.Fatalf("expected error type %q, got %q", "insufficient_quota", body.Error.Type)
+	}
+	if body.Error.Message != "You exceeded your current quota. Please check your balance or billing details." {
+		t.Fatalf("unexpected error message %q", body.Error.Message)
+	}
+	if body.Error.Param != nil {
+		t.Fatalf("expected nil error param, got %#v", body.Error.Param)
 	}
 }
 
@@ -1123,6 +1176,60 @@ func TestRouterV1ChatCompletionStreamMapsRoutingErrorBeforeFirstChunk(t *testing
 	}
 	if body.Error.Param == nil || *body.Error.Param != "model" {
 		t.Fatalf("expected error param %q, got %#v", "model", body.Error.Param)
+	}
+}
+
+func TestRouterV1ChatCompletionStreamMapsInsufficientQuotaBeforeFirstChunk(t *testing.T) {
+	service := &fakeChatCompletionService{
+		err: failure.New(failure.CodeLedgerInsufficientBalance),
+	}
+	router := newTestRouter(&fakeAPIKeyAuthenticator{
+		principal: &auth.APIKeyPrincipal{
+			APIKeyID:  1,
+			ProjectID: 1,
+			KeyPrefix: "unio_sk_test",
+		},
+	}, service, nil)
+
+	stream := true
+	reqBody := ChatCompletionRequest{
+		Model: "openai/gpt-4.1",
+		Messages: []ChatMessage{
+			{Role: "user", Content: "Hello"},
+		},
+		Stream: &stream,
+	}
+	reqBuf := new(bytes.Buffer)
+	if err := json.NewEncoder(reqBuf).Encode(reqBody); err != nil {
+		t.Fatalf("encode request body: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", reqBuf)
+	req.Header.Set("Authorization", "Bearer unio_sk_test")
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected status %d, got %d", http.StatusTooManyRequests, rec.Code)
+	}
+
+	gotBody := rec.Body.String()
+	if strings.Contains(gotBody, "data:") {
+		t.Fatalf("expected body not to contain %q, got %q", "data:", gotBody)
+	}
+
+	var body httpx.ErrorResponse
+	if err := json.NewDecoder(strings.NewReader(gotBody)).Decode(&body); err != nil {
+		t.Fatalf("decode response body: %v", err)
+	}
+	if body.Error.Code != "insufficient_quota" {
+		t.Fatalf("expected error code %q, got %q", "insufficient_quota", body.Error.Code)
+	}
+	if body.Error.Type != "insufficient_quota" {
+		t.Fatalf("expected error type %q, got %q", "insufficient_quota", body.Error.Type)
+	}
+	if body.Error.Param != nil {
+		t.Fatalf("expected nil error param, got %#v", body.Error.Param)
 	}
 }
 

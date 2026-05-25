@@ -150,6 +150,9 @@ func createLedgerTestRequestRecord(t *testing.T, ctx context.Context, pool *pgxp
 func cleanupLedgerTestUser(t *testing.T, ctx context.Context, pool *pgxpool.Pool, userID int64) {
 	t.Helper()
 
+	if _, err := pool.Exec(ctx, `DELETE FROM ledger_billing_exceptions WHERE user_id = $1`, userID); err != nil {
+		t.Fatalf("delete ledger billing exceptions: %v", err)
+	}
 	if _, err := pool.Exec(ctx, `DELETE FROM ledger_reservations WHERE user_id = $1`, userID); err != nil {
 		t.Fatalf("delete ledger reservations: %v", err)
 	}
@@ -188,7 +191,7 @@ func TestPreAuthorizeReservesBalanceAndIsIdempotent(t *testing.T) {
 	params := PreAuthorizeParams{
 		UserID:          userID,
 		RequestRecordID: requestRecordID,
-		Amount:          numeric(40),
+		EstimatedAmount: numeric(40),
 		Currency:        "USD",
 		IdempotencyKey:  fmt.Sprintf("preauthorize-%d", time.Now().UnixNano()),
 		Reason:          "test preauthorize",
@@ -207,6 +210,7 @@ func TestPreAuthorizeReservesBalanceAndIsIdempotent(t *testing.T) {
 	if created.RequestRecordID != requestRecordID {
 		t.Fatalf("expected request record id %d, got %d", requestRecordID, created.RequestRecordID)
 	}
+	assertNumericEquals(t, created.EstimatedAmount, 40)
 	assertNumericEquals(t, created.AuthorizedAmount, 40)
 	assertNumericEquals(t, created.CapturedAmount, 0)
 	assertNumericEquals(t, created.ReleasedAmount, 0)
@@ -240,7 +244,7 @@ func TestPreAuthorizeReservesBalanceAndIsIdempotent(t *testing.T) {
 	assertNumericEquals(t, balance.ReservedBalance, 40)
 }
 
-func TestPreAuthorizeReturnsInsufficientBalanceWithoutReservation(t *testing.T) {
+func TestPreAuthorizeFreezesAvailableBalanceWhenBelowEstimate(t *testing.T) {
 	ctx, pool, queries, service, cleanup := newServiceTestDeps(t)
 	defer cleanup()
 
@@ -258,10 +262,43 @@ func TestPreAuthorizeReturnsInsufficientBalanceWithoutReservation(t *testing.T) 
 		t.Fatalf("seed credit: %v", err)
 	}
 
+	reservation, err := service.PreAuthorize(ctx, PreAuthorizeParams{
+		UserID:          userID,
+		RequestRecordID: requestRecordID,
+		EstimatedAmount: numeric(40),
+		Currency:        "USD",
+		IdempotencyKey:  fmt.Sprintf("preauthorize-partial-%d", time.Now().UnixNano()),
+		Reason:          "test partial preauthorize",
+	})
+	if err != nil {
+		t.Fatalf("preauthorize partial balance: %v", err)
+	}
+	assertNumericEquals(t, reservation.EstimatedAmount, 40)
+	assertNumericEquals(t, reservation.AuthorizedAmount, 30)
+
+	balance, err := queries.GetUserBalance(ctx, sqlc.GetUserBalanceParams{
+		UserID:   userID,
+		Currency: "USD",
+	})
+	if err != nil {
+		t.Fatalf("get balance after partial preauthorize: %v", err)
+	}
+	assertNumericEquals(t, balance.Balance, 30)
+	assertNumericEquals(t, balance.ReservedBalance, 30)
+}
+
+func TestPreAuthorizeReturnsInsufficientBalanceWithoutReservation(t *testing.T) {
+	ctx, pool, queries, service, cleanup := newServiceTestDeps(t)
+	defer cleanup()
+
+	userID := createLedgerTestUser(t, ctx, pool)
+	defer cleanupLedgerTestUser(t, context.Background(), pool, userID)
+	requestRecordID := createLedgerTestRequestRecord(t, ctx, pool, userID)
+
 	_, err := service.PreAuthorize(ctx, PreAuthorizeParams{
 		UserID:          userID,
 		RequestRecordID: requestRecordID,
-		Amount:          numeric(40),
+		EstimatedAmount: numeric(40),
 		Currency:        "USD",
 		IdempotencyKey:  fmt.Sprintf("preauthorize-insufficient-%d", time.Now().UnixNano()),
 		Reason:          "test insufficient preauthorize",
@@ -272,16 +309,6 @@ func TestPreAuthorizeReturnsInsufficientBalanceWithoutReservation(t *testing.T) 
 	if got := failure.CodeOf(err); got != failure.CodeLedgerInsufficientBalance {
 		t.Fatalf("expected failure code %q, got %q", failure.CodeLedgerInsufficientBalance, got)
 	}
-
-	balance, err := queries.GetUserBalance(ctx, sqlc.GetUserBalanceParams{
-		UserID:   userID,
-		Currency: "USD",
-	})
-	if err != nil {
-		t.Fatalf("get balance after failed preauthorize: %v", err)
-	}
-	assertNumericEquals(t, balance.Balance, 30)
-	assertNumericEquals(t, balance.ReservedBalance, 0)
 
 	if _, err := queries.GetLedgerReservationByRequestRecordID(ctx, requestRecordID); err == nil {
 		t.Fatal("expected no reservation after failed preauthorize")
@@ -296,7 +323,7 @@ func TestPreAuthorizeRejectsInvalidAmount(t *testing.T) {
 		_, err := service.PreAuthorize(context.Background(), PreAuthorizeParams{
 			UserID:          1,
 			RequestRecordID: 1,
-			Amount:          amount,
+			EstimatedAmount: amount,
 			Currency:        "USD",
 			IdempotencyKey:  fmt.Sprintf("preauthorize-invalid-%d", time.Now().UnixNano()),
 			Reason:          "invalid preauthorize amount",
@@ -332,7 +359,7 @@ func TestPreAuthorizeIdempotencyKeyConflictReturnsDomainError(t *testing.T) {
 	if _, err := service.PreAuthorize(ctx, PreAuthorizeParams{
 		UserID:          userID,
 		RequestRecordID: requestRecordID,
-		Amount:          numeric(40),
+		EstimatedAmount: numeric(40),
 		Currency:        "USD",
 		IdempotencyKey:  key,
 		Reason:          "initial preauthorize",
@@ -343,7 +370,7 @@ func TestPreAuthorizeIdempotencyKeyConflictReturnsDomainError(t *testing.T) {
 	_, err := service.PreAuthorize(ctx, PreAuthorizeParams{
 		UserID:          userID,
 		RequestRecordID: requestRecordID,
-		Amount:          numeric(50),
+		EstimatedAmount: numeric(50),
 		Currency:        "USD",
 		IdempotencyKey:  key,
 		Reason:          "conflicting preauthorize amount",
@@ -377,7 +404,7 @@ func TestPreAuthorizeRequestConflictReturnsDomainError(t *testing.T) {
 	if _, err := service.PreAuthorize(ctx, PreAuthorizeParams{
 		UserID:          userID,
 		RequestRecordID: requestRecordID,
-		Amount:          numeric(40),
+		EstimatedAmount: numeric(40),
 		Currency:        "USD",
 		IdempotencyKey:  fmt.Sprintf("preauthorize-request-conflict-a-%d", time.Now().UnixNano()),
 		Reason:          "initial preauthorize",
@@ -388,7 +415,7 @@ func TestPreAuthorizeRequestConflictReturnsDomainError(t *testing.T) {
 	_, err := service.PreAuthorize(ctx, PreAuthorizeParams{
 		UserID:          userID,
 		RequestRecordID: requestRecordID,
-		Amount:          numeric(40),
+		EstimatedAmount: numeric(40),
 		Currency:        "USD",
 		IdempotencyKey:  fmt.Sprintf("preauthorize-request-conflict-b-%d", time.Now().UnixNano()),
 		Reason:          "conflicting request preauthorize",
@@ -422,7 +449,7 @@ func TestConcurrentSamePreAuthorizeIdempotencyKeyDoesNotDoubleReserve(t *testing
 	params := PreAuthorizeParams{
 		UserID:          userID,
 		RequestRecordID: requestRecordID,
-		Amount:          numeric(40),
+		EstimatedAmount: numeric(40),
 		Currency:        "USD",
 		IdempotencyKey:  fmt.Sprintf("concurrent-preauthorize-%d", time.Now().UnixNano()),
 		Reason:          "concurrent preauthorize",
@@ -479,6 +506,181 @@ func TestConcurrentSamePreAuthorizeIdempotencyKeyDoesNotDoubleReserve(t *testing
 	}
 	assertNumericEquals(t, balance.Balance, 100)
 	assertNumericEquals(t, balance.ReservedBalance, 40)
+}
+
+func TestCaptureWritesOffActualAmountAboveAuthorization(t *testing.T) {
+	ctx, pool, queries, service, cleanup := newServiceTestDeps(t)
+	defer cleanup()
+
+	userID := createLedgerTestUser(t, ctx, pool)
+	defer cleanupLedgerTestUser(t, context.Background(), pool, userID)
+	requestRecordID := createLedgerTestRequestRecord(t, ctx, pool, userID)
+
+	if _, err := service.Credit(ctx, CreditParams{
+		UserID:         userID,
+		Amount:         numeric(80),
+		Currency:       "USD",
+		IdempotencyKey: fmt.Sprintf("capture-writeoff-credit-%d", time.Now().UnixNano()),
+		Reason:         "seed write off balance",
+	}); err != nil {
+		t.Fatalf("seed credit: %v", err)
+	}
+
+	reservation, err := service.PreAuthorize(ctx, PreAuthorizeParams{
+		UserID:          userID,
+		RequestRecordID: requestRecordID,
+		EstimatedAmount: numeric(100),
+		Currency:        "USD",
+		IdempotencyKey:  fmt.Sprintf("capture-writeoff-preauthorize-%d", time.Now().UnixNano()),
+		Reason:          "test write off preauthorize",
+	})
+	if err != nil {
+		t.Fatalf("preauthorize partial balance: %v", err)
+	}
+	assertNumericEquals(t, reservation.EstimatedAmount, 100)
+	assertNumericEquals(t, reservation.AuthorizedAmount, 80)
+
+	captureParams := CaptureParams{
+		RequestRecordID: requestRecordID,
+		ReservationID:   &reservation.ID,
+		ActualAmount:    numeric(100),
+		IdempotencyKey:  fmt.Sprintf("capture-writeoff-%d", time.Now().UnixNano()),
+		Reason:          "test write off capture",
+	}
+	captured, err := service.Capture(ctx, captureParams)
+	if err != nil {
+		t.Fatalf("capture with write off: %v", err)
+	}
+	if captured.Status != ReservationStatusCaptured {
+		t.Fatalf("expected captured reservation, got %q", captured.Status)
+	}
+	assertNumericEquals(t, captured.CapturedAmount, 80)
+	assertNumericEquals(t, captured.ReleasedAmount, 0)
+
+	balance, err := queries.GetUserBalance(ctx, sqlc.GetUserBalanceParams{
+		UserID:   userID,
+		Currency: "USD",
+	})
+	if err != nil {
+		t.Fatalf("get balance after capture write off: %v", err)
+	}
+	assertNumericEquals(t, balance.Balance, 0)
+	assertNumericEquals(t, balance.ReservedBalance, 0)
+
+	entry, err := queries.GetLedgerEntryByIdempotencyKey(ctx, captureParams.IdempotencyKey)
+	if err != nil {
+		t.Fatalf("get capture ledger entry: %v", err)
+	}
+	assertNumericEquals(t, entry.Amount, 80)
+	assertNumericEquals(t, entry.BalanceBefore, 80)
+	assertNumericEquals(t, entry.BalanceAfter, 0)
+
+	writeOff, err := queries.GetLedgerBillingExceptionByReservationID(ctx, reservation.ID)
+	if err != nil {
+		t.Fatalf("get ledger billing exception: %v", err)
+	}
+	if writeOff.EventType != string(BillingExceptionEventTypeWriteOff) {
+		t.Fatalf("expected write off event type, got %q", writeOff.EventType)
+	}
+	assertNumericEquals(t, writeOff.ActualAmount, 100)
+	assertNumericEquals(t, writeOff.CapturedAmount, 80)
+	assertNumericEquals(t, writeOff.PlatformAmount, 20)
+	if writeOff.ReasonCode != "authorization_underfunded" {
+		t.Fatalf("expected write off reason authorization_underfunded, got %q", writeOff.ReasonCode)
+	}
+
+	repeated, err := service.Capture(ctx, captureParams)
+	if err != nil {
+		t.Fatalf("repeat capture with write off: %v", err)
+	}
+	if repeated.ID != captured.ID {
+		t.Fatalf("expected idempotent capture reservation id %d, got %d", captured.ID, repeated.ID)
+	}
+}
+
+func TestReleaseWithBillingExceptionRecordsRiskExposure(t *testing.T) {
+	ctx, pool, queries, service, cleanup := newServiceTestDeps(t)
+	defer cleanup()
+
+	userID := createLedgerTestUser(t, ctx, pool)
+	defer cleanupLedgerTestUser(t, context.Background(), pool, userID)
+	requestRecordID := createLedgerTestRequestRecord(t, ctx, pool, userID)
+
+	if _, err := service.Credit(ctx, CreditParams{
+		UserID:         userID,
+		Amount:         numeric(50),
+		Currency:       "USD",
+		IdempotencyKey: fmt.Sprintf("risk-exposure-credit-%d", time.Now().UnixNano()),
+		Reason:         "seed risk exposure balance",
+	}); err != nil {
+		t.Fatalf("seed credit: %v", err)
+	}
+
+	reservation, err := service.PreAuthorize(ctx, PreAuthorizeParams{
+		UserID:          userID,
+		RequestRecordID: requestRecordID,
+		EstimatedAmount: numeric(40),
+		Currency:        "USD",
+		IdempotencyKey:  fmt.Sprintf("risk-exposure-preauthorize-%d", time.Now().UnixNano()),
+		Reason:          "test risk exposure preauthorize",
+	})
+	if err != nil {
+		t.Fatalf("preauthorize: %v", err)
+	}
+
+	released, err := service.ReleaseWithBillingException(ctx, ReleaseWithBillingExceptionParams{
+		RequestRecordID: requestRecordID,
+		ReservationID:   &reservation.ID,
+		ReasonCode:      "stream_final_usage_missing",
+		Reason:          "stream ended without final usage",
+	})
+	if err != nil {
+		t.Fatalf("release with billing exception: %v", err)
+	}
+	if released.Status != ReservationStatusReleased {
+		t.Fatalf("expected released reservation, got %q", released.Status)
+	}
+	assertNumericEquals(t, released.CapturedAmount, 0)
+	assertNumericEquals(t, released.ReleasedAmount, 40)
+
+	balance, err := queries.GetUserBalance(ctx, sqlc.GetUserBalanceParams{
+		UserID:   userID,
+		Currency: "USD",
+	})
+	if err != nil {
+		t.Fatalf("get balance after risk exposure release: %v", err)
+	}
+	assertNumericEquals(t, balance.Balance, 50)
+	assertNumericEquals(t, balance.ReservedBalance, 0)
+
+	exception, err := queries.GetLedgerBillingExceptionByReservationID(ctx, reservation.ID)
+	if err != nil {
+		t.Fatalf("get ledger billing exception: %v", err)
+	}
+	if exception.EventType != string(BillingExceptionEventTypeRiskExposure) {
+		t.Fatalf("expected risk exposure event type, got %q", exception.EventType)
+	}
+	if exception.ActualAmount.Valid {
+		t.Fatalf("expected nil actual amount for risk exposure, got %#v", exception.ActualAmount)
+	}
+	assertNumericEquals(t, exception.CapturedAmount, 0)
+	assertNumericEquals(t, exception.PlatformAmount, 40)
+	if exception.ReasonCode != "stream_final_usage_missing" {
+		t.Fatalf("expected stream_final_usage_missing reason code, got %q", exception.ReasonCode)
+	}
+
+	repeated, err := service.ReleaseWithBillingException(ctx, ReleaseWithBillingExceptionParams{
+		RequestRecordID: requestRecordID,
+		ReservationID:   &reservation.ID,
+		ReasonCode:      "stream_final_usage_missing",
+		Reason:          "stream ended without final usage",
+	})
+	if err != nil {
+		t.Fatalf("repeat release with billing exception: %v", err)
+	}
+	if repeated.ID != released.ID {
+		t.Fatalf("expected idempotent release reservation id %d, got %d", released.ID, repeated.ID)
+	}
 }
 
 func TestCreditCreatesBalanceAndIsIdempotent(t *testing.T) {

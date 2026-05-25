@@ -26,10 +26,10 @@ type chatMessage struct {
 }
 
 type chatCompletionResponse struct {
-	ID      string              `json:"id"`
-	Model   string              `json:"model"`
-	Choices []chatChoice        `json:"choices"`
-	Usage   chatCompletionUsage `json:"usage"`
+	ID      string               `json:"id"`
+	Model   string               `json:"model"`
+	Choices []chatChoice         `json:"choices"`
+	Usage   *chatCompletionUsage `json:"usage"`
 }
 
 type chatChoice struct {
@@ -54,9 +54,9 @@ type chatStreamDelta struct {
 }
 
 type chatCompletionUsage struct {
-	PromptTokens            int                         `json:"prompt_tokens"`
-	CompletionTokens        int                         `json:"completion_tokens"`
-	TotalTokens             int                         `json:"total_tokens"`
+	PromptTokens            *int                        `json:"prompt_tokens"`
+	CompletionTokens        *int                        `json:"completion_tokens"`
+	TotalTokens             *int                        `json:"total_tokens"`
 	PromptTokensDetails     chatPromptTokensDetails     `json:"prompt_tokens_details"`
 	CompletionTokensDetails chatCompletionTokensDetails `json:"completion_tokens_details"`
 }

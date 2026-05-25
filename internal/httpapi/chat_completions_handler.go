@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/ThankCat/unio-api/internal/failure"
 	"github.com/ThankCat/unio-api/internal/httpx"
 	"github.com/ThankCat/unio-api/internal/routing"
 )
@@ -132,6 +133,14 @@ func mapChatServiceError(req ChatCompletionRequest, err error, fallbackCode stri
 	modelParam := stringPtr("model")
 
 	switch {
+	case failure.CodeOf(err) == failure.CodeLedgerInsufficientBalance:
+		return chatServiceErrorResponse{
+			status:    http.StatusTooManyRequests,
+			code:      "insufficient_quota",
+			message:   "You exceeded your current quota. Please check your balance or billing details.",
+			errorType: "insufficient_quota",
+			param:     nil,
+		}
 	case errors.Is(err, routing.ErrModelNotFound), errors.Is(err, routing.ErrModelNotAvailable):
 		return chatServiceErrorResponse{
 			status:    http.StatusNotFound,
