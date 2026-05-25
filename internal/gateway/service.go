@@ -17,6 +17,7 @@ type ChatRouter interface {
 type AdapterRegistry interface {
 	Chat(adapterKey string) (adapter.ChatAdapter, bool)
 	StreamChat(adapterKey string) (adapter.StreamChatAdapter, bool)
+	ChatInputTokenizer(adapterKey string) (adapter.ChatInputTokenizer, bool)
 }
 
 // RetryClassifier 定义 gateway 判断一次上游错误是否允许尝试下一个同模型 channel 的能力。

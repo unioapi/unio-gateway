@@ -32,6 +32,10 @@ func (r fakeChatGatewayRegistry) StreamChat(adapterKey string) (adapter.StreamCh
 	return nil, false
 }
 
+func (r fakeChatGatewayRegistry) ChatInputTokenizer(adapterKey string) (adapter.ChatInputTokenizer, bool) {
+	return nil, false
+}
+
 func TestNewChatGatewayBuildsService(t *testing.T) {
 	service := NewChatGateway(
 		fakeChatGatewayDB{},

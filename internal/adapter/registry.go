@@ -16,22 +16,25 @@ var (
 
 // Registration 表示一个 adapter key 对应的代码能力。
 type Registration struct {
-	Key        string
-	Chat       ChatAdapter
-	StreamChat StreamChatAdapter
+	Key                string
+	Chat               ChatAdapter
+	StreamChat         StreamChatAdapter
+	ChatInputTokenizer ChatInputTokenizer
 }
 
 // Registry 根据 adapter key 查找对应 adapter 能力。
 type Registry struct {
-	chat       map[string]ChatAdapter
-	streamChat map[string]StreamChatAdapter
+	chat               map[string]ChatAdapter
+	streamChat         map[string]StreamChatAdapter
+	chatInputTokenizer map[string]ChatInputTokenizer
 }
 
 // NewRegistry 创建 adapter registry。
 func NewRegistry(registrations ...Registration) (*Registry, error) {
 	r := &Registry{
-		chat:       make(map[string]ChatAdapter),
-		streamChat: make(map[string]StreamChatAdapter),
+		chat:               make(map[string]ChatAdapter),
+		streamChat:         make(map[string]StreamChatAdapter),
+		chatInputTokenizer: make(map[string]ChatInputTokenizer),
 	}
 
 	for _, reg := range registrations {
@@ -43,7 +46,7 @@ func NewRegistry(registrations ...Registration) (*Registry, error) {
 			)
 		}
 
-		if reg.Chat == nil && reg.StreamChat == nil {
+		if reg.Chat == nil && reg.StreamChat == nil && reg.ChatInputTokenizer == nil {
 			return nil, failure.Wrap(
 				failure.CodeAdapterInvalidRegistration,
 				ErrInvalidAdapterRegistration,
@@ -82,6 +85,17 @@ func registerCapabilities(reg Registration, r *Registry) error {
 		r.streamChat[reg.Key] = reg.StreamChat
 	}
 
+	if reg.ChatInputTokenizer != nil {
+		if _, exists := r.chatInputTokenizer[reg.Key]; exists {
+			return failure.Wrap(
+				failure.CodeAdapterDuplicateKey,
+				ErrDuplicateAdapterKey,
+				failure.WithMessage(fmt.Sprintf("duplicate chat input tokenizer key %q", reg.Key)),
+			)
+		}
+		r.chatInputTokenizer[reg.Key] = reg.ChatInputTokenizer
+	}
+
 	return nil
 }
 
@@ -106,5 +120,17 @@ func (r *Registry) HasChat(adapterKey string) bool {
 // HasStreamChat 判断 adapter key 是否注册了流式聊天能力。
 func (r *Registry) HasStreamChat(adapterKey string) bool {
 	_, ok := r.streamChat[adapterKey]
+	return ok
+}
+
+// ChatInputTokenizer 根据 adapter key 返回 chat 输入 token 计数能力。
+func (r *Registry) ChatInputTokenizer(adapterKey string) (ChatInputTokenizer, bool) {
+	tokenizer, ok := r.chatInputTokenizer[adapterKey]
+	return tokenizer, ok
+}
+
+// HasChatInputTokenizer 判断 adapter key 是否注册了 chat 输入 token 计数能力。
+func (r *Registry) HasChatInputTokenizer(adapterKey string) bool {
+	_, ok := r.chatInputTokenizer[adapterKey]
 	return ok
 }

@@ -11,8 +11,9 @@ import (
 func NewAdapterRegistry(client *http.Client) (*adapter.Registry, error) {
 	openaiAdapter := openai.NewAdapter(client)
 	return adapter.NewRegistry(adapter.Registration{
-		Key:        "openai",
-		Chat:       openaiAdapter,
-		StreamChat: openaiAdapter,
+		Key:                "openai",
+		Chat:               openaiAdapter,
+		StreamChat:         openaiAdapter,
+		ChatInputTokenizer: openaiAdapter,
 	})
 }

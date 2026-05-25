@@ -50,7 +50,7 @@ request 会被标记 failed，reservation 可能保持 authorized，reserved_bal
 后续进入 worker/settlement recovery 线时，用数据库持久化 recovery job + 幂等 settlement 重试收口。
 ```
 
-因此下一节不切到 recovery worker，继续做 `GAP-7-013` tokenizer 估算替换。
+`GAP-7-013` 已关闭。下一节不切到 recovery worker，进入 `GAP-7-003` request/attempt 状态机守卫。
 
 已经完成：
 
@@ -74,14 +74,14 @@ request 会被标记 failed，reservation 可能保持 authorized，reserved_bal
 18. gateway authorization 行为测试已覆盖成功、不调用 adapter、fallback、取消、release、settlement failure 等关键路径。
 19. `GAP-7-014` 已关闭：authorization 已拆分 `estimated_amount` 与 `authorized_amount`，低余额可冻结全部可用余额并继续请求，`actual_amount > authorized_amount` 时 capture 已冻结金额并写入 `ledger_billing_exceptions` 的 `write_off` 平台核销事实。
 20. `GAP-7-004` 已关闭：可能产生上游成本但没有 final usage 的 stream 路径会释放用户冻结余额，并写入 `ledger_billing_exceptions` 的 `risk_exposure` 事实。
+21. `GAP-7-013` 已关闭：gateway authorization 已通过 adapter registry 调用 provider adapter 注册的 `ChatInputTokenizer`；OpenAI adapter 已用 `tiktoken-go/tokenizer` 按 upstream model 估算 chat 输入 token，旧的字符串长度临时估算已移除。
 
 仍需收口：
 
-1. provider/model tokenizer，替换 prompt token 临时估算，见 [GAP-7-013](../../production/TODO_REGISTER.md#gap-7-013)。
-2. request/attempt 状态机守卫。
-3. settlement 请求级幂等。
-4. error message 和 usage source 审计字段。
-5. 成本价和价格生效窗口。
+1. request/attempt 状态机守卫。
+2. settlement 请求级幂等。
+3. error message 和 usage source 审计字段。
+4. 成本价和价格生效窗口。
 
 ## 已定死的新方案
 
@@ -134,19 +134,19 @@ request succeeded
 下一节第一步：
 
 ```text
-7.17 余额预检查与冻结闭环：替换 GAP-7-013 prompt token 临时估算。
+7.18 Request/attempt 状态机守卫：处理 GAP-7-003。
 ```
 
 建议接入顺序：
 
-1. 接入 provider/model tokenizer，替换 prompt token 临时估算。
-2. 进入 request/attempt 状态机守卫和 settlement 幂等前，复核剩余 P0 blocker。
+1. 进入 request/attempt 状态机守卫和 settlement 幂等前，复核剩余 P0 blocker。
+2. 处理 request/attempt 终态更新状态机守卫。
 3. 后续后台/报表查询需要同时读取 `ledger_billing_exceptions` 中的 `write_off` 与 `risk_exposure` 事件。
 4. settlement recovery 暂时不做，等进入 `cmd/worker` / recovery job 小节时再处理。
 
 必须先处理的 GAP：
 
-- [GAP-7-013](../../production/TODO_REGISTER.md#gap-7-013)
+- [GAP-7-003](../../production/TODO_REGISTER.md#gap-7-003)
 
 相关文档：
 

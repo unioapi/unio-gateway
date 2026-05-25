@@ -228,6 +228,9 @@ const (
 
 	// CodeAdapterReadStreamFailed 表示 adapter 读取上游 stream 失败。
 	CodeAdapterReadStreamFailed Code = "adapter_read_stream_failed"
+
+	// CodeAdapterTokenizeFailed 表示 adapter 执行 provider-specific tokenizer 失败。
+	CodeAdapterTokenizeFailed Code = "adapter_tokenize_failed"
 )
 
 const (

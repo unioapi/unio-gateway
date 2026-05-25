@@ -83,6 +83,8 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ht
 				Principal:     principal,
 				Request:       req,
 				ModelDBID:     candidate.ModelDBID,
+				AdapterKey:    candidate.AdapterKey,
+				UpstreamModel: candidate.UpstreamModel,
 			})
 			if err != nil {
 				s.markAttemptRecordFailed(ctx, attemptRecord, "chat_authorization_failed", err)

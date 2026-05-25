@@ -148,7 +148,7 @@ ledger entry
 <a id="task-7-17-preauthorization"></a>
 ### TASK-7.17 余额预检查与冻结闭环
 
-状态：in_progress
+状态：done
 
 范围：
 
@@ -171,12 +171,14 @@ available_balance <= 0 时仍会在调用上游前拒绝。
 actual_amount > authorized_amount 时会 capture 已冻结金额，并写入 ledger_billing_exceptions 的 write_off 事件作为平台核销事实。
 stream 已经可能产生上游成本但没有 final usage 时会 release 用户冻结余额，并写入 ledger_billing_exceptions 的 risk_exposure 事件。
 上游成功且有可靠 usage 的请求可按成功账务事实收口，不形成用户负余额或隐性欠费。
+gateway authorization 已通过 adapter registry 调用 provider adapter 注册的 ChatInputTokenizer。
+OpenAI adapter 已用 tiktoken-go/tokenizer 按 upstream model 估算 chat 输入 token。
 ```
 
 剩余风险：
 
 ```text
-prompt token 仍为临时估算。
+无。后续新增 provider adapter 时必须注册自己的 ChatInputTokenizer，否则 authorization 会拒绝请求。
 ```
 
 关联 GAP：
@@ -189,6 +191,7 @@ prompt token 仍为临时估算。
 - [GAP-7-002](../../production/TODO_REGISTER.md#gap-7-002)
 - [GAP-7-004](../../production/TODO_REGISTER.md#gap-7-004)
 - [GAP-7-011](../../production/TODO_REGISTER.md#gap-7-011)
+- [GAP-7-013](../../production/TODO_REGISTER.md#gap-7-013)
 - [GAP-7-014](../../production/TODO_REGISTER.md#gap-7-014)
 
 

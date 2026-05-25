@@ -34,10 +34,12 @@ func (r *fakeChatRouter) PlanChat(ctx context.Context, req routing.ChatRouteRequ
 
 // fakeAdapterRegistry 是 gateway 测试使用的 adapter registry 替身。
 type fakeAdapterRegistry struct {
-	chatKeys           []string
-	streamChatKeys     []string
-	chatAdapters       map[string]adapter.ChatAdapter
-	streamChatAdapters map[string]adapter.StreamChatAdapter
+	chatKeys               []string
+	streamChatKeys         []string
+	chatInputTokenizerKeys []string
+	chatAdapters           map[string]adapter.ChatAdapter
+	streamChatAdapters     map[string]adapter.StreamChatAdapter
+	chatInputTokenizers    map[string]adapter.ChatInputTokenizer
 }
 
 // Chat 记录 adapter key，并按 key 返回测试预设非流式 adapter。
@@ -52,6 +54,13 @@ func (r *fakeAdapterRegistry) StreamChat(adapterKey string) (adapter.StreamChatA
 	r.streamChatKeys = append(r.streamChatKeys, adapterKey)
 	streamChatAdapter, ok := r.streamChatAdapters[adapterKey]
 	return streamChatAdapter, ok
+}
+
+// ChatInputTokenizer 记录 adapter key，并按 key 返回测试预设输入 tokenizer。
+func (r *fakeAdapterRegistry) ChatInputTokenizer(adapterKey string) (adapter.ChatInputTokenizer, bool) {
+	r.chatInputTokenizerKeys = append(r.chatInputTokenizerKeys, adapterKey)
+	tokenizer, ok := r.chatInputTokenizers[adapterKey]
+	return tokenizer, ok
 }
 
 // fakeRetryClassifier 是 gateway 测试使用的 retry 判断替身。

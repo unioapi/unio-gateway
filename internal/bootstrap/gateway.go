@@ -22,6 +22,7 @@ func NewChatGateway(db gateway.ChatTxBeginner, queries *sqlc.Queries, router gat
 		queries,
 		billing.Service{},
 		ledgerService,
+		registry,
 	)
 
 	return gateway.NewChatCompletionService(

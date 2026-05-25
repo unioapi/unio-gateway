@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ThankCat/unio-api/internal/adapter"
 	"github.com/ThankCat/unio-api/internal/auth"
 	"github.com/ThankCat/unio-api/internal/billing"
 	"github.com/ThankCat/unio-api/internal/failure"
@@ -36,6 +37,8 @@ type ChatAuthorizeParams struct {
 	Principal     *auth.APIKeyPrincipal
 	Request       httpapi.ChatCompletionRequest
 	ModelDBID     int64
+	AdapterKey    string
+	UpstreamModel string
 }
 
 // ChatReleaseBillingExceptionParams 表示异常释放 chat 冻结余额所需参数。
@@ -94,10 +97,11 @@ type ChatAuthorizationService struct {
 	priceStore ChatAuthorizationPriceStore
 	billing    ChatAuthorizationBilling
 	ledger     ChatAuthorizationLedger
+	registry   AdapterRegistry
 }
 
 // NewChatAuthorizationService 创建 chat 余额冻结 service。
-func NewChatAuthorizationService(priceStore ChatAuthorizationPriceStore, billing ChatAuthorizationBilling, ledger ChatAuthorizationLedger) *ChatAuthorizationService {
+func NewChatAuthorizationService(priceStore ChatAuthorizationPriceStore, billing ChatAuthorizationBilling, ledger ChatAuthorizationLedger, registry AdapterRegistry) *ChatAuthorizationService {
 	if priceStore == nil {
 		panic("gateway: chat authorization price store is required")
 	}
@@ -107,11 +111,15 @@ func NewChatAuthorizationService(priceStore ChatAuthorizationPriceStore, billing
 	if ledger == nil {
 		panic("gateway: chat authorization ledger is required")
 	}
+	if registry == nil {
+		panic("gateway: adapter registry is required")
+	}
 
 	return &ChatAuthorizationService{
 		priceStore: priceStore,
 		billing:    billing,
 		ledger:     ledger,
+		registry:   registry,
 	}
 }
 
@@ -135,10 +143,33 @@ func (s *ChatAuthorizationService) AuthorizeChat(ctx context.Context, params Cha
 
 	authorizationPrice := billingPriceSnapshotFromActivePrice(price)
 
+	tokenizer, ok := s.registry.ChatInputTokenizer(params.AdapterKey)
+	if !ok {
+		return ChatAuthorization{}, failure.New(
+			failure.CodeGatewayChatAuthorizationFailed,
+			failure.WithMessage("chat input tokenizer is not registered"),
+			failure.WithField("adapter_key", params.AdapterKey),
+		)
+	}
+
+	inputTokens, err := tokenizer.CountChatInputTokens(adapter.ChatInputTokenizeRequest{
+		Model:    params.UpstreamModel,
+		Messages: chatInputMessages(params.Request.Messages),
+	})
+	if err != nil {
+		return ChatAuthorization{}, failure.Wrap(
+			failure.CodeGatewayChatAuthorizationFailed,
+			err,
+			failure.WithMessage("count chat input tokens"),
+			failure.WithField("adapter_key", params.AdapterKey),
+			failure.WithField("upstream_model", params.UpstreamModel),
+		)
+	}
+
 	// 这里是控损估算，不是最终 usage；但价格必须和最终 settlement 使用同一份。
 	settlement, err := s.billing.EstimateAuthorizationAmount(
 		billing.AuthorizationEstimate{
-			PromptTokens:        estimatePromptTokensForAuthorization(params.Request.Messages),
+			PromptTokens:        inputTokens,
 			MaxCompletionTokens: estimateMaxCompletionTokens(params.Request),
 		},
 		authorizationPrice,
@@ -211,18 +242,15 @@ func (s *ChatAuthorizationService) ReleaseChatForBillingException(ctx context.Co
 	return err
 }
 
-// TODO(阶段7/production): [GAP-7-013] 冻结余额时 prompt token 目前使用临时估算，可能导致冻结金额不准；接入 provider/model tokenizer 前；替换为按模型维度的 token 估算器。
-func estimatePromptTokensForAuthorization(message []httpapi.ChatMessage) int64 {
-	var total int64
-	for _, m := range message {
-		total += int64(len(m.Role))
-		total += int64(len(m.Content))
-
-		// 估算每条 message 的结构开销，后续替换为 provider/model tokenizer。
-		total += 4
+func chatInputMessages(messages []httpapi.ChatMessage) []adapter.ChatMessage {
+	out := make([]adapter.ChatMessage, 0, len(messages))
+	for _, msg := range messages {
+		out = append(out, adapter.ChatMessage{
+			Role:    msg.Role,
+			Content: msg.Content,
+		})
 	}
-
-	return total + 8
+	return out
 }
 
 func estimateMaxCompletionTokens(req httpapi.ChatCompletionRequest) int64 {

@@ -24,6 +24,13 @@ func (a *registryTestStreamChatAdapter) StreamChatCompletions(ctx context.Contex
 	return nil
 }
 
+// registryTestChatInputTokenizer 是 registry 测试使用的输入 tokenizer 替身。
+type registryTestChatInputTokenizer struct{}
+
+func (t *registryTestChatInputTokenizer) CountChatInputTokens(req ChatInputTokenizeRequest) (int64, error) {
+	return 0, nil
+}
+
 func TestRegistryReturnsRegisteredChatAdapter(t *testing.T) {
 	chatAdapter := &registryTestChatAdapter{}
 	registry, err := NewRegistry(Registration{
@@ -70,6 +77,25 @@ func TestRegistryReturnsRegisteredStreamChatAdapter(t *testing.T) {
 	}
 }
 
+func TestRegistryReturnsRegisteredChatInputTokenizer(t *testing.T) {
+	tokenizer := &registryTestChatInputTokenizer{}
+	registry, err := NewRegistry(Registration{
+		Key:                "openai",
+		ChatInputTokenizer: tokenizer,
+	})
+	if err != nil {
+		t.Fatalf("NewRegistry returned error: %v", err)
+	}
+
+	got, ok := registry.ChatInputTokenizer("openai")
+	if !ok {
+		t.Fatal("expected registered chat input tokenizer")
+	}
+	if got != tokenizer {
+		t.Fatal("expected registered chat input tokenizer instance")
+	}
+}
+
 func TestRegistryReturnsFalseForUnknownAdapterKey(t *testing.T) {
 	registry, err := NewRegistry(Registration{
 		Key:  "openai",
@@ -84,6 +110,9 @@ func TestRegistryReturnsFalseForUnknownAdapterKey(t *testing.T) {
 	}
 	if _, ok := registry.StreamChat("anthropic"); ok {
 		t.Fatal("expected unknown stream chat adapter key to return false")
+	}
+	if _, ok := registry.ChatInputTokenizer("anthropic"); ok {
+		t.Fatal("expected unknown chat input tokenizer key to return false")
 	}
 }
 
@@ -102,6 +131,10 @@ func TestRegistryReportsRegisteredCapabilities(t *testing.T) {
 			Key:        "stream-only",
 			StreamChat: &registryTestStreamChatAdapter{},
 		},
+		Registration{
+			Key:                "tokenizer-only",
+			ChatInputTokenizer: &registryTestChatInputTokenizer{},
+		},
 	)
 	if err != nil {
 		t.Fatalf("NewRegistry returned error: %v", err)
@@ -112,10 +145,12 @@ func TestRegistryReportsRegisteredCapabilities(t *testing.T) {
 		key        string
 		wantChat   bool
 		wantStream bool
+		wantInput  bool
 	}{
 		{name: "both capabilities", key: "openai", wantChat: true, wantStream: true},
 		{name: "chat only", key: "chat-only", wantChat: true, wantStream: false},
 		{name: "stream only", key: "stream-only", wantChat: false, wantStream: true},
+		{name: "tokenizer only", key: "tokenizer-only", wantChat: false, wantStream: false, wantInput: true},
 		{name: "unknown key", key: "missing", wantChat: false, wantStream: false},
 	}
 
@@ -127,6 +162,10 @@ func TestRegistryReportsRegisteredCapabilities(t *testing.T) {
 
 			if got := registry.HasStreamChat(tt.key); got != tt.wantStream {
 				t.Fatalf("HasStreamChat(%q) = %v, want %v", tt.key, got, tt.wantStream)
+			}
+
+			if got := registry.HasChatInputTokenizer(tt.key); got != tt.wantInput {
+				t.Fatalf("HasChatInputTokenizer(%q) = %v, want %v", tt.key, got, tt.wantInput)
 			}
 		})
 	}
@@ -176,6 +215,22 @@ func TestNewRegistryRejectsDuplicateStreamChatAdapterKey(t *testing.T) {
 		Registration{
 			Key:        "openai",
 			StreamChat: &registryTestStreamChatAdapter{},
+		},
+	)
+	if !errors.Is(err, ErrDuplicateAdapterKey) {
+		t.Fatalf("expected ErrDuplicateAdapterKey, got %v", err)
+	}
+}
+
+func TestNewRegistryRejectsDuplicateChatInputTokenizerKey(t *testing.T) {
+	_, err := NewRegistry(
+		Registration{
+			Key:                "openai",
+			ChatInputTokenizer: &registryTestChatInputTokenizer{},
+		},
+		Registration{
+			Key:                "openai",
+			ChatInputTokenizer: &registryTestChatInputTokenizer{},
 		},
 	)
 	if !errors.Is(err, ErrDuplicateAdapterKey) {
