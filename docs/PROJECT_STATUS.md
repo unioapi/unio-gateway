@@ -89,6 +89,6 @@ go test ./...
 
 阶段 7 下一小节目标：
 
-1. 继续推进 [GAP-7-009](production/TODO_REGISTER.md#gap-7-009) 成本价和 cost snapshot；倍率只作为后续后台运营配置工具，账务核心先落明确金额和请求级快照。
+1. 继续推进 [GAP-7-009](production/TODO_REGISTER.md#gap-7-009) 成本价和 cost snapshot；第一版不支持倍率，账务核心直接落明确金额和请求级快照。
 2. 继续推进 [GAP-7-010](production/TODO_REGISTER.md#gap-7-010) 价格生效窗口约束。
 3. 后续进入 worker/recovery 线时处理 GAP-7-007。

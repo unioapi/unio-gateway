@@ -21,7 +21,7 @@
 
 | 任务 | 状态 | 说明 |
 | --- | --- | --- |
-| TASK-7.20 | todo | 下一步进入 provider/channel 成本价和 cost snapshot，处理 [GAP-7-009](../../production/TODO_REGISTER.md#gap-7-009)；倍率仅作为后续后台运营配置工具，不作为账务事实。 |
+| TASK-7.20 | todo | 下一步进入 provider/channel 成本价和 cost snapshot，处理 [GAP-7-009](../../production/TODO_REGISTER.md#gap-7-009)；第一版不支持倍率，直接使用明确金额。 |
 
 ## 未完成
 
@@ -40,5 +40,5 @@ rg -n "GAP-7-" docs/production/TODO_REGISTER.md cmd internal migrations sql
 ## 下节课 TODO
 
 1. 复核当前阶段剩余 P0 release blocker。
-2. [GAP-7-005](../../production/TODO_REGISTER.md#gap-7-005) 和 [GAP-7-008](../../production/TODO_REGISTER.md#gap-7-008) 已关闭；下一步进入 [GAP-7-009](../../production/TODO_REGISTER.md#gap-7-009) 成本价和 cost snapshot，先做明确金额事实，不做倍率系统。
+2. [GAP-7-005](../../production/TODO_REGISTER.md#gap-7-005) 和 [GAP-7-008](../../production/TODO_REGISTER.md#gap-7-008) 已关闭；下一步进入 [GAP-7-009](../../production/TODO_REGISTER.md#gap-7-009) 成本价和 cost snapshot，第一版直接做明确金额，不做倍率系统。
 3. [GAP-7-007](../../production/TODO_REGISTER.md#gap-7-007) 仍保留为 worker recovery 阻断项，settlement recovery 暂不做，等进入 worker/settlement recovery 线时处理。

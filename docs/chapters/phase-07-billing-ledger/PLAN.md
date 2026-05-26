@@ -252,8 +252,8 @@ sqlc 测试已覆盖 request/attempt 终态幂等和非法覆盖场景。
 定价原则：
 
 ```text
-倍率不是账务事实，只能作为后续后台运营配置工具。
-本阶段先落地明确金额的成本价和请求级 cost snapshot。
+第一版不支持倍率。
+本阶段直接落地明确金额的成本价和请求级 cost snapshot。
 结算层只消费明确金额，不在 settlement 时依赖模型倍率、补全倍率或分组倍率临时重算历史账单。
 ```
 
@@ -262,8 +262,8 @@ sqlc 测试已覆盖 request/attempt 终态幂等和非法覆盖场景。
 1. 区分客户侧售卖价和 provider/channel 成本价。
 2. request settlement 保存 cost snapshot。
 3. 支持按 channel/provider 分析毛利和 fallback 成本。
-4. 后续后台可以支持倍率生成价格，但必须先解析成明确金额后再进入结算。
-5. 历史账单复算以 price snapshot 和 cost snapshot 为准，不以当前倍率配置为准。
+4. 第一版后台直接维护明确金额，不做倍率系统。
+5. 历史账单复算以 price snapshot 和 cost snapshot 为准。
 
 关联 GAP：
 

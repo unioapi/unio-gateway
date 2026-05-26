@@ -36,7 +36,7 @@
 ## 本次新增决策
 
 1. settlement 成功语义后的失败暂时不在当前小节实现补偿 worker。
-2. 倍率属于后续后台运营配置工具，当前阶段账务核心先落地明确金额的成本价和 cost snapshot。
+2. 第一版不支持倍率，当前阶段账务核心先落地明确金额的成本价和 cost snapshot。
 
 具体判断：
 
@@ -56,15 +56,15 @@ request 会被标记 failed，reservation 可能保持 authorized，reserved_bal
 价格体系判断：
 
 ```text
-倍率、分组折扣和批量调价不是账务事实。
-TASK-7.20 先做 provider/channel 成本价和请求级 cost snapshot。
+倍率、分组折扣和批量调价不是第一版能力。
+TASK-7.20 直接做 provider/channel 明确成本价和请求级 cost snapshot。
 
 结算时必须使用明确金额：
 用户扣费 = usage * price snapshot
 平台成本 = usage * cost snapshot
 毛利 = 用户扣费 - 平台成本
 
-后续后台可以提供倍率输入方式，但保存和结算必须落到明确金额与快照。
+后续如果确有批量调价需求，再单独决策是否引入倍率/折扣辅助工具；第一版不做。
 ```
 
 已经完成：
@@ -95,7 +95,7 @@ TASK-7.20 先做 provider/channel 成本价和请求级 cost snapshot。
 24. `GAP-7-012` 已关闭：`DebitWithQueries` 在外部事务内按 ledger entry `idempotency_key` 获取 transaction-level advisory lock，重复并发 debit 不再通过唯一约束冲突污染调用方事务。
 25. `GAP-7-008` 已关闭：`ChatSettlementParams` 显式携带 usage source，非流式写入 `upstream_response`，流式 final usage 写入 `upstream_stream`。
 26. `GAP-7-005` 已关闭：request/attempt 新增 `internal_error_detail`，`error_message` 只保存安全展示文案，内部错误文本截断后进入内部详情字段。
-27. 定价体系边界已确认：倍率只作为后台运营配置工具，账务核心必须使用明确客户售价、provider/channel 成本价、price snapshot 和 cost snapshot。
+27. 定价体系边界已确认：第一版不支持倍率，账务核心必须使用明确客户售价、provider/channel 成本价、price snapshot 和 cost snapshot。
 
 仍需收口：
 
@@ -153,7 +153,7 @@ request succeeded
 下一节第一步：
 
 ```text
-7.20 成本价与毛利审计：先落地 provider/channel 成本价和 request-level cost snapshot；倍率系统不在当前小节实现。
+7.20 成本价与毛利审计：先落地 provider/channel 成本价和 request-level cost snapshot；第一版不做倍率系统。
 ```
 
 建议接入顺序：
