@@ -901,6 +901,20 @@ func (q *Queries) ListLedgerEntriesByUser(ctx context.Context, arg ListLedgerEnt
 	return items, nil
 }
 
+const lockLedgerEntryIdempotencyKey = `-- name: LockLedgerEntryIdempotencyKey :exec
+SELECT pg_advisory_xact_lock(
+               hashtext('ledger_entries'),
+               hashtext($1::text)
+       )
+`
+
+// ledger entry 幂等键是全局唯一业务键；事务内先按 key 加 advisory lock，
+// 避免外部事务并发重复扣款时先改余额、后撞 ledger_entries 唯一约束。
+func (q *Queries) LockLedgerEntryIdempotencyKey(ctx context.Context, idempotencyKey string) error {
+	_, err := q.db.Exec(ctx, lockLedgerEntryIdempotencyKey, idempotencyKey)
+	return err
+}
+
 const releaseLedgerReservation = `-- name: ReleaseLedgerReservation :one
 UPDATE ledger_reservations
 SET

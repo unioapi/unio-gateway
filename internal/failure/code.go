@@ -287,6 +287,9 @@ const (
 
 	// CodeGatewayChatAuthorizationFailed 表示 chat 调用上游前冻结余额失败。
 	CodeGatewayChatAuthorizationFailed Code = "gateway_chat_authorization_failed"
+
+	// CodeGatewayChatSettlementIdempotencyConflict 表示重复 settlement 的事实和第一次成功结算不一致。
+	CodeGatewayChatSettlementIdempotencyConflict Code = "gateway_chat_settlement_idempotency_conflict"
 )
 
 const (
@@ -295,6 +298,9 @@ const (
 
 	// CodeRequestLogStoreFailed 表示 request log 存储写入失败。
 	CodeRequestLogStoreFailed Code = "requestlog_store_failed"
+
+	// CodeRequestLogInvalidStateTransition 表示 request/attempt 状态转移不合法。
+	CodeRequestLogInvalidStateTransition Code = "requestlog_invalid_state_transition"
 )
 
 const (

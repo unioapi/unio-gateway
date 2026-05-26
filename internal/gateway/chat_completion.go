@@ -147,6 +147,7 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ht
 			FinalChannelID:        candidate.Channel.ID,
 			UpstreamResponseModel: adapterResp.Model,
 			Usage:                 adapterResp.Usage,
+			UsageSource:           ChatSettlementUsageSourceUpstreamResponse,
 		}); err != nil {
 			s.markRequestRecordFailed(ctx, requestRecord, "chat_settlement_failed", err)
 			return nil, err

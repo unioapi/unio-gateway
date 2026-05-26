@@ -120,6 +120,14 @@ FROM
 WHERE
     idempotency_key = sqlc.arg (idempotency_key);
 
+-- name: LockLedgerEntryIdempotencyKey :exec
+-- ledger entry 幂等键是全局唯一业务键；事务内先按 key 加 advisory lock，
+-- 避免外部事务并发重复扣款时先改余额、后撞 ledger_entries 唯一约束。
+SELECT pg_advisory_xact_lock(
+               hashtext('ledger_entries'),
+               hashtext(sqlc.arg(idempotency_key)::text)
+       );
+
 -- name: ListLedgerEntriesByUser :many
 SELECT
     id,

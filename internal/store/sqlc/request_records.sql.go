@@ -25,6 +25,7 @@ INSERT INTO request_attempts (
     upstream_request_id,
     error_code,
     error_message,
+    internal_error_detail,
     started_at,
     completed_at
 )
@@ -42,7 +43,8 @@ VALUES (
            $11,
            $12,
            $13,
-           $14
+           $14,
+           $15
        )
 RETURNING
     id,
@@ -58,6 +60,7 @@ RETURNING
     upstream_request_id,
     error_code,
     error_message,
+    internal_error_detail,
     started_at,
     completed_at,
     created_at
@@ -76,6 +79,7 @@ type CreateRequestAttemptParams struct {
 	UpstreamRequestID     pgtype.Text
 	ErrorCode             pgtype.Text
 	ErrorMessage          pgtype.Text
+	InternalErrorDetail   pgtype.Text
 	StartedAt             pgtype.Timestamptz
 	CompletedAt           pgtype.Timestamptz
 }
@@ -94,6 +98,7 @@ func (q *Queries) CreateRequestAttempt(ctx context.Context, arg CreateRequestAtt
 		arg.UpstreamRequestID,
 		arg.ErrorCode,
 		arg.ErrorMessage,
+		arg.InternalErrorDetail,
 		arg.StartedAt,
 		arg.CompletedAt,
 	)
@@ -112,6 +117,7 @@ func (q *Queries) CreateRequestAttempt(ctx context.Context, arg CreateRequestAtt
 		&i.UpstreamRequestID,
 		&i.ErrorCode,
 		&i.ErrorMessage,
+		&i.InternalErrorDetail,
 		&i.StartedAt,
 		&i.CompletedAt,
 		&i.CreatedAt,
@@ -133,6 +139,7 @@ INSERT INTO request_records (
     final_channel_id,
     error_code,
     error_message,
+    internal_error_detail,
     started_at,
     completed_at
 )
@@ -150,7 +157,8 @@ VALUES (
            $11,
            $12,
            $13,
-           $14
+           $14,
+           $15
        )
 RETURNING
     id,
@@ -166,6 +174,7 @@ RETURNING
     final_channel_id,
     error_code,
     error_message,
+    internal_error_detail,
     started_at,
     completed_at,
     created_at,
@@ -173,20 +182,21 @@ RETURNING
 `
 
 type CreateRequestRecordParams struct {
-	RequestID        string
-	UserID           int64
-	ProjectID        int64
-	ApiKeyID         int64
-	RequestedModelID string
-	ResponseModelID  pgtype.Text
-	Stream           bool
-	Status           string
-	FinalProviderID  pgtype.Int8
-	FinalChannelID   pgtype.Int8
-	ErrorCode        pgtype.Text
-	ErrorMessage     pgtype.Text
-	StartedAt        pgtype.Timestamptz
-	CompletedAt      pgtype.Timestamptz
+	RequestID           string
+	UserID              int64
+	ProjectID           int64
+	ApiKeyID            int64
+	RequestedModelID    string
+	ResponseModelID     pgtype.Text
+	Stream              bool
+	Status              string
+	FinalProviderID     pgtype.Int8
+	FinalChannelID      pgtype.Int8
+	ErrorCode           pgtype.Text
+	ErrorMessage        pgtype.Text
+	InternalErrorDetail pgtype.Text
+	StartedAt           pgtype.Timestamptz
+	CompletedAt         pgtype.Timestamptz
 }
 
 func (q *Queries) CreateRequestRecord(ctx context.Context, arg CreateRequestRecordParams) (RequestRecord, error) {
@@ -203,6 +213,7 @@ func (q *Queries) CreateRequestRecord(ctx context.Context, arg CreateRequestReco
 		arg.FinalChannelID,
 		arg.ErrorCode,
 		arg.ErrorMessage,
+		arg.InternalErrorDetail,
 		arg.StartedAt,
 		arg.CompletedAt,
 	)
@@ -221,6 +232,61 @@ func (q *Queries) CreateRequestRecord(ctx context.Context, arg CreateRequestReco
 		&i.FinalChannelID,
 		&i.ErrorCode,
 		&i.ErrorMessage,
+		&i.InternalErrorDetail,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getRequestRecordForUpdate = `-- name: GetRequestRecordForUpdate :one
+SELECT
+    id,
+    request_id,
+    user_id,
+    project_id,
+    api_key_id,
+    requested_model_id,
+    response_model_id,
+    stream,
+    status,
+    final_provider_id,
+    final_channel_id,
+    error_code,
+    error_message,
+    internal_error_detail,
+    started_at,
+    completed_at,
+    created_at,
+    updated_at
+FROM request_records
+WHERE id = $1
+    FOR UPDATE
+`
+
+// settlement 入口先锁 request 行，串行化同一个 request 的并发结算。
+// running 表示本次可以继续首次 settlement；
+// succeeded 表示可能是幂等重放，需要检查既有 usage/snapshot/ledger 后直接返回。
+func (q *Queries) GetRequestRecordForUpdate(ctx context.Context, requestRecordID int64) (RequestRecord, error) {
+	row := q.db.QueryRow(ctx, getRequestRecordForUpdate, requestRecordID)
+	var i RequestRecord
+	err := row.Scan(
+		&i.ID,
+		&i.RequestID,
+		&i.UserID,
+		&i.ProjectID,
+		&i.ApiKeyID,
+		&i.RequestedModelID,
+		&i.ResponseModelID,
+		&i.Stream,
+		&i.Status,
+		&i.FinalProviderID,
+		&i.FinalChannelID,
+		&i.ErrorCode,
+		&i.ErrorMessage,
+		&i.InternalErrorDetail,
 		&i.StartedAt,
 		&i.CompletedAt,
 		&i.CreatedAt,
@@ -244,6 +310,7 @@ SELECT
     upstream_request_id,
     error_code,
     error_message,
+    internal_error_detail,
     started_at,
     completed_at,
     created_at
@@ -275,6 +342,7 @@ func (q *Queries) ListRequestAttemptsByRequest(ctx context.Context, requestRecor
 			&i.UpstreamRequestID,
 			&i.ErrorCode,
 			&i.ErrorMessage,
+			&i.InternalErrorDetail,
 			&i.StartedAt,
 			&i.CompletedAt,
 			&i.CreatedAt,
@@ -290,46 +358,68 @@ func (q *Queries) ListRequestAttemptsByRequest(ctx context.Context, requestRecor
 }
 
 const markRequestAttemptCanceled = `-- name: MarkRequestAttemptCanceled :one
-UPDATE request_attempts
-SET status = 'canceled',
-    error_code = $1,
-    error_message = $2,
-    completed_at = $3
-WHERE id = $4
-RETURNING
-    id,
-    request_record_id,
-    attempt_index,
-    provider_id,
-    channel_id,
-    adapter_key,
-    upstream_model,
-    upstream_response_model,
-    status,
-    upstream_status_code,
-    upstream_request_id,
-    error_code,
-    error_message,
-    started_at,
-    completed_at,
-    created_at
+WITH updated AS (
+    UPDATE request_attempts
+        SET status = 'canceled',
+            error_code = $1,
+            error_message = $2,
+            internal_error_detail = $3,
+            completed_at = $4
+        WHERE request_attempts.id = $5
+            AND request_attempts.status = 'running'
+        RETURNING request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_response_model, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at
+)
+SELECT id, request_record_id, attempt_index, provider_id, channel_id, adapter_key, upstream_model, upstream_response_model, status, upstream_status_code, upstream_request_id, error_code, error_message, internal_error_detail, started_at, completed_at, created_at
+FROM updated
+
+UNION ALL
+
+SELECT request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_response_model, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at
+FROM request_attempts
+WHERE request_attempts.id = $5
+  AND request_attempts.status = 'canceled'
+  AND NOT EXISTS (SELECT 1 FROM updated)
 `
 
 type MarkRequestAttemptCanceledParams struct {
-	ErrorCode    pgtype.Text
-	ErrorMessage pgtype.Text
-	CompletedAt  pgtype.Timestamptz
-	ID           int64
+	ErrorCode           pgtype.Text
+	ErrorMessage        pgtype.Text
+	InternalErrorDetail pgtype.Text
+	CompletedAt         pgtype.Timestamptz
+	AttemptID           int64
 }
 
-func (q *Queries) MarkRequestAttemptCanceled(ctx context.Context, arg MarkRequestAttemptCanceledParams) (RequestAttempt, error) {
+type MarkRequestAttemptCanceledRow struct {
+	ID                    int64
+	RequestRecordID       int64
+	AttemptIndex          int32
+	ProviderID            int64
+	ChannelID             int64
+	AdapterKey            string
+	UpstreamModel         string
+	UpstreamResponseModel pgtype.Text
+	Status                string
+	UpstreamStatusCode    pgtype.Int4
+	UpstreamRequestID     pgtype.Text
+	ErrorCode             pgtype.Text
+	ErrorMessage          pgtype.Text
+	InternalErrorDetail   pgtype.Text
+	StartedAt             pgtype.Timestamptz
+	CompletedAt           pgtype.Timestamptz
+	CreatedAt             pgtype.Timestamptz
+}
+
+// running 才能进入 canceled。
+// 如果已经 canceled，重复取消写入只返回第一次取消事实，不能覆盖 error metadata。
+func (q *Queries) MarkRequestAttemptCanceled(ctx context.Context, arg MarkRequestAttemptCanceledParams) (MarkRequestAttemptCanceledRow, error) {
 	row := q.db.QueryRow(ctx, markRequestAttemptCanceled,
 		arg.ErrorCode,
 		arg.ErrorMessage,
+		arg.InternalErrorDetail,
 		arg.CompletedAt,
-		arg.ID,
+		arg.AttemptID,
 	)
-	var i RequestAttempt
+	var i MarkRequestAttemptCanceledRow
 	err := row.Scan(
 		&i.ID,
 		&i.RequestRecordID,
@@ -344,6 +434,7 @@ func (q *Queries) MarkRequestAttemptCanceled(ctx context.Context, arg MarkReques
 		&i.UpstreamRequestID,
 		&i.ErrorCode,
 		&i.ErrorMessage,
+		&i.InternalErrorDetail,
 		&i.StartedAt,
 		&i.CompletedAt,
 		&i.CreatedAt,
@@ -352,52 +443,74 @@ func (q *Queries) MarkRequestAttemptCanceled(ctx context.Context, arg MarkReques
 }
 
 const markRequestAttemptFailed = `-- name: MarkRequestAttemptFailed :one
-UPDATE request_attempts
-SET status = 'failed',
-    upstream_status_code = $1,
-    upstream_request_id = $2,
-    error_code = $3,
-    error_message = $4,
-    completed_at = $5
-WHERE id = $6
-RETURNING
-    id,
-    request_record_id,
-    attempt_index,
-    provider_id,
-    channel_id,
-    adapter_key,
-    upstream_model,
-    upstream_response_model,
-    status,
-    upstream_status_code,
-    upstream_request_id,
-    error_code,
-    error_message,
-    started_at,
-    completed_at,
-    created_at
+WITH updated AS (
+    UPDATE request_attempts
+        SET status = 'failed',
+            upstream_status_code = $1,
+            upstream_request_id = $2,
+            error_code = $3,
+            error_message = $4,
+            internal_error_detail = $5,
+            completed_at = $6
+        WHERE request_attempts.id = $7
+            AND request_attempts.status = 'running'
+        RETURNING request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_response_model, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at
+)
+SELECT id, request_record_id, attempt_index, provider_id, channel_id, adapter_key, upstream_model, upstream_response_model, status, upstream_status_code, upstream_request_id, error_code, error_message, internal_error_detail, started_at, completed_at, created_at
+FROM updated
+
+UNION ALL
+
+SELECT request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_response_model, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at
+FROM request_attempts
+WHERE request_attempts.id = $7
+  AND request_attempts.status = 'failed'
+  AND NOT EXISTS (SELECT 1 FROM updated)
 `
 
 type MarkRequestAttemptFailedParams struct {
-	UpstreamStatusCode pgtype.Int4
-	UpstreamRequestID  pgtype.Text
-	ErrorCode          pgtype.Text
-	ErrorMessage       pgtype.Text
-	CompletedAt        pgtype.Timestamptz
-	ID                 int64
+	UpstreamStatusCode  pgtype.Int4
+	UpstreamRequestID   pgtype.Text
+	ErrorCode           pgtype.Text
+	ErrorMessage        pgtype.Text
+	InternalErrorDetail pgtype.Text
+	CompletedAt         pgtype.Timestamptz
+	AttemptID           int64
 }
 
-func (q *Queries) MarkRequestAttemptFailed(ctx context.Context, arg MarkRequestAttemptFailedParams) (RequestAttempt, error) {
+type MarkRequestAttemptFailedRow struct {
+	ID                    int64
+	RequestRecordID       int64
+	AttemptIndex          int32
+	ProviderID            int64
+	ChannelID             int64
+	AdapterKey            string
+	UpstreamModel         string
+	UpstreamResponseModel pgtype.Text
+	Status                string
+	UpstreamStatusCode    pgtype.Int4
+	UpstreamRequestID     pgtype.Text
+	ErrorCode             pgtype.Text
+	ErrorMessage          pgtype.Text
+	InternalErrorDetail   pgtype.Text
+	StartedAt             pgtype.Timestamptz
+	CompletedAt           pgtype.Timestamptz
+	CreatedAt             pgtype.Timestamptz
+}
+
+// running 才能进入 failed。
+// 如果已经 failed，重复失败写入只返回第一次失败事实，不能覆盖 error/upstream metadata。
+func (q *Queries) MarkRequestAttemptFailed(ctx context.Context, arg MarkRequestAttemptFailedParams) (MarkRequestAttemptFailedRow, error) {
 	row := q.db.QueryRow(ctx, markRequestAttemptFailed,
 		arg.UpstreamStatusCode,
 		arg.UpstreamRequestID,
 		arg.ErrorCode,
 		arg.ErrorMessage,
+		arg.InternalErrorDetail,
 		arg.CompletedAt,
-		arg.ID,
+		arg.AttemptID,
 	)
-	var i RequestAttempt
+	var i MarkRequestAttemptFailedRow
 	err := row.Scan(
 		&i.ID,
 		&i.RequestRecordID,
@@ -412,6 +525,7 @@ func (q *Queries) MarkRequestAttemptFailed(ctx context.Context, arg MarkRequestA
 		&i.UpstreamRequestID,
 		&i.ErrorCode,
 		&i.ErrorMessage,
+		&i.InternalErrorDetail,
 		&i.StartedAt,
 		&i.CompletedAt,
 		&i.CreatedAt,
@@ -420,30 +534,27 @@ func (q *Queries) MarkRequestAttemptFailed(ctx context.Context, arg MarkRequestA
 }
 
 const markRequestAttemptSucceeded = `-- name: MarkRequestAttemptSucceeded :one
-UPDATE request_attempts
-SET status = 'succeeded',
-    upstream_response_model = $1,
-    upstream_status_code = $2,
-    upstream_request_id = $3,
-    completed_at = $4
-WHERE id = $5
-RETURNING
-    id,
-    request_record_id,
-    attempt_index,
-    provider_id,
-    channel_id,
-    adapter_key,
-    upstream_model,
-    upstream_response_model,
-    status,
-    upstream_status_code,
-    upstream_request_id,
-    error_code,
-    error_message,
-    started_at,
-    completed_at,
-    created_at
+WITH updated AS (
+    UPDATE request_attempts
+        SET status = 'succeeded',
+            upstream_response_model = $1,
+            upstream_status_code = $2,
+            upstream_request_id = $3,
+            completed_at = $4
+        WHERE request_attempts.id = $5
+            AND request_attempts.status = 'running'
+        RETURNING request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_response_model, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at
+)
+SELECT id, request_record_id, attempt_index, provider_id, channel_id, adapter_key, upstream_model, upstream_response_model, status, upstream_status_code, upstream_request_id, error_code, error_message, internal_error_detail, started_at, completed_at, created_at
+FROM updated
+
+UNION ALL
+
+SELECT request_attempts.id, request_attempts.request_record_id, request_attempts.attempt_index, request_attempts.provider_id, request_attempts.channel_id, request_attempts.adapter_key, request_attempts.upstream_model, request_attempts.upstream_response_model, request_attempts.status, request_attempts.upstream_status_code, request_attempts.upstream_request_id, request_attempts.error_code, request_attempts.error_message, request_attempts.internal_error_detail, request_attempts.started_at, request_attempts.completed_at, request_attempts.created_at
+FROM request_attempts
+WHERE request_attempts.id = $5
+  AND request_attempts.status = 'succeeded'
+  AND NOT EXISTS (SELECT 1 FROM updated)
 `
 
 type MarkRequestAttemptSucceededParams struct {
@@ -451,18 +562,40 @@ type MarkRequestAttemptSucceededParams struct {
 	UpstreamStatusCode    pgtype.Int4
 	UpstreamRequestID     pgtype.Text
 	CompletedAt           pgtype.Timestamptz
-	ID                    int64
+	AttemptID             int64
 }
 
-func (q *Queries) MarkRequestAttemptSucceeded(ctx context.Context, arg MarkRequestAttemptSucceededParams) (RequestAttempt, error) {
+type MarkRequestAttemptSucceededRow struct {
+	ID                    int64
+	RequestRecordID       int64
+	AttemptIndex          int32
+	ProviderID            int64
+	ChannelID             int64
+	AdapterKey            string
+	UpstreamModel         string
+	UpstreamResponseModel pgtype.Text
+	Status                string
+	UpstreamStatusCode    pgtype.Int4
+	UpstreamRequestID     pgtype.Text
+	ErrorCode             pgtype.Text
+	ErrorMessage          pgtype.Text
+	InternalErrorDetail   pgtype.Text
+	StartedAt             pgtype.Timestamptz
+	CompletedAt           pgtype.Timestamptz
+	CreatedAt             pgtype.Timestamptz
+}
+
+// running 才能进入 succeeded。
+// 如果已经 succeeded，重复成功写入只返回第一次成功事实，不能覆盖 upstream response metadata。
+func (q *Queries) MarkRequestAttemptSucceeded(ctx context.Context, arg MarkRequestAttemptSucceededParams) (MarkRequestAttemptSucceededRow, error) {
 	row := q.db.QueryRow(ctx, markRequestAttemptSucceeded,
 		arg.UpstreamResponseModel,
 		arg.UpstreamStatusCode,
 		arg.UpstreamRequestID,
 		arg.CompletedAt,
-		arg.ID,
+		arg.AttemptID,
 	)
-	var i RequestAttempt
+	var i MarkRequestAttemptSucceededRow
 	err := row.Scan(
 		&i.ID,
 		&i.RequestRecordID,
@@ -477,6 +610,7 @@ func (q *Queries) MarkRequestAttemptSucceeded(ctx context.Context, arg MarkReque
 		&i.UpstreamRequestID,
 		&i.ErrorCode,
 		&i.ErrorMessage,
+		&i.InternalErrorDetail,
 		&i.StartedAt,
 		&i.CompletedAt,
 		&i.CreatedAt,
@@ -485,48 +619,70 @@ func (q *Queries) MarkRequestAttemptSucceeded(ctx context.Context, arg MarkReque
 }
 
 const markRequestCanceled = `-- name: MarkRequestCanceled :one
-UPDATE request_records
-SET status = 'canceled',
-    error_code = $1,
-    error_message = $2,
-    completed_at = $3,
-    updated_at = now()
-WHERE id = $4
-RETURNING
-    id,
-    request_id,
-    user_id,
-    project_id,
-    api_key_id,
-    requested_model_id,
-    response_model_id,
-    stream,
-    status,
-    final_provider_id,
-    final_channel_id,
-    error_code,
-    error_message,
-    started_at,
-    completed_at,
-    created_at,
-    updated_at
+WITH updated AS (
+    UPDATE request_records
+        SET status = 'canceled',
+            error_code = $1,
+            error_message = $2,
+            internal_error_detail = $3,
+            completed_at = $4,
+            updated_at = now()
+        WHERE request_records.id = $5
+            AND request_records.status = 'running'
+        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.project_id, request_records.api_key_id, request_records.requested_model_id, request_records.response_model_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
+)
+SELECT id, request_id, user_id, project_id, api_key_id, requested_model_id, response_model_id, stream, status, final_provider_id, final_channel_id, error_code, error_message, internal_error_detail, started_at, completed_at, created_at, updated_at
+FROM updated
+
+UNION ALL
+
+SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.project_id, request_records.api_key_id, request_records.requested_model_id, request_records.response_model_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
+FROM request_records
+WHERE request_records.id = $5
+  AND request_records.status = 'canceled'
+  AND NOT EXISTS (SELECT 1 FROM updated)
 `
 
 type MarkRequestCanceledParams struct {
-	ErrorCode    pgtype.Text
-	ErrorMessage pgtype.Text
-	CompletedAt  pgtype.Timestamptz
-	ID           int64
+	ErrorCode           pgtype.Text
+	ErrorMessage        pgtype.Text
+	InternalErrorDetail pgtype.Text
+	CompletedAt         pgtype.Timestamptz
+	RequestRecordID     int64
 }
 
-func (q *Queries) MarkRequestCanceled(ctx context.Context, arg MarkRequestCanceledParams) (RequestRecord, error) {
+type MarkRequestCanceledRow struct {
+	ID                  int64
+	RequestID           string
+	UserID              int64
+	ProjectID           int64
+	ApiKeyID            int64
+	RequestedModelID    string
+	ResponseModelID     pgtype.Text
+	Stream              bool
+	Status              string
+	FinalProviderID     pgtype.Int8
+	FinalChannelID      pgtype.Int8
+	ErrorCode           pgtype.Text
+	ErrorMessage        pgtype.Text
+	InternalErrorDetail pgtype.Text
+	StartedAt           pgtype.Timestamptz
+	CompletedAt         pgtype.Timestamptz
+	CreatedAt           pgtype.Timestamptz
+	UpdatedAt           pgtype.Timestamptz
+}
+
+// running 才能进入 canceled。
+// 如果已经 canceled，重复取消写入只返回第一次取消事实，不能覆盖 error_code/error_message/internal_error_detail/completed_at。
+func (q *Queries) MarkRequestCanceled(ctx context.Context, arg MarkRequestCanceledParams) (MarkRequestCanceledRow, error) {
 	row := q.db.QueryRow(ctx, markRequestCanceled,
 		arg.ErrorCode,
 		arg.ErrorMessage,
+		arg.InternalErrorDetail,
 		arg.CompletedAt,
-		arg.ID,
+		arg.RequestRecordID,
 	)
-	var i RequestRecord
+	var i MarkRequestCanceledRow
 	err := row.Scan(
 		&i.ID,
 		&i.RequestID,
@@ -541,6 +697,7 @@ func (q *Queries) MarkRequestCanceled(ctx context.Context, arg MarkRequestCancel
 		&i.FinalChannelID,
 		&i.ErrorCode,
 		&i.ErrorMessage,
+		&i.InternalErrorDetail,
 		&i.StartedAt,
 		&i.CompletedAt,
 		&i.CreatedAt,
@@ -550,48 +707,70 @@ func (q *Queries) MarkRequestCanceled(ctx context.Context, arg MarkRequestCancel
 }
 
 const markRequestFailed = `-- name: MarkRequestFailed :one
-UPDATE request_records
-SET status = 'failed',
-    error_code = $1,
-    error_message = $2,
-    completed_at = $3,
-    updated_at = now()
-WHERE id = $4
-RETURNING
-    id,
-    request_id,
-    user_id,
-    project_id,
-    api_key_id,
-    requested_model_id,
-    response_model_id,
-    stream,
-    status,
-    final_provider_id,
-    final_channel_id,
-    error_code,
-    error_message,
-    started_at,
-    completed_at,
-    created_at,
-    updated_at
+WITH updated AS (
+    UPDATE request_records
+        SET status = 'failed',
+            error_code = $1,
+            error_message = $2,
+            internal_error_detail = $3,
+            completed_at = $4,
+            updated_at = now()
+        WHERE request_records.id = $5
+            AND request_records.status = 'running'
+        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.project_id, request_records.api_key_id, request_records.requested_model_id, request_records.response_model_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
+)
+SELECT id, request_id, user_id, project_id, api_key_id, requested_model_id, response_model_id, stream, status, final_provider_id, final_channel_id, error_code, error_message, internal_error_detail, started_at, completed_at, created_at, updated_at
+FROM updated
+
+UNION ALL
+
+SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.project_id, request_records.api_key_id, request_records.requested_model_id, request_records.response_model_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
+FROM request_records
+WHERE request_records.id = $5
+  AND request_records.status = 'failed'
+  AND NOT EXISTS (SELECT 1 FROM updated)
 `
 
 type MarkRequestFailedParams struct {
-	ErrorCode    pgtype.Text
-	ErrorMessage pgtype.Text
-	CompletedAt  pgtype.Timestamptz
-	ID           int64
+	ErrorCode           pgtype.Text
+	ErrorMessage        pgtype.Text
+	InternalErrorDetail pgtype.Text
+	CompletedAt         pgtype.Timestamptz
+	RequestRecordID     int64
 }
 
-func (q *Queries) MarkRequestFailed(ctx context.Context, arg MarkRequestFailedParams) (RequestRecord, error) {
+type MarkRequestFailedRow struct {
+	ID                  int64
+	RequestID           string
+	UserID              int64
+	ProjectID           int64
+	ApiKeyID            int64
+	RequestedModelID    string
+	ResponseModelID     pgtype.Text
+	Stream              bool
+	Status              string
+	FinalProviderID     pgtype.Int8
+	FinalChannelID      pgtype.Int8
+	ErrorCode           pgtype.Text
+	ErrorMessage        pgtype.Text
+	InternalErrorDetail pgtype.Text
+	StartedAt           pgtype.Timestamptz
+	CompletedAt         pgtype.Timestamptz
+	CreatedAt           pgtype.Timestamptz
+	UpdatedAt           pgtype.Timestamptz
+}
+
+// running 才能进入 failed。
+// 如果已经 failed，重复失败写入只返回第一次失败事实，不能覆盖 error_code/error_message/internal_error_detail/completed_at。
+func (q *Queries) MarkRequestFailed(ctx context.Context, arg MarkRequestFailedParams) (MarkRequestFailedRow, error) {
 	row := q.db.QueryRow(ctx, markRequestFailed,
 		arg.ErrorCode,
 		arg.ErrorMessage,
+		arg.InternalErrorDetail,
 		arg.CompletedAt,
-		arg.ID,
+		arg.RequestRecordID,
 	)
-	var i RequestRecord
+	var i MarkRequestFailedRow
 	err := row.Scan(
 		&i.ID,
 		&i.RequestID,
@@ -606,6 +785,7 @@ func (q *Queries) MarkRequestFailed(ctx context.Context, arg MarkRequestFailedPa
 		&i.FinalChannelID,
 		&i.ErrorCode,
 		&i.ErrorMessage,
+		&i.InternalErrorDetail,
 		&i.StartedAt,
 		&i.CompletedAt,
 		&i.CreatedAt,
@@ -615,34 +795,53 @@ func (q *Queries) MarkRequestFailed(ctx context.Context, arg MarkRequestFailedPa
 }
 
 const markRequestRunning = `-- name: MarkRequestRunning :one
-UPDATE request_records
-SET status = 'running',
-    updated_at = now()
-WHERE id = $1
-RETURNING
-    id,
-    request_id,
-    user_id,
-    project_id,
-    api_key_id,
-    requested_model_id,
-    response_model_id,
-    stream,
-    status,
-    final_provider_id,
-    final_channel_id,
-    error_code,
-    error_message,
-    started_at,
-    completed_at,
-    created_at,
-    updated_at
+WITH updated AS (
+    UPDATE request_records
+        SET status = 'running',
+            updated_at = now()
+        WHERE request_records.id = $1
+            AND request_records.status = 'pending'
+        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.project_id, request_records.api_key_id, request_records.requested_model_id, request_records.response_model_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
+)
+SELECT id, request_id, user_id, project_id, api_key_id, requested_model_id, response_model_id, stream, status, final_provider_id, final_channel_id, error_code, error_message, internal_error_detail, started_at, completed_at, created_at, updated_at
+FROM updated
+
+UNION ALL
+
+SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.project_id, request_records.api_key_id, request_records.requested_model_id, request_records.response_model_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
+FROM request_records
+WHERE request_records.id = $1
+  AND request_records.status = 'running'
+  AND NOT EXISTS (SELECT 1 FROM updated)
 `
 
-// TODO(阶段7/production): [GAP-7-003] request/attempt 状态更新目前没有状态机守卫，补偿任务或并发重试可能覆盖 succeeded/canceled 等终态；引入异步补偿或重复 settlement 前；为 SQL 增加合法前置状态条件并让终态更新具备幂等语义。
-func (q *Queries) MarkRequestRunning(ctx context.Context, id int64) (RequestRecord, error) {
-	row := q.db.QueryRow(ctx, markRequestRunning, id)
-	var i RequestRecord
+type MarkRequestRunningRow struct {
+	ID                  int64
+	RequestID           string
+	UserID              int64
+	ProjectID           int64
+	ApiKeyID            int64
+	RequestedModelID    string
+	ResponseModelID     pgtype.Text
+	Stream              bool
+	Status              string
+	FinalProviderID     pgtype.Int8
+	FinalChannelID      pgtype.Int8
+	ErrorCode           pgtype.Text
+	ErrorMessage        pgtype.Text
+	InternalErrorDetail pgtype.Text
+	StartedAt           pgtype.Timestamptz
+	CompletedAt         pgtype.Timestamptz
+	CreatedAt           pgtype.Timestamptz
+	UpdatedAt           pgtype.Timestamptz
+}
+
+// request 状态机由 SQL 原子守卫：pending 才能进入 running。
+// 如果已经是 running，说明调用方重复推进同一阶段，直接返回原事实。
+// succeeded/failed/canceled 是终态，不会被重新打开。
+func (q *Queries) MarkRequestRunning(ctx context.Context, requestRecordID int64) (MarkRequestRunningRow, error) {
+	row := q.db.QueryRow(ctx, markRequestRunning, requestRecordID)
+	var i MarkRequestRunningRow
 	err := row.Scan(
 		&i.ID,
 		&i.RequestID,
@@ -657,6 +856,7 @@ func (q *Queries) MarkRequestRunning(ctx context.Context, id int64) (RequestReco
 		&i.FinalChannelID,
 		&i.ErrorCode,
 		&i.ErrorMessage,
+		&i.InternalErrorDetail,
 		&i.StartedAt,
 		&i.CompletedAt,
 		&i.CreatedAt,
@@ -666,32 +866,28 @@ func (q *Queries) MarkRequestRunning(ctx context.Context, id int64) (RequestReco
 }
 
 const markRequestSucceeded = `-- name: MarkRequestSucceeded :one
-UPDATE request_records
-SET status = 'succeeded',
-    response_model_id = $1,
-    final_provider_id = $2,
-    final_channel_id = $3,
-    completed_at = $4,
-    updated_at = now()
-WHERE id = $5
-RETURNING
-    id,
-    request_id,
-    user_id,
-    project_id,
-    api_key_id,
-    requested_model_id,
-    response_model_id,
-    stream,
-    status,
-    final_provider_id,
-    final_channel_id,
-    error_code,
-    error_message,
-    started_at,
-    completed_at,
-    created_at,
-    updated_at
+WITH updated AS (
+    UPDATE request_records
+        SET status = 'succeeded',
+            response_model_id = $1,
+            final_provider_id = $2,
+            final_channel_id = $3,
+            completed_at = $4,
+            updated_at = now()
+        WHERE request_records.id = $5
+            AND request_records.status = 'running'
+        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.project_id, request_records.api_key_id, request_records.requested_model_id, request_records.response_model_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
+)
+SELECT id, request_id, user_id, project_id, api_key_id, requested_model_id, response_model_id, stream, status, final_provider_id, final_channel_id, error_code, error_message, internal_error_detail, started_at, completed_at, created_at, updated_at
+FROM updated
+
+UNION ALL
+
+SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.project_id, request_records.api_key_id, request_records.requested_model_id, request_records.response_model_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at
+FROM request_records
+WHERE request_records.id = $5
+  AND request_records.status = 'succeeded'
+  AND NOT EXISTS (SELECT 1 FROM updated)
 `
 
 type MarkRequestSucceededParams struct {
@@ -699,18 +895,41 @@ type MarkRequestSucceededParams struct {
 	FinalProviderID pgtype.Int8
 	FinalChannelID  pgtype.Int8
 	CompletedAt     pgtype.Timestamptz
-	ID              int64
+	RequestRecordID int64
 }
 
-func (q *Queries) MarkRequestSucceeded(ctx context.Context, arg MarkRequestSucceededParams) (RequestRecord, error) {
+type MarkRequestSucceededRow struct {
+	ID                  int64
+	RequestID           string
+	UserID              int64
+	ProjectID           int64
+	ApiKeyID            int64
+	RequestedModelID    string
+	ResponseModelID     pgtype.Text
+	Stream              bool
+	Status              string
+	FinalProviderID     pgtype.Int8
+	FinalChannelID      pgtype.Int8
+	ErrorCode           pgtype.Text
+	ErrorMessage        pgtype.Text
+	InternalErrorDetail pgtype.Text
+	StartedAt           pgtype.Timestamptz
+	CompletedAt         pgtype.Timestamptz
+	CreatedAt           pgtype.Timestamptz
+	UpdatedAt           pgtype.Timestamptz
+}
+
+// running 才能进入 succeeded。
+// 如果已经 succeeded，重复 settlement 只能读回第一次成功事实，不能覆盖 response_model/provider/channel/completed_at。
+func (q *Queries) MarkRequestSucceeded(ctx context.Context, arg MarkRequestSucceededParams) (MarkRequestSucceededRow, error) {
 	row := q.db.QueryRow(ctx, markRequestSucceeded,
 		arg.ResponseModelID,
 		arg.FinalProviderID,
 		arg.FinalChannelID,
 		arg.CompletedAt,
-		arg.ID,
+		arg.RequestRecordID,
 	)
-	var i RequestRecord
+	var i MarkRequestSucceededRow
 	err := row.Scan(
 		&i.ID,
 		&i.RequestID,
@@ -725,6 +944,7 @@ func (q *Queries) MarkRequestSucceeded(ctx context.Context, arg MarkRequestSucce
 		&i.FinalChannelID,
 		&i.ErrorCode,
 		&i.ErrorMessage,
+		&i.InternalErrorDetail,
 		&i.StartedAt,
 		&i.CompletedAt,
 		&i.CreatedAt,

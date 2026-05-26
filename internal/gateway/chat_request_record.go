@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/ThankCat/unio-api/internal/auth"
@@ -11,6 +12,8 @@ import (
 	"github.com/ThankCat/unio-api/internal/requestlog"
 	"github.com/ThankCat/unio-api/internal/routing"
 )
+
+const maxRequestLogInternalErrorDetailBytes = 2048
 
 // createRequestRecord 创建用户可见请求记录，并立即推进到 running 状态。
 // request_records.request_id 由服务端生成，用作数据库唯一事实 ID；
@@ -106,33 +109,28 @@ func routingFailureCode(err error) string {
 // markRequestRecordFailed 把 request record 标记为失败。
 // 失败状态写入是审计动作，调用方仍然返回原始业务错误，避免状态写入细节覆盖根因。
 func (s *ChatCompletionService) markRequestRecordFailed(ctx context.Context, requestRecord requestlog.RequestRecord, code string, err error) {
-	message := ""
-	if err != nil {
-		message = err.Error()
-	}
+	errorCode, safeMessage, internalDetail := requestLogErrorFacts(code, err)
 
-	// TODO(阶段7/production): [GAP-7-005] request_records.error_message 当前保存原始内部错误，未来后台暴露请求日志时可能泄漏上游路径、配置细节或敏感上下文；开放请求日志查询前；区分 safe_user_message、internal_error_detail，并对后台展示做脱敏。
 	_, _ = s.requestLog.MarkRequestFailed(ctx, requestlog.MarkRequestFailedParams{
-		ID:           requestRecord.ID,
-		ErrorCode:    failureCodeOrFallback(err, code),
-		ErrorMessage: message,
-		CompletedAt:  time.Now(),
+		ID:                  requestRecord.ID,
+		ErrorCode:           errorCode,
+		ErrorMessage:        safeMessage,
+		InternalErrorDetail: internalDetail,
+		CompletedAt:         time.Now(),
 	})
 }
 
 // markAttemptRecordFailed 把一次上游尝试标记为失败。
 // 失败状态写入是审计动作，调用方仍然返回原始业务错误，避免状态写入细节覆盖根因。
 func (s *ChatCompletionService) markAttemptRecordFailed(ctx context.Context, attempt requestlog.AttemptRecord, code string, err error) {
-	message := ""
-	if err != nil {
-		message = err.Error()
-	}
+	errorCode, safeMessage, internalDetail := requestLogErrorFacts(code, err)
 
 	_, _ = s.requestLog.MarkAttemptFailed(ctx, requestlog.MarkAttemptFailedParams{
-		ID:           attempt.ID,
-		ErrorCode:    failureCodeOrFallback(err, code),
-		ErrorMessage: message,
-		CompletedAt:  time.Now(),
+		ID:                  attempt.ID,
+		ErrorCode:           errorCode,
+		ErrorMessage:        safeMessage,
+		InternalErrorDetail: internalDetail,
+		CompletedAt:         time.Now(),
 	})
 }
 
@@ -146,10 +144,7 @@ func failureCodeOrFallback(err error, fallback string) string {
 
 // markRequestCanceled 把 request record 和当前 attempt 标记为客户端取消。
 func (s *ChatCompletionService) markRequestCanceled(ctx context.Context, requestRecord requestlog.RequestRecord, attemptRecord requestlog.AttemptRecord, err error) {
-	message := ""
-	if err != nil {
-		message = err.Error()
-	}
+	errorCode, safeMessage, internalDetail := requestLogErrorFacts("client_canceled", err)
 
 	// 账务 release 或 risk_exposure 由调用方在进入 canceled 状态前处理；这里仅写请求审计状态。
 	// 客户端断开时原请求 ctx 通常已经取消；这里脱离请求取消，
@@ -158,16 +153,75 @@ func (s *ChatCompletionService) markRequestCanceled(ctx context.Context, request
 	defer cancel()
 
 	_, _ = s.requestLog.MarkAttemptCanceled(auditCtx, requestlog.MarkAttemptCanceledParams{
-		ID:           attemptRecord.ID,
-		ErrorCode:    "client_canceled",
-		ErrorMessage: message,
-		CompletedAt:  time.Now(),
+		ID:                  attemptRecord.ID,
+		ErrorCode:           errorCode,
+		ErrorMessage:        safeMessage,
+		InternalErrorDetail: internalDetail,
+		CompletedAt:         time.Now(),
 	})
 
 	_, _ = s.requestLog.MarkRequestCanceled(auditCtx, requestlog.MarkRequestCanceledParams{
-		ID:           requestRecord.ID,
-		ErrorCode:    "client_canceled",
-		ErrorMessage: message,
-		CompletedAt:  time.Now(),
+		ID:                  requestRecord.ID,
+		ErrorCode:           errorCode,
+		ErrorMessage:        safeMessage,
+		InternalErrorDetail: internalDetail,
+		CompletedAt:         time.Now(),
 	})
+}
+
+// requestLogErrorFacts 生成 request log 的安全错误摘要和内部诊断详情。
+// error_message 只保存可展示文案；internal_error_detail 才保存截断后的内部错误文本。
+func requestLogErrorFacts(fallbackCode string, err error) (errorCode string, safeMessage string, internalDetail string) {
+	errorCode = failureCodeOrFallback(err, fallbackCode)
+	return errorCode, safeRequestLogErrorMessage(errorCode), internalErrorDetail(err)
+}
+
+// safeRequestLogErrorMessage 将内部错误码映射成可展示的安全文案。
+// 这里不能使用 err.Error()，避免把 SQL、上游响应、路径或配置细节暴露给后台/console 日志展示。
+func safeRequestLogErrorMessage(code string) string {
+	switch code {
+	case "client_canceled":
+		return "Request was canceled by the client."
+	case "model_not_found", string(failure.CodeRoutingModelNotFound):
+		return "The requested model was not found."
+	case "model_not_available", "no_available_channel", string(failure.CodeRoutingModelNotAvailable), string(failure.CodeRoutingNoAvailableChannel):
+		return "The requested model is temporarily unavailable."
+	case "chat_authorization_failed", string(failure.CodeGatewayChatAuthorizationFailed):
+		return "Request authorization failed."
+	case "chat_authorization_release_failed":
+		return "Request billing cleanup failed."
+	case "chat_settlement_failed", "stream_chat_settlement_failed", string(failure.CodeGatewayChatSettlementFailed):
+		return "Request settlement failed."
+	case string(failure.CodeLedgerInsufficientBalance):
+		return "Insufficient balance."
+	case string(failure.CodeGatewayStreamUsageMissing):
+		return "Stream usage is missing."
+	}
+
+	switch failure.Code(code).Category() {
+	case failure.CategoryAdapter:
+		return "Upstream provider request failed."
+	case failure.CategoryRouting:
+		return "Request routing failed."
+	case failure.CategoryLedger, failure.CategoryBilling:
+		return "Request billing failed."
+	case failure.CategoryGateway:
+		return "Gateway request failed."
+	default:
+		return "Request failed."
+	}
+}
+
+// internalErrorDetail 返回供内部排查使用的错误详情，并限制长度避免请求日志行无限膨胀。
+func internalErrorDetail(err error) string {
+	if err == nil {
+		return ""
+	}
+
+	detail := strings.TrimSpace(err.Error())
+	if len(detail) <= maxRequestLogInternalErrorDetailBytes {
+		return detail
+	}
+
+	return detail[:maxRequestLogInternalErrorDetailBytes] + "...[truncated]"
 }

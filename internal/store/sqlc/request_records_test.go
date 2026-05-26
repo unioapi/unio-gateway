@@ -9,6 +9,7 @@ import (
 
 	"github.com/ThankCat/unio-api/internal/apikey"
 	"github.com/ThankCat/unio-api/internal/store/sqlc"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -71,20 +72,21 @@ func createRequestRecordForTest(t *testing.T, ctx context.Context, queries *sqlc
 	t.Helper()
 
 	record, err := queries.CreateRequestRecord(ctx, sqlc.CreateRequestRecordParams{
-		RequestID:        requestID,
-		UserID:           identity.user.ID,
-		ProjectID:        identity.project.ID,
-		ApiKeyID:         identity.apiKey.ID,
-		RequestedModelID: "deepseek-v4-pro",
-		ResponseModelID:  pgtype.Text{Valid: false},
-		Stream:           false,
-		Status:           "pending",
-		FinalProviderID:  pgtype.Int8{Valid: false},
-		FinalChannelID:   pgtype.Int8{Valid: false},
-		ErrorCode:        pgtype.Text{Valid: false},
-		ErrorMessage:     pgtype.Text{Valid: false},
-		StartedAt:        pgtype.Timestamptz{Time: time.Now(), Valid: true},
-		CompletedAt:      pgtype.Timestamptz{Valid: false},
+		RequestID:           requestID,
+		UserID:              identity.user.ID,
+		ProjectID:           identity.project.ID,
+		ApiKeyID:            identity.apiKey.ID,
+		RequestedModelID:    "deepseek-v4-pro",
+		ResponseModelID:     pgtype.Text{Valid: false},
+		Stream:              false,
+		Status:              "pending",
+		FinalProviderID:     pgtype.Int8{Valid: false},
+		FinalChannelID:      pgtype.Int8{Valid: false},
+		ErrorCode:           pgtype.Text{Valid: false},
+		ErrorMessage:        pgtype.Text{Valid: false},
+		InternalErrorDetail: pgtype.Text{Valid: false},
+		StartedAt:           pgtype.Timestamptz{Time: time.Now(), Valid: true},
+		CompletedAt:         pgtype.Timestamptz{Valid: false},
 	})
 	if err != nil {
 		t.Fatalf("create request record: %v", err)
@@ -130,7 +132,7 @@ func TestRequestRecordLifecycle(t *testing.T) {
 		FinalProviderID: pgtype.Int8{Int64: providerID, Valid: true},
 		FinalChannelID:  pgtype.Int8{Int64: channelID, Valid: true},
 		CompletedAt:     pgtype.Timestamptz{Time: completedAt, Valid: true},
-		ID:              record.ID,
+		RequestRecordID: record.ID,
 	})
 	if err != nil {
 		t.Fatalf("mark request succeeded: %v", err)
@@ -143,6 +145,103 @@ func TestRequestRecordLifecycle(t *testing.T) {
 	}
 	if succeeded.FinalProviderID.Int64 != providerID || succeeded.FinalChannelID.Int64 != channelID {
 		t.Fatalf("expected final provider/channel %d/%d, got %d/%d", providerID, channelID, succeeded.FinalProviderID.Int64, succeeded.FinalChannelID.Int64)
+	}
+}
+
+func TestRequestRecordFailedStoresSafeAndInternalError(t *testing.T) {
+	ctx, _, queries, cleanup := newModelChannelTestTx(t)
+	defer cleanup()
+
+	identity := createRequestRecordIdentity(t, ctx, queries)
+	record := createRequestRecordForTest(t, ctx, queries, identity, fmt.Sprintf("request-failed-detail-%d", time.Now().UnixNano()))
+	if _, err := queries.MarkRequestRunning(ctx, record.ID); err != nil {
+		t.Fatalf("mark request running: %v", err)
+	}
+
+	failed, err := queries.MarkRequestFailed(ctx, sqlc.MarkRequestFailedParams{
+		ErrorCode:           pgtype.Text{String: "adapter_error", Valid: true},
+		ErrorMessage:        pgtype.Text{String: "Upstream provider request failed.", Valid: true},
+		InternalErrorDetail: pgtype.Text{String: "dial tcp 127.0.0.1: upstream refused", Valid: true},
+		CompletedAt:         pgtype.Timestamptz{Time: time.Now(), Valid: true},
+		RequestRecordID:     record.ID,
+	})
+	if err != nil {
+		t.Fatalf("mark request failed: %v", err)
+	}
+	if failed.ErrorMessage.String != "Upstream provider request failed." {
+		t.Fatalf("expected safe error message, got %q", failed.ErrorMessage.String)
+	}
+	if failed.InternalErrorDetail.String != "dial tcp 127.0.0.1: upstream refused" {
+		t.Fatalf("expected internal error detail, got %q", failed.InternalErrorDetail.String)
+	}
+}
+
+func TestRequestRecordStateMachineKeepsTerminalFacts(t *testing.T) {
+	ctx, tx, queries, cleanup := newModelChannelTestTx(t)
+	defer cleanup()
+
+	identity := createRequestRecordIdentity(t, ctx, queries)
+	suffix := time.Now().UnixNano()
+	providerID := insertProvider(t, ctx, tx, fmt.Sprintf("request-state-provider-%d", suffix), "openai", "enabled")
+	channelID := insertChannel(t, ctx, tx, providerID, fmt.Sprintf("request-state-channel-%d", suffix), "enabled", 10, nil)
+	otherProviderID := insertProvider(t, ctx, tx, fmt.Sprintf("request-state-provider-other-%d", suffix), "openai", "enabled")
+	otherChannelID := insertChannel(t, ctx, tx, otherProviderID, fmt.Sprintf("request-state-channel-other-%d", suffix), "enabled", 20, nil)
+
+	record := createRequestRecordForTest(t, ctx, queries, identity, fmt.Sprintf("request-state-%d", suffix))
+	if _, err := queries.MarkRequestRunning(ctx, record.ID); err != nil {
+		t.Fatalf("mark request running: %v", err)
+	}
+
+	firstSucceeded, err := queries.MarkRequestSucceeded(ctx, sqlc.MarkRequestSucceededParams{
+		ResponseModelID: pgtype.Text{String: "deepseek-v4-pro", Valid: true},
+		FinalProviderID: pgtype.Int8{Int64: providerID, Valid: true},
+		FinalChannelID:  pgtype.Int8{Int64: channelID, Valid: true},
+		CompletedAt:     pgtype.Timestamptz{Time: time.Now(), Valid: true},
+		RequestRecordID: record.ID,
+	})
+	if err != nil {
+		t.Fatalf("mark request succeeded: %v", err)
+	}
+
+	repeatedSucceeded, err := queries.MarkRequestSucceeded(ctx, sqlc.MarkRequestSucceededParams{
+		ResponseModelID: pgtype.Text{String: "should-not-overwrite", Valid: true},
+		FinalProviderID: pgtype.Int8{Int64: otherProviderID, Valid: true},
+		FinalChannelID:  pgtype.Int8{Int64: otherChannelID, Valid: true},
+		CompletedAt:     pgtype.Timestamptz{Time: time.Now().Add(time.Hour), Valid: true},
+		RequestRecordID: record.ID,
+	})
+	if err != nil {
+		t.Fatalf("repeat mark request succeeded: %v", err)
+	}
+	if repeatedSucceeded.ResponseModelID.String != firstSucceeded.ResponseModelID.String {
+		t.Fatalf("expected repeated succeeded to keep response model %q, got %q", firstSucceeded.ResponseModelID.String, repeatedSucceeded.ResponseModelID.String)
+	}
+	if repeatedSucceeded.FinalProviderID.Int64 != providerID || repeatedSucceeded.FinalChannelID.Int64 != channelID {
+		t.Fatalf("expected repeated succeeded to keep provider/channel %d/%d, got %d/%d", providerID, channelID, repeatedSucceeded.FinalProviderID.Int64, repeatedSucceeded.FinalChannelID.Int64)
+	}
+
+	_, err = queries.MarkRequestFailed(ctx, sqlc.MarkRequestFailedParams{
+		ErrorCode:       pgtype.Text{String: "should_not_overwrite", Valid: true},
+		ErrorMessage:    pgtype.Text{String: "should not overwrite", Valid: true},
+		CompletedAt:     pgtype.Timestamptz{Time: time.Now(), Valid: true},
+		RequestRecordID: record.ID,
+	})
+	if !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("expected succeeded request cannot become failed, got %v", err)
+	}
+
+	_, err = queries.MarkRequestCanceled(ctx, sqlc.MarkRequestCanceledParams{
+		ErrorCode:       pgtype.Text{String: "should_not_overwrite", Valid: true},
+		ErrorMessage:    pgtype.Text{String: "should not overwrite", Valid: true},
+		CompletedAt:     pgtype.Timestamptz{Time: time.Now(), Valid: true},
+		RequestRecordID: record.ID,
+	})
+	if !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("expected succeeded request cannot become canceled, got %v", err)
+	}
+
+	if _, err = queries.MarkRequestRunning(ctx, record.ID); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("expected succeeded request cannot become running, got %v", err)
 	}
 }
 
@@ -235,7 +334,7 @@ func TestRequestAttemptsOrderAndUniqueness(t *testing.T) {
 		UpstreamStatusCode:    pgtype.Int4{Int32: 200, Valid: true},
 		UpstreamRequestID:     pgtype.Text{String: "upstream-request-id", Valid: true},
 		CompletedAt:           completedAt,
-		ID:                    firstAttempt.ID,
+		AttemptID:             firstAttempt.ID,
 	})
 	if err != nil {
 		t.Fatalf("mark first attempt succeeded: %v", err)
@@ -248,18 +347,22 @@ func TestRequestAttemptsOrderAndUniqueness(t *testing.T) {
 	}
 
 	failed, err := queries.MarkRequestAttemptFailed(ctx, sqlc.MarkRequestAttemptFailedParams{
-		UpstreamStatusCode: pgtype.Int4{Int32: 502, Valid: true},
-		UpstreamRequestID:  pgtype.Text{String: "failed-upstream-request-id", Valid: true},
-		ErrorCode:          pgtype.Text{String: "upstream_bad_gateway", Valid: true},
-		ErrorMessage:       pgtype.Text{String: "upstream bad gateway", Valid: true},
-		CompletedAt:        completedAt,
-		ID:                 secondAttempt.ID,
+		UpstreamStatusCode:  pgtype.Int4{Int32: 502, Valid: true},
+		UpstreamRequestID:   pgtype.Text{String: "failed-upstream-request-id", Valid: true},
+		ErrorCode:           pgtype.Text{String: "upstream_bad_gateway", Valid: true},
+		ErrorMessage:        pgtype.Text{String: "upstream bad gateway", Valid: true},
+		InternalErrorDetail: pgtype.Text{String: "provider returned 502 bad gateway", Valid: true},
+		CompletedAt:         completedAt,
+		AttemptID:           secondAttempt.ID,
 	})
 	if err != nil {
 		t.Fatalf("mark second attempt failed: %v", err)
 	}
 	if failed.Status != "failed" || failed.UpstreamStatusCode.Int32 != 502 {
 		t.Fatalf("expected failed attempt with upstream status 502, got status=%q status_code=%d", failed.Status, failed.UpstreamStatusCode.Int32)
+	}
+	if failed.InternalErrorDetail.String != "provider returned 502 bad gateway" {
+		t.Fatalf("expected internal error detail, got %q", failed.InternalErrorDetail.String)
 	}
 
 	attempts, err := queries.ListRequestAttemptsByRequest(ctx, record.ID)
@@ -294,5 +397,89 @@ func TestRequestAttemptsOrderAndUniqueness(t *testing.T) {
 	}
 	if !isUniqueViolation(err) {
 		t.Fatalf("expected unique violation, got %v", err)
+	}
+}
+
+func TestRequestAttemptStateMachineKeepsTerminalFacts(t *testing.T) {
+	ctx, tx, queries, cleanup := newModelChannelTestTx(t)
+	defer cleanup()
+
+	identity := createRequestRecordIdentity(t, ctx, queries)
+	suffix := time.Now().UnixNano()
+	providerID := insertProvider(t, ctx, tx, fmt.Sprintf("attempt-state-provider-%d", suffix), "openai", "enabled")
+	channelID := insertChannel(t, ctx, tx, providerID, fmt.Sprintf("attempt-state-channel-%d", suffix), "enabled", 10, nil)
+	record := createRequestRecordForTest(t, ctx, queries, identity, fmt.Sprintf("attempt-state-%d", suffix))
+
+	attempt, err := queries.CreateRequestAttempt(ctx, sqlc.CreateRequestAttemptParams{
+		RequestRecordID:       record.ID,
+		AttemptIndex:          0,
+		ProviderID:            providerID,
+		ChannelID:             channelID,
+		AdapterKey:            "openai",
+		UpstreamModel:         "deepseek-v4-pro",
+		UpstreamResponseModel: pgtype.Text{Valid: false},
+		Status:                "running",
+		UpstreamStatusCode:    pgtype.Int4{Valid: false},
+		UpstreamRequestID:     pgtype.Text{Valid: false},
+		ErrorCode:             pgtype.Text{Valid: false},
+		ErrorMessage:          pgtype.Text{Valid: false},
+		StartedAt:             pgtype.Timestamptz{Time: time.Now(), Valid: true},
+		CompletedAt:           pgtype.Timestamptz{Valid: false},
+	})
+	if err != nil {
+		t.Fatalf("create attempt: %v", err)
+	}
+
+	firstSucceeded, err := queries.MarkRequestAttemptSucceeded(ctx, sqlc.MarkRequestAttemptSucceededParams{
+		UpstreamResponseModel: pgtype.Text{String: "deepseek-v4-pro-actual", Valid: true},
+		UpstreamStatusCode:    pgtype.Int4{Int32: 200, Valid: true},
+		UpstreamRequestID:     pgtype.Text{String: "upstream-request-id", Valid: true},
+		CompletedAt:           pgtype.Timestamptz{Time: time.Now(), Valid: true},
+		AttemptID:             attempt.ID,
+	})
+	if err != nil {
+		t.Fatalf("mark attempt succeeded: %v", err)
+	}
+
+	repeatedSucceeded, err := queries.MarkRequestAttemptSucceeded(ctx, sqlc.MarkRequestAttemptSucceededParams{
+		UpstreamResponseModel: pgtype.Text{String: "should-not-overwrite", Valid: true},
+		UpstreamStatusCode:    pgtype.Int4{Int32: 201, Valid: true},
+		UpstreamRequestID:     pgtype.Text{String: "should-not-overwrite", Valid: true},
+		CompletedAt:           pgtype.Timestamptz{Time: time.Now().Add(time.Hour), Valid: true},
+		AttemptID:             attempt.ID,
+	})
+	if err != nil {
+		t.Fatalf("repeat mark attempt succeeded: %v", err)
+	}
+	if repeatedSucceeded.UpstreamResponseModel.String != firstSucceeded.UpstreamResponseModel.String {
+		t.Fatalf("expected repeated succeeded to keep response model %q, got %q", firstSucceeded.UpstreamResponseModel.String, repeatedSucceeded.UpstreamResponseModel.String)
+	}
+	if repeatedSucceeded.UpstreamStatusCode.Int32 != 200 {
+		t.Fatalf("expected repeated succeeded to keep upstream status 200, got %d", repeatedSucceeded.UpstreamStatusCode.Int32)
+	}
+	if repeatedSucceeded.UpstreamRequestID.String != "upstream-request-id" {
+		t.Fatalf("expected repeated succeeded to keep upstream request id, got %q", repeatedSucceeded.UpstreamRequestID.String)
+	}
+
+	_, err = queries.MarkRequestAttemptFailed(ctx, sqlc.MarkRequestAttemptFailedParams{
+		UpstreamStatusCode: pgtype.Int4{Int32: 502, Valid: true},
+		UpstreamRequestID:  pgtype.Text{String: "should-not-overwrite", Valid: true},
+		ErrorCode:          pgtype.Text{String: "should_not_overwrite", Valid: true},
+		ErrorMessage:       pgtype.Text{String: "should not overwrite", Valid: true},
+		CompletedAt:        pgtype.Timestamptz{Time: time.Now(), Valid: true},
+		AttemptID:          attempt.ID,
+	})
+	if !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("expected succeeded attempt cannot become failed, got %v", err)
+	}
+
+	_, err = queries.MarkRequestAttemptCanceled(ctx, sqlc.MarkRequestAttemptCanceledParams{
+		ErrorCode:    pgtype.Text{String: "should_not_overwrite", Valid: true},
+		ErrorMessage: pgtype.Text{String: "should not overwrite", Valid: true},
+		CompletedAt:  pgtype.Timestamptz{Time: time.Now(), Valid: true},
+		AttemptID:    attempt.ID,
+	})
+	if !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("expected succeeded attempt cannot become canceled, got %v", err)
 	}
 }

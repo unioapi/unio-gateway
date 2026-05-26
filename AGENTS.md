@@ -266,6 +266,7 @@ Provider、channel、model、price、fallback、health 和 rate policy 属于业
 - Adapter 不得读取 provider/channel env，不得直接查询数据库，不得保存业务状态。
 - Gateway / routing 负责选择 model、provider、channel，并把运行时 channel 参数交给 adapter。
 - Billing / ledger 必须记录 request、model、provider、channel、price snapshot 和 usage，不能只记录“请求成功”。
+- Billing / ledger 底层不能用“倍率”替代金额事实；倍率只能作为后台运营配置或批量生成价格的工具，结算必须使用明确的客户售价、成本价和请求级快照。
 - Redis 不能作为金额或余额的最终事实来源。
 - OpenAI-compatible endpoint 不能无脑透传上游错误 body。
 - 用户 API key、后台 admin auth、用户后台 console auth 不能混用。
@@ -273,6 +274,9 @@ Provider、channel、model、price、fallback、health 和 rate policy 属于业
 计费与余额商业规则：
 
 - 用户不需要为一次 API 调用手动计算 token 或费用；估算、冻结、结算和核销由平台负责。
+- Unio 的价格体系区分“运营配置”和“账务事实”：倍率、分组折扣、批量调价属于运营配置；`price snapshot`、`cost snapshot`、ledger entry 和 billing exception 才是审计事实。
+- 客户售价和 provider/channel 成本价必须分开建模；一次成功请求必须能追溯当时的客户售价、上游成本、用户扣费、平台成本和毛利。
+- 如果后续后台支持模型倍率、补全倍率、分组倍率或折扣，它们只能生成或解释最终价格，不能成为历史账单复算的唯一依据。
 - Unio 当前采用严格不透支用户余额的预付费模型，不允许静默欠费、负余额或充值后偷偷追扣旧账；如果未来支持信用额度，必须另做产品决策和账务模型。
 - Chat authorization 必须区分 `estimated_amount` 和 `authorized_amount`：前者是本次请求的风险估算，后者是实际从用户可用余额中冻结的钱。
 - 当 `available_balance <= 0` 时，请求必须在调用上游前拒绝。

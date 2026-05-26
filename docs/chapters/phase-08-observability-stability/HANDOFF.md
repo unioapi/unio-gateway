@@ -37,14 +37,12 @@
 1. Provider 原始错误 body 的脱敏解析和 metadata contract。
 2. retry/fallback 基于 provider 错误类型的精细分类。
 3. channel health 根据错误率降权或熔断。
-4. request log 对外展示时的 `safe_user_message` / `internal_error_detail` 分离。
-5. SSE Writer、heartbeat、写出后错误事件和 stream observability。
+4. SSE Writer、heartbeat、写出后错误事件和 stream observability。
 
 相关 GAP：
 
-1. [GAP-7-005](../../production/TODO_REGISTER.md#gap-7-005)
-2. [GAP-7-006](../../production/TODO_REGISTER.md#gap-7-006)
-3. [GAP-8-001](../../production/TODO_REGISTER.md#gap-8-001)
+1. [GAP-7-006](../../production/TODO_REGISTER.md#gap-7-006)
+2. [GAP-8-001](../../production/TODO_REGISTER.md#gap-8-001)
 
 ## 建议阅读顺序
 

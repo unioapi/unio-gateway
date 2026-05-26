@@ -39,21 +39,22 @@ type CreateRequestParams struct {
 
 // RequestRecord 表示一次用户可见请求记录。
 type RequestRecord struct {
-	ID               int64
-	RequestID        string
-	UserID           int64
-	ProjectID        int64
-	APIKeyID         int64
-	RequestedModelID string
-	ResponseModelID  *string
-	Stream           bool
-	Status           RequestStatus
-	FinalProviderID  *int64
-	FinalChannelID   *int64
-	ErrorCode        *string
-	ErrorMessage     *string
-	StartedAt        time.Time
-	CompletedAt      *time.Time
+	ID                  int64
+	RequestID           string
+	UserID              int64
+	ProjectID           int64
+	APIKeyID            int64
+	RequestedModelID    string
+	ResponseModelID     *string
+	Stream              bool
+	Status              RequestStatus
+	FinalProviderID     *int64
+	FinalChannelID      *int64
+	ErrorCode           *string
+	ErrorMessage        *string
+	InternalErrorDetail *string
+	StartedAt           time.Time
+	CompletedAt         *time.Time
 }
 
 // MarkRequestSucceededParams 表示标记请求成功所需的最终事实。
@@ -67,18 +68,20 @@ type MarkRequestSucceededParams struct {
 
 // MarkRequestFailedParams 表示标记请求失败所需的错误事实。
 type MarkRequestFailedParams struct {
-	ID           int64
-	ErrorCode    string
-	ErrorMessage string
-	CompletedAt  time.Time
+	ID                  int64
+	ErrorCode           string
+	ErrorMessage        string
+	InternalErrorDetail string
+	CompletedAt         time.Time
 }
 
 // MarkRequestCanceledParams 表示标记请求取消所需的错误事实。
 type MarkRequestCanceledParams struct {
-	ID           int64
-	ErrorCode    string
-	ErrorMessage string
-	CompletedAt  time.Time
+	ID                  int64
+	ErrorCode           string
+	ErrorMessage        string
+	InternalErrorDetail string
+	CompletedAt         time.Time
 }
 
 // CreateAttemptParams 表示创建 request attempt 所需的上游尝试事实。
@@ -107,6 +110,7 @@ type AttemptRecord struct {
 	UpstreamRequestID     *string
 	ErrorCode             *string
 	ErrorMessage          *string
+	InternalErrorDetail   *string
 	StartedAt             time.Time
 	CompletedAt           *time.Time
 }
@@ -122,20 +126,22 @@ type MarkAttemptSucceededParams struct {
 
 // MarkAttemptFailedParams 表示标记上游尝试失败所需的错误事实。
 type MarkAttemptFailedParams struct {
-	ID                 int64
-	UpstreamStatusCode *int
-	UpstreamRequestID  *string
-	ErrorCode          string
-	ErrorMessage       string
-	CompletedAt        time.Time
+	ID                  int64
+	UpstreamStatusCode  *int
+	UpstreamRequestID   *string
+	ErrorCode           string
+	ErrorMessage        string
+	InternalErrorDetail string
+	CompletedAt         time.Time
 }
 
 // MarkAttemptCanceledParams 表示标记上游尝试取消所需的错误事实。
 type MarkAttemptCanceledParams struct {
-	ID           int64
-	ErrorCode    string
-	ErrorMessage string
-	CompletedAt  time.Time
+	ID                  int64
+	ErrorCode           string
+	ErrorMessage        string
+	InternalErrorDetail string
+	CompletedAt         time.Time
 }
 
 // Service 定义 request log 写入能力。

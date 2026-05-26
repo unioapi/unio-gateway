@@ -1,6 +1,6 @@
 # Phase 7 Handoff - Billing Ledger
 
-更新时间：2026-05-25
+更新时间：2026-05-26
 
 ## 当前状态
 
@@ -35,7 +35,8 @@
 
 ## 本次新增决策
 
-settlement 成功语义后的失败暂时不在当前小节实现补偿 worker。
+1. settlement 成功语义后的失败暂时不在当前小节实现补偿 worker。
+2. 倍率属于后续后台运营配置工具，当前阶段账务核心先落地明确金额的成本价和 cost snapshot。
 
 具体判断：
 
@@ -50,7 +51,21 @@ request 会被标记 failed，reservation 可能保持 authorized，reserved_bal
 后续进入 worker/settlement recovery 线时，用数据库持久化 recovery job + 幂等 settlement 重试收口。
 ```
 
-`GAP-7-013` 已关闭。下一节不切到 recovery worker，进入 `GAP-7-003` request/attempt 状态机守卫。
+`GAP-7-003` 和 `GAP-7-012` 已关闭。settlement 成功重放检查已完成；`GAP-7-007` 仍保留为 worker recovery 阻断项。
+
+价格体系判断：
+
+```text
+倍率、分组折扣和批量调价不是账务事实。
+TASK-7.20 先做 provider/channel 成本价和请求级 cost snapshot。
+
+结算时必须使用明确金额：
+用户扣费 = usage * price snapshot
+平台成本 = usage * cost snapshot
+毛利 = 用户扣费 - 平台成本
+
+后续后台可以提供倍率输入方式，但保存和结算必须落到明确金额与快照。
+```
 
 已经完成：
 
@@ -75,13 +90,17 @@ request 会被标记 failed，reservation 可能保持 authorized，reserved_bal
 19. `GAP-7-014` 已关闭：authorization 已拆分 `estimated_amount` 与 `authorized_amount`，低余额可冻结全部可用余额并继续请求，`actual_amount > authorized_amount` 时 capture 已冻结金额并写入 `ledger_billing_exceptions` 的 `write_off` 平台核销事实。
 20. `GAP-7-004` 已关闭：可能产生上游成本但没有 final usage 的 stream 路径会释放用户冻结余额，并写入 `ledger_billing_exceptions` 的 `risk_exposure` 事实。
 21. `GAP-7-013` 已关闭：gateway authorization 已通过 adapter registry 调用 provider adapter 注册的 `ChatInputTokenizer`；OpenAI adapter 已用 `tiktoken-go/tokenizer` 按 upstream model 估算 chat 输入 token，旧的字符串长度临时估算已移除。
+22. `GAP-7-003` 已关闭：`request_records` 和 `request_attempts` 已增加 SQL 原子状态机守卫；重复终态更新会读回第一次终态事实，跨终态覆盖会返回 `requestlog_invalid_state_transition`。
+23. request-level settlement 成功重放检查已完成：重复 `SettleSuccessfulChat` 会校验既有 usage、price snapshot、reservation、ledger 和 write-off 事实，一致才幂等成功。
+24. `GAP-7-012` 已关闭：`DebitWithQueries` 在外部事务内按 ledger entry `idempotency_key` 获取 transaction-level advisory lock，重复并发 debit 不再通过唯一约束冲突污染调用方事务。
+25. `GAP-7-008` 已关闭：`ChatSettlementParams` 显式携带 usage source，非流式写入 `upstream_response`，流式 final usage 写入 `upstream_stream`。
+26. `GAP-7-005` 已关闭：request/attempt 新增 `internal_error_detail`，`error_message` 只保存安全展示文案，内部错误文本截断后进入内部详情字段。
+27. 定价体系边界已确认：倍率只作为后台运营配置工具，账务核心必须使用明确客户售价、provider/channel 成本价、price snapshot 和 cost snapshot。
 
 仍需收口：
 
-1. request/attempt 状态机守卫。
-2. settlement 请求级幂等。
-3. error message 和 usage source 审计字段。
-4. 成本价和价格生效窗口。
+1. 上游成功后的首次 settlement 失败 worker recovery。
+2. 成本价和价格生效窗口。
 
 ## 已定死的新方案
 
@@ -134,19 +153,19 @@ request succeeded
 下一节第一步：
 
 ```text
-7.18 Request/attempt 状态机守卫：处理 GAP-7-003。
+7.20 成本价与毛利审计：先落地 provider/channel 成本价和 request-level cost snapshot；倍率系统不在当前小节实现。
 ```
 
 建议接入顺序：
 
-1. 进入 request/attempt 状态机守卫和 settlement 幂等前，复核剩余 P0 blocker。
-2. 处理 request/attempt 终态更新状态机守卫。
+1. 复核剩余 P0 blocker，确认 `GAP-7-007` 仍暂不插队。
+2. 进入 [GAP-7-009](../../production/TODO_REGISTER.md#gap-7-009)：设计 provider/channel 成本价和 cost snapshot。
 3. 后续后台/报表查询需要同时读取 `ledger_billing_exceptions` 中的 `write_off` 与 `risk_exposure` 事件。
-4. settlement recovery 暂时不做，等进入 `cmd/worker` / recovery job 小节时再处理。
+4. price effective window 放在 [GAP-7-010](../../production/TODO_REGISTER.md#gap-7-010)；settlement recovery 暂时不做，等进入 `cmd/worker` / recovery job 小节时再处理。
 
 必须先处理的 GAP：
 
-- [GAP-7-003](../../production/TODO_REGISTER.md#gap-7-003)
+- [GAP-7-009](../../production/TODO_REGISTER.md#gap-7-009)
 
 相关文档：
 

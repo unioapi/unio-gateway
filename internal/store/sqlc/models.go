@@ -173,29 +173,31 @@ type RequestAttempt struct {
 	UpstreamRequestID     pgtype.Text
 	ErrorCode             pgtype.Text
 	ErrorMessage          pgtype.Text
+	InternalErrorDetail   pgtype.Text
 	StartedAt             pgtype.Timestamptz
 	CompletedAt           pgtype.Timestamptz
 	CreatedAt             pgtype.Timestamptz
 }
 
 type RequestRecord struct {
-	ID               int64
-	RequestID        string
-	UserID           int64
-	ProjectID        int64
-	ApiKeyID         int64
-	RequestedModelID string
-	ResponseModelID  pgtype.Text
-	Stream           bool
-	Status           string
-	FinalProviderID  pgtype.Int8
-	FinalChannelID   pgtype.Int8
-	ErrorCode        pgtype.Text
-	ErrorMessage     pgtype.Text
-	StartedAt        pgtype.Timestamptz
-	CompletedAt      pgtype.Timestamptz
-	CreatedAt        pgtype.Timestamptz
-	UpdatedAt        pgtype.Timestamptz
+	ID                  int64
+	RequestID           string
+	UserID              int64
+	ProjectID           int64
+	ApiKeyID            int64
+	RequestedModelID    string
+	ResponseModelID     pgtype.Text
+	Stream              bool
+	Status              string
+	FinalProviderID     pgtype.Int8
+	FinalChannelID      pgtype.Int8
+	ErrorCode           pgtype.Text
+	ErrorMessage        pgtype.Text
+	InternalErrorDetail pgtype.Text
+	StartedAt           pgtype.Timestamptz
+	CompletedAt         pgtype.Timestamptz
+	CreatedAt           pgtype.Timestamptz
+	UpdatedAt           pgtype.Timestamptz
 }
 
 type SchemaHealthCheck struct {

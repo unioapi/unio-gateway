@@ -618,6 +618,12 @@ func TestChatCompletionServiceCreateChatCompletionDoesNotCallAdapterOnRoutingErr
 	if requestLog.markRequestFailedArgs[0].ErrorCode != "routing_error" {
 		t.Fatalf("expected routing_error, got %q", requestLog.markRequestFailedArgs[0].ErrorCode)
 	}
+	if requestLog.markRequestFailedArgs[0].ErrorMessage != "Request routing failed." {
+		t.Fatalf("expected safe routing message, got %q", requestLog.markRequestFailedArgs[0].ErrorMessage)
+	}
+	if requestLog.markRequestFailedArgs[0].InternalErrorDetail != routingErr.Error() {
+		t.Fatalf("expected internal error detail %q, got %q", routingErr.Error(), requestLog.markRequestFailedArgs[0].InternalErrorDetail)
+	}
 }
 
 func TestRoutingFailureCodeClassifiesRoutingErrors(t *testing.T) {
@@ -654,6 +660,35 @@ func TestRoutingFailureCodeClassifiesRoutingErrors(t *testing.T) {
 				t.Fatalf("expected code %q, got %q", tc.want, got)
 			}
 		})
+	}
+}
+
+func TestRequestLogErrorFactsSeparateSafeMessageAndInternalDetail(t *testing.T) {
+	rawErr := errors.New("postgres query failed: select * from secret_table")
+
+	code, safeMessage, internalDetail := requestLogErrorFacts("adapter_error", rawErr)
+
+	if code != "adapter_error" {
+		t.Fatalf("expected fallback code adapter_error, got %q", code)
+	}
+	if safeMessage != "Upstream provider request failed." {
+		t.Fatalf("expected safe adapter message, got %q", safeMessage)
+	}
+	if internalDetail != rawErr.Error() {
+		t.Fatalf("expected raw error in internal detail, got %q", internalDetail)
+	}
+}
+
+func TestInternalErrorDetailIsTruncated(t *testing.T) {
+	rawErr := errors.New(strings.Repeat("x", maxRequestLogInternalErrorDetailBytes+100))
+
+	detail := internalErrorDetail(rawErr)
+
+	if len(detail) <= maxRequestLogInternalErrorDetailBytes {
+		t.Fatalf("expected truncated detail marker to extend stored detail, got length %d", len(detail))
+	}
+	if !strings.HasSuffix(detail, "...[truncated]") {
+		t.Fatalf("expected truncated marker, got %q", detail[len(detail)-20:])
 	}
 }
 

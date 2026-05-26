@@ -949,6 +949,134 @@ func TestConcurrentSameDebitIdempotencyKeyDoesNotDoubleCharge(t *testing.T) {
 	}
 }
 
+func TestDebitWithQueriesConcurrentSameIdempotencyKeyDoesNotAbortExternalTransaction(t *testing.T) {
+	ctx, pool, queries, service, cleanup := newServiceTestDeps(t)
+	defer cleanup()
+
+	userID := createLedgerTestUser(t, ctx, pool)
+	defer cleanupLedgerTestUser(t, context.Background(), pool, userID)
+
+	if _, err := service.Credit(ctx, CreditParams{
+		UserID:         userID,
+		Amount:         numeric(100),
+		Currency:       "USD",
+		IdempotencyKey: fmt.Sprintf("external-debit-seed-credit-%d", time.Now().UnixNano()),
+		Reason:         "seed external debit balance",
+	}); err != nil {
+		t.Fatalf("seed credit: %v", err)
+	}
+
+	// Hold the balance row so both goroutines enter DebitWithQueries concurrently.
+	// With the idempotency-key lock in place, the second transaction waits before
+	// it reads or mutates balance state.
+	blockerTx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin balance blocker tx: %v", err)
+	}
+	defer func() {
+		_ = blockerTx.Rollback(context.Background())
+	}()
+	if _, err := blockerTx.Exec(ctx, `
+		SELECT id
+		FROM user_balances
+		WHERE user_id = $1
+		  AND currency = $2
+		FOR UPDATE
+	`, userID, "USD"); err != nil {
+		t.Fatalf("lock balance row: %v", err)
+	}
+
+	params := DebitParams{
+		UserID:         userID,
+		Amount:         numeric(40),
+		Currency:       "USD",
+		IdempotencyKey: fmt.Sprintf("external-concurrent-debit-%d", time.Now().UnixNano()),
+		Reason:         "external concurrent debit",
+	}
+
+	type debitResult struct {
+		entry Entry
+		err   error
+	}
+
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	results := make(chan debitResult, 2)
+
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			<-start
+			tx, err := pool.Begin(context.Background())
+			if err != nil {
+				results <- debitResult{err: err}
+				return
+			}
+			txQueries := queries.WithTx(tx)
+
+			entry, err := service.DebitWithQueries(context.Background(), txQueries, params)
+			if err != nil {
+				_ = tx.Rollback(context.Background())
+				results <- debitResult{err: err}
+				return
+			}
+			if err := tx.Commit(context.Background()); err != nil {
+				results <- debitResult{err: err}
+				return
+			}
+
+			results <- debitResult{entry: entry}
+		}()
+	}
+
+	close(start)
+	time.Sleep(100 * time.Millisecond)
+	if err := blockerTx.Commit(ctx); err != nil {
+		t.Fatalf("release balance blocker tx: %v", err)
+	}
+
+	wg.Wait()
+	close(results)
+
+	var entries []Entry
+	for result := range results {
+		if result.err != nil {
+			t.Fatalf("external concurrent debit failed: %v", result.err)
+		}
+		entries = append(entries, result.entry)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 successful debit results, got %d", len(entries))
+	}
+	if entries[0].ID != entries[1].ID {
+		t.Fatalf("expected external idempotent debits to return same entry id, got %d and %d", entries[0].ID, entries[1].ID)
+	}
+
+	balance, err := queries.GetUserBalance(ctx, sqlc.GetUserBalanceParams{
+		UserID:   userID,
+		Currency: "USD",
+	})
+	if err != nil {
+		t.Fatalf("get balance after external concurrent debit: %v", err)
+	}
+	assertNumericEquals(t, balance.Balance, 60)
+
+	entriesByUser, err := queries.ListLedgerEntriesByUser(ctx, sqlc.ListLedgerEntriesByUserParams{
+		UserID:     userID,
+		Currency:   "USD",
+		LimitRows:  10,
+		OffsetRows: 0,
+	})
+	if err != nil {
+		t.Fatalf("list ledger entries: %v", err)
+	}
+	if len(entriesByUser) != 2 {
+		t.Fatalf("expected seed credit and one external debit entry, got %d entries", len(entriesByUser))
+	}
+}
+
 func TestDebitReturnsInsufficientBalanceWithoutLedgerEntry(t *testing.T) {
 	ctx, pool, queries, service, cleanup := newServiceTestDeps(t)
 	defer cleanup()

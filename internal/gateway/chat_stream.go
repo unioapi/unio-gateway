@@ -136,6 +136,7 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ht
 				FinalChannelID:        candidate.Channel.ID,
 				UpstreamResponseModel: upstreamResponseModel,
 				Usage:                 *finalUsage,
+				UsageSource:           ChatSettlementUsageSourceUpstreamStream,
 			})
 		}
 

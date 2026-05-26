@@ -163,8 +163,8 @@ func TestStoreRequestLifecycleMapsNullableFields(t *testing.T) {
 	if record.Status != RequestStatusPending {
 		t.Fatalf("expected pending status, got %q", record.Status)
 	}
-	if record.ResponseModelID != nil || record.FinalProviderID != nil || record.CompletedAt != nil {
-		t.Fatalf("expected nullable fields to be nil on create, got response=%v provider=%v completed=%v", record.ResponseModelID, record.FinalProviderID, record.CompletedAt)
+	if record.ResponseModelID != nil || record.FinalProviderID != nil || record.InternalErrorDetail != nil || record.CompletedAt != nil {
+		t.Fatalf("expected nullable fields to be nil on create, got response=%v provider=%v internal=%v completed=%v", record.ResponseModelID, record.FinalProviderID, record.InternalErrorDetail, record.CompletedAt)
 	}
 
 	running, err := store.MarkRequestRunning(ctx, record.ID)
@@ -201,6 +201,47 @@ func TestStoreRequestLifecycleMapsNullableFields(t *testing.T) {
 	}
 	if succeeded.CompletedAt == nil {
 		t.Fatal("expected completed_at to be set")
+	}
+}
+
+func TestStoreRequestFailedPersistsSafeAndInternalError(t *testing.T) {
+	ctx, _, queries, cleanup := newTestTx(t)
+	defer cleanup()
+
+	identity := createIdentity(t, ctx, queries)
+	store := NewStore(queries)
+
+	record, err := store.CreateRequest(ctx, CreateRequestParams{
+		RequestID:        fmt.Sprintf("requestlog-failed-%d", time.Now().UnixNano()),
+		UserID:           identity.userID,
+		ProjectID:        identity.projectID,
+		APIKeyID:         identity.apiKeyID,
+		RequestedModelID: "deepseek-v4-pro",
+		Stream:           false,
+		StartedAt:        time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+	if _, err := store.MarkRequestRunning(ctx, record.ID); err != nil {
+		t.Fatalf("mark request running: %v", err)
+	}
+
+	failed, err := store.MarkRequestFailed(ctx, MarkRequestFailedParams{
+		ID:                  record.ID,
+		ErrorCode:           "adapter_error",
+		ErrorMessage:        "Upstream provider request failed.",
+		InternalErrorDetail: "upstream returned 502 with request id req_123",
+		CompletedAt:         time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("mark request failed: %v", err)
+	}
+	if failed.ErrorMessage == nil || *failed.ErrorMessage != "Upstream provider request failed." {
+		t.Fatalf("expected safe error message, got %v", failed.ErrorMessage)
+	}
+	if failed.InternalErrorDetail == nil || *failed.InternalErrorDetail != "upstream returned 502 with request id req_123" {
+		t.Fatalf("expected internal error detail, got %v", failed.InternalErrorDetail)
 	}
 }
 
@@ -241,8 +282,8 @@ func TestStoreAttemptLifecycleMapsNullableFields(t *testing.T) {
 	if attempt.Status != AttemptStatusRunning {
 		t.Fatalf("expected running status, got %q", attempt.Status)
 	}
-	if attempt.UpstreamResponseModel != nil || attempt.UpstreamStatusCode != nil || attempt.CompletedAt != nil {
-		t.Fatalf("expected nullable attempt fields to be nil on create, got model=%v status=%v completed=%v", attempt.UpstreamResponseModel, attempt.UpstreamStatusCode, attempt.CompletedAt)
+	if attempt.UpstreamResponseModel != nil || attempt.UpstreamStatusCode != nil || attempt.InternalErrorDetail != nil || attempt.CompletedAt != nil {
+		t.Fatalf("expected nullable attempt fields to be nil on create, got model=%v status=%v internal=%v completed=%v", attempt.UpstreamResponseModel, attempt.UpstreamStatusCode, attempt.InternalErrorDetail, attempt.CompletedAt)
 	}
 
 	succeeded, err := store.MarkAttemptSucceeded(ctx, MarkAttemptSucceededParams{
@@ -273,12 +314,13 @@ func TestStoreAttemptLifecycleMapsNullableFields(t *testing.T) {
 	}
 
 	failed, err := store.MarkAttemptFailed(ctx, MarkAttemptFailedParams{
-		ID:                 attempt.ID,
-		UpstreamStatusCode: intValuePtr(502),
-		UpstreamRequestID:  stringValuePtr("failed-upstream-request-id"),
-		ErrorCode:          "upstream_bad_gateway",
-		ErrorMessage:       "upstream bad gateway",
-		CompletedAt:        time.Now(),
+		ID:                  attempt.ID,
+		UpstreamStatusCode:  intValuePtr(502),
+		UpstreamRequestID:   stringValuePtr("failed-upstream-request-id"),
+		ErrorCode:           "upstream_bad_gateway",
+		ErrorMessage:        "upstream bad gateway",
+		InternalErrorDetail: "provider returned 502 bad gateway",
+		CompletedAt:         time.Now(),
 	})
 	if err != nil {
 		t.Fatalf("mark attempt failed: %v", err)
@@ -288,6 +330,9 @@ func TestStoreAttemptLifecycleMapsNullableFields(t *testing.T) {
 	}
 	if failed.ErrorCode == nil || *failed.ErrorCode != "upstream_bad_gateway" {
 		t.Fatalf("expected error code, got %v", failed.ErrorCode)
+	}
+	if failed.InternalErrorDetail == nil || *failed.InternalErrorDetail != "provider returned 502 bad gateway" {
+		t.Fatalf("expected internal error detail, got %v", failed.InternalErrorDetail)
 	}
 }
 

@@ -151,14 +151,17 @@ func (s *Service) Debit(ctx context.Context, params DebitParams) (Entry, error) 
 	return entry, nil
 }
 
-// DebitWithQueries 使用调用方传入的 queries 执行扣款。
-// queries 可以是普通 queries，也可以是 queries.WithTx(tx)。
+// DebitWithQueries 使用调用方传入的事务内 queries 执行扣款。
+// 调用方必须传入 queries.WithTx(tx)，确保 advisory lock、余额变化和 ledger entry 同事务提交。
 func (s *Service) DebitWithQueries(ctx context.Context, queries *sqlc.Queries, params DebitParams) (Entry, error) {
-	// TODO(阶段7/production): [GAP-7-012] 外部事务内并发使用同一 debit 幂等键时，CreateLedgerEntry 唯一冲突会使调用方事务失败且无法在当前事务内安全查询既有流水；引入并发 settlement/补偿任务前；使用请求级锁或 insert-first 幂等策略让外层事务可稳定重入。
 	return s.debitWithQueries(ctx, queries, params)
 }
 
 func (s *Service) debitWithQueries(ctx context.Context, queries *sqlc.Queries, params DebitParams) (Entry, error) {
+	if err := lockLedgerEntryIdempotencyKey(ctx, queries, params.IdempotencyKey); err != nil {
+		return Entry{}, err
+	}
+
 	// 幂等命中表示这笔扣费已经完成，直接返回已有流水，避免重复扣余额。
 	existing, err := queries.GetLedgerEntryByIdempotencyKey(ctx, params.IdempotencyKey)
 	if err == nil {
@@ -213,6 +216,16 @@ func (s *Service) debitWithQueries(ctx context.Context, queries *sqlc.Queries, p
 	}
 
 	return entryFromSQLC(created), nil
+}
+
+// lockLedgerEntryIdempotencyKey 在当前事务内按 ledger entry 幂等键串行化写入。
+// 它必须运行在事务内 queries 上；否则 PostgreSQL 会在单条语句结束后释放 advisory lock。
+func lockLedgerEntryIdempotencyKey(ctx context.Context, queries *sqlc.Queries, idempotencyKey string) error {
+	if err := queries.LockLedgerEntryIdempotencyKey(ctx, idempotencyKey); err != nil {
+		return ledgerFailure(failure.CodeLedgerStoreFailed, err, "lock ledger idempotency key")
+	}
+
+	return nil
 }
 
 // resolveIdempotentCreateConflict 在并发请求同时创建同一个幂等键时返回已提交流水。

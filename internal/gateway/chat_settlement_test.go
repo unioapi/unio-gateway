@@ -13,6 +13,7 @@ import (
 	"github.com/ThankCat/unio-api/internal/apikey"
 	"github.com/ThankCat/unio-api/internal/auth"
 	"github.com/ThankCat/unio-api/internal/billing"
+	"github.com/ThankCat/unio-api/internal/failure"
 	"github.com/ThankCat/unio-api/internal/ledger"
 	"github.com/ThankCat/unio-api/internal/requestlog"
 	"github.com/ThankCat/unio-api/internal/store/sqlc"
@@ -350,6 +351,7 @@ func (d *chatSettlementDBDeps) params() ChatSettlementParams {
 			CachedTokens:     3,
 			ReasoningTokens:  2,
 		},
+		UsageSource: ChatSettlementUsageSourceUpstreamResponse,
 	}
 }
 
@@ -438,6 +440,36 @@ func requestStatus(t *testing.T, ctx context.Context, pool *pgxpool.Pool, reques
 	}
 
 	return status
+}
+
+// requestTableCount 查询指定请求在事实表中的记录数量。
+func requestTableCount(t *testing.T, ctx context.Context, pool *pgxpool.Pool, table string, requestRecordID int64) int {
+	t.Helper()
+
+	var count int
+	query := fmt.Sprintf(`SELECT count(*) FROM %s WHERE request_record_id = $1`, table)
+	if err := pool.QueryRow(ctx, query, requestRecordID).Scan(&count); err != nil {
+		t.Fatalf("count %s by request: %v", table, err)
+	}
+
+	return count
+}
+
+// requestDebitLedgerCount 查询指定请求的 debit ledger entry 数量。
+func requestDebitLedgerCount(t *testing.T, ctx context.Context, pool *pgxpool.Pool, requestRecordID int64) int {
+	t.Helper()
+
+	var count int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM ledger_entries
+		WHERE request_record_id = $1
+		  AND entry_type = 'debit'
+	`, requestRecordID).Scan(&count); err != nil {
+		t.Fatalf("count debit ledger entries by request: %v", err)
+	}
+
+	return count
 }
 
 // attemptStatus 查询 request attempt 当前状态。
@@ -605,6 +637,104 @@ func TestChatSettlementUsesAuthorizationPriceWhenActivePriceChanges(t *testing.T
 	assertNumericEqual(t, billingCalculator.prices[0].OutputPrice, params.Authorization.Price.OutputPrice)
 	assertNumericEqual(t, billingCalculator.prices[0].CachedInputPrice, params.Authorization.Price.CachedInputPrice)
 	assertNumericEqual(t, billingCalculator.prices[0].ReasoningOutputPrice, params.Authorization.Price.ReasoningOutputPrice)
+}
+
+func TestChatSettlementReturnsIdempotentSuccessAfterRequestSucceeded(t *testing.T) {
+	deps := newChatSettlementDBDeps(t)
+	billingCalculator := chatSettlementBilling(testNumeric(61_000000, -10))
+	ledgerService := ledger.NewService(deps.pool, deps.queries)
+	service := NewChatSettlementService(deps.pool, deps.queries, billingCalculator, ledgerService)
+	params := deps.params()
+
+	if err := service.SettleSuccessfulChat(deps.ctx, params); err != nil {
+		t.Fatalf("settle successful chat: %v", err)
+	}
+	if err := service.SettleSuccessfulChat(deps.ctx, params); err != nil {
+		t.Fatalf("repeat successful settlement: %v", err)
+	}
+
+	if got := requestTableCount(t, deps.ctx, deps.pool, "usage_records", deps.requestRecord.ID); got != 1 {
+		t.Fatalf("expected one usage record after replay, got %d", got)
+	}
+	if got := requestTableCount(t, deps.ctx, deps.pool, "price_snapshots", deps.requestRecord.ID); got != 1 {
+		t.Fatalf("expected one price snapshot after replay, got %d", got)
+	}
+	if got := requestDebitLedgerCount(t, deps.ctx, deps.pool, deps.requestRecord.ID); got != 1 {
+		t.Fatalf("expected one debit ledger entry after replay, got %d", got)
+	}
+	if status := requestStatus(t, deps.ctx, deps.pool, deps.requestRecord.ID); status != string(requestlog.RequestStatusSucceeded) {
+		t.Fatalf("expected request succeeded after replay, got %q", status)
+	}
+}
+
+func TestChatSettlementRejectsReplayWithDifferentUsage(t *testing.T) {
+	deps := newChatSettlementDBDeps(t)
+	billingCalculator := chatSettlementBilling(testNumeric(61_000000, -10))
+	ledgerService := ledger.NewService(deps.pool, deps.queries)
+	service := NewChatSettlementService(deps.pool, deps.queries, billingCalculator, ledgerService)
+	params := deps.params()
+
+	if err := service.SettleSuccessfulChat(deps.ctx, params); err != nil {
+		t.Fatalf("settle successful chat: %v", err)
+	}
+
+	replayed := params
+	replayed.Usage.TotalTokens++
+	err := service.SettleSuccessfulChat(deps.ctx, replayed)
+	if got := failure.CodeOf(err); got != failure.CodeGatewayChatSettlementIdempotencyConflict {
+		t.Fatalf("expected failure code %q, got %q err=%v", failure.CodeGatewayChatSettlementIdempotencyConflict, got, err)
+	}
+	if got := requestTableCount(t, deps.ctx, deps.pool, "usage_records", deps.requestRecord.ID); got != 1 {
+		t.Fatalf("expected one usage record after rejected replay, got %d", got)
+	}
+	if got := requestDebitLedgerCount(t, deps.ctx, deps.pool, deps.requestRecord.ID); got != 1 {
+		t.Fatalf("expected one debit ledger entry after rejected replay, got %d", got)
+	}
+}
+
+func TestEnsureSettlementUsageMatchesAcceptsStreamSource(t *testing.T) {
+	usage := adapter.ChatUsage{
+		PromptTokens:     10,
+		CompletionTokens: 5,
+		TotalTokens:      15,
+		CachedTokens:     3,
+		ReasoningTokens:  2,
+	}
+	row := sqlc.UsageRecord{
+		PromptTokens:     10,
+		CompletionTokens: 5,
+		TotalTokens:      15,
+		CachedTokens:     3,
+		ReasoningTokens:  2,
+		Source:           string(ChatSettlementUsageSourceUpstreamStream),
+	}
+
+	if err := ensureSettlementUsageMatches(row, usage, ChatSettlementUsageSourceUpstreamStream); err != nil {
+		t.Fatalf("expected stream usage source to match: %v", err)
+	}
+}
+
+func TestEnsureSettlementUsageMatchesRejectsDifferentSource(t *testing.T) {
+	usage := adapter.ChatUsage{
+		PromptTokens:     10,
+		CompletionTokens: 5,
+		TotalTokens:      15,
+		CachedTokens:     3,
+		ReasoningTokens:  2,
+	}
+	row := sqlc.UsageRecord{
+		PromptTokens:     10,
+		CompletionTokens: 5,
+		TotalTokens:      15,
+		CachedTokens:     3,
+		ReasoningTokens:  2,
+		Source:           string(ChatSettlementUsageSourceUpstreamResponse),
+	}
+
+	err := ensureSettlementUsageMatches(row, usage, ChatSettlementUsageSourceUpstreamStream)
+	if got := failure.CodeOf(err); got != failure.CodeGatewayChatSettlementIdempotencyConflict {
+		t.Fatalf("expected failure code %q, got %q err=%v", failure.CodeGatewayChatSettlementIdempotencyConflict, got, err)
+	}
 }
 
 func TestChatSettlementReleasesReservationForZeroAmount(t *testing.T) {
