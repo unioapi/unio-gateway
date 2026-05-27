@@ -21,14 +21,14 @@
 
 | 任务 | 状态 | 说明 |
 | --- | --- | --- |
-| TASK-7.20 | todo | 下一步进入 provider/channel 成本价和 cost snapshot，处理 [GAP-7-009](../../production/TODO_REGISTER.md#gap-7-009)；第一版不支持倍率，直接使用明确金额。 |
+| TASK-7.20 | in_progress | provider/channel 成本价 schema、cost snapshot schema、sqlc 查询和 billing 客户售价/成本价语义拆分已完成；下一步把成本价查询和 `cost_snapshots` 写入接入 settlement。 |
 
 ## 未完成
 
 | 任务 | 状态 | 说明 |
 | --- | --- | --- |
 | TASK-7.19 | partial | 上游成功后的首次 settlement 失败 recovery 暂不插队，后续进入 worker/recovery 线时处理。 |
-| TASK-7.20 | todo | provider/channel 成本价和 cost snapshot；结算层必须使用明确金额和请求级快照。 |
+| TASK-7.20 | partial | provider/channel 成本价和 cost snapshot 表结构已落地；结算层写入请求级成本快照仍未完成。 |
 | TASK-7.22 | todo | price effective window 约束。 |
 
 ## 下一次进入本阶段前必须检查
@@ -40,5 +40,5 @@ rg -n "GAP-7-" docs/production/TODO_REGISTER.md cmd internal migrations sql
 ## 下节课 TODO
 
 1. 复核当前阶段剩余 P0 release blocker。
-2. [GAP-7-005](../../production/TODO_REGISTER.md#gap-7-005) 和 [GAP-7-008](../../production/TODO_REGISTER.md#gap-7-008) 已关闭；下一步进入 [GAP-7-009](../../production/TODO_REGISTER.md#gap-7-009) 成本价和 cost snapshot，第一版直接做明确金额，不做倍率系统。
+2. [GAP-7-009](../../production/TODO_REGISTER.md#gap-7-009) 已开始：成本价/cost snapshot schema、查询和 billing 语义拆分已完成；下一步接入 settlement 写 `cost_snapshots`。
 3. [GAP-7-007](../../production/TODO_REGISTER.md#gap-7-007) 仍保留为 worker recovery 阻断项，settlement recovery 暂不做，等进入 worker/settlement recovery 线时处理。

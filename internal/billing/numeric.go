@@ -7,7 +7,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-// requiredNonNegativeNumeric 将必填 NUMERIC 价格转换成非负有理数。
+// requiredNonNegativeNumeric 将必填 NUMERIC 单价转换成非负有理数。
 func requiredNonNegativeNumeric(value pgtype.Numeric) (*big.Rat, error) {
 	rat, err := numericToRat(value)
 	if err != nil {
@@ -17,8 +17,8 @@ func requiredNonNegativeNumeric(value pgtype.Numeric) (*big.Rat, error) {
 	if rat.Sign() < 0 {
 		return nil, failure.Wrap(
 			failure.CodeBillingInvalidPrice,
-			ErrInvalidPrice,
-			failure.WithMessage(ErrInvalidPrice.Error()),
+			ErrInvalidRate,
+			failure.WithMessage(ErrInvalidRate.Error()),
 		)
 	}
 
@@ -30,8 +30,8 @@ func numericToRat(value pgtype.Numeric) (*big.Rat, error) {
 	if !value.Valid || value.NaN || value.InfinityModifier != pgtype.Finite {
 		return nil, failure.Wrap(
 			failure.CodeBillingInvalidPrice,
-			ErrInvalidPrice,
-			failure.WithMessage(ErrInvalidPrice.Error()),
+			ErrInvalidRate,
+			failure.WithMessage(ErrInvalidRate.Error()),
 		)
 	}
 	if value.Int == nil {

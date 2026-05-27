@@ -32,7 +32,7 @@ type ChatLedgerCapturer interface {
 
 // ChatBillingCalculator 定义 chat settlement 计算请求金额所需能力。
 type ChatBillingCalculator interface {
-	Calculate(usage billing.Usage, price billing.PriceSnapshot) (billing.Settlement, error)
+	CalculateCustomerCharge(usage billing.Usage, price billing.CustomerPriceSnapshot) (billing.CustomerCharge, error)
 }
 
 // ChatSettlementService 负责 chat 请求成功后的 usage、price snapshot 和 ledger 结算。
@@ -230,13 +230,13 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 	}
 
 	// billing 只做纯金额计算；它不写 usage、不查价格、不扣余额。
-	settlement, err := s.billingCalculator.Calculate(billing.Usage{
+	charge, err := s.billingCalculator.CalculateCustomerCharge(billing.Usage{
 		PromptTokens:     int64(usage.PromptTokens),
 		CompletionTokens: int64(usage.CompletionTokens),
 		TotalTokens:      int64(usage.TotalTokens),
 		CachedTokens:     int64(usage.CachedTokens),
 		ReasoningTokens:  int64(usage.ReasoningTokens),
-	}, billing.PriceSnapshot{
+	}, billing.CustomerPriceSnapshot{
 		Currency:             snapshot.Currency,
 		PricingUnit:          snapshot.PricingUnit,
 		InputPrice:           snapshot.InputPrice,
@@ -252,7 +252,7 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 	reservationID := params.Authorization.ReservationID
 
 	// ledger_entries.amount 要求大于 0；零金额请求保留 usage 和 price snapshot，但不写余额流水。
-	if numericIsZero(settlement.Amount) {
+	if numericIsZero(charge.Amount) {
 		_, err := s.ledgerCapturer.ReleaseWithQueries(ctx, txQueries, ledger.ReleaseParams{
 			RequestRecordID: params.RequestRecord.ID,
 			ReservationID:   &reservationID,
@@ -264,7 +264,7 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 		_, err = s.ledgerCapturer.CaptureWithQueries(ctx, txQueries, ledger.CaptureParams{
 			RequestRecordID: params.RequestRecord.ID,
 			ReservationID:   &reservationID,
-			ActualAmount:    settlement.Amount,
+			ActualAmount:    charge.Amount,
 			IdempotencyKey:  fmt.Sprintf("chat:settle:%d", params.RequestRecord.ID),
 			Reason:          "chat completion settlement",
 		})
@@ -331,13 +331,13 @@ func (s *ChatSettlementService) ensureIdempotentSuccessfulChat(ctx context.Conte
 		return err
 	}
 
-	settlement, err := s.billingCalculator.Calculate(billing.Usage{
+	charge, err := s.billingCalculator.CalculateCustomerCharge(billing.Usage{
 		PromptTokens:     usageRecord.PromptTokens,
 		CompletionTokens: usageRecord.CompletionTokens,
 		TotalTokens:      usageRecord.TotalTokens,
 		CachedTokens:     usageRecord.CachedTokens,
 		ReasoningTokens:  usageRecord.ReasoningTokens,
-	}, billing.PriceSnapshot{
+	}, billing.CustomerPriceSnapshot{
 		Currency:             snapshot.Currency,
 		PricingUnit:          snapshot.PricingUnit,
 		InputPrice:           snapshot.InputPrice,
@@ -367,11 +367,11 @@ func (s *ChatSettlementService) ensureIdempotentSuccessfulChat(ctx context.Conte
 		return err
 	}
 
-	if numericIsZero(settlement.Amount) {
+	if numericIsZero(charge.Amount) {
 		return ensureSettlementReleasedReservationMatches(ctx, queries, reservation)
 	}
 
-	return ensureSettlementCapturedReservationMatches(ctx, queries, reservation, settlement.Amount)
+	return ensureSettlementCapturedReservationMatches(ctx, queries, reservation, charge.Amount)
 }
 
 // ensureSettlementRequestMatches 校验成功 request 终态是否属于本次 settlement 参数。

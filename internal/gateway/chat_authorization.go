@@ -63,7 +63,7 @@ type ChatAuthorization struct {
 	PriceID int64
 
 	// Price 是 authorization 时使用的售卖价副本，后续 settlement 用它计算最终费用。
-	Price billing.PriceSnapshot
+	Price billing.CustomerPriceSnapshot
 }
 
 // ChatReleaseAuthorizationParams 表示释放一次冻结余额所需参数。
@@ -80,7 +80,7 @@ type ChatAuthorizationPriceStore interface {
 
 // ChatAuthorizationBilling 定义冻结金额估算能力。
 type ChatAuthorizationBilling interface {
-	EstimateAuthorizationAmount(estimate billing.AuthorizationEstimate, price billing.PriceSnapshot) (billing.Settlement, error)
+	EstimateAuthorizationAmount(estimate billing.AuthorizationEstimate, price billing.CustomerPriceSnapshot) (billing.CustomerCharge, error)
 }
 
 // ChatAuthorizationLedger 定义创建和释放余额冻结的账本能力。
@@ -141,7 +141,7 @@ func (s *ChatAuthorizationService) AuthorizeChat(ctx context.Context, params Cha
 		)
 	}
 
-	authorizationPrice := billingPriceSnapshotFromActivePrice(price)
+	authorizationPrice := customerPriceSnapshotFromActivePrice(price)
 
 	tokenizer, ok := s.registry.ChatInputTokenizer(params.AdapterKey)
 	if !ok {
@@ -260,10 +260,10 @@ func estimateMaxCompletionTokens(req httpapi.ChatCompletionRequest) int64 {
 	return defaultAuthorizationMaxCompletionTokens
 }
 
-// billingPriceSnapshotFromActivePrice 把当前生效价格转换为冻结和结算共用的价格快照。
+// customerPriceSnapshotFromActivePrice 把当前生效售价转换为冻结和结算共用的客户售价快照。
 // 这样请求过程中价格变化时，最终扣费仍使用 authorization 时看到的同一份价格。
-func billingPriceSnapshotFromActivePrice(price sqlc.Price) billing.PriceSnapshot {
-	return billing.PriceSnapshot{
+func customerPriceSnapshotFromActivePrice(price sqlc.Price) billing.CustomerPriceSnapshot {
+	return billing.CustomerPriceSnapshot{
 		Currency:             price.Currency,
 		PricingUnit:          price.PricingUnit,
 		InputPrice:           price.InputPrice,

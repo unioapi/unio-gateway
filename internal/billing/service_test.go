@@ -18,9 +18,9 @@ func nullNumeric() pgtype.Numeric {
 	return pgtype.Numeric{Valid: false}
 }
 
-// defaultPriceSnapshot 返回一份支持 token_v1 的基础价格快照。
-func defaultPriceSnapshot() PriceSnapshot {
-	return PriceSnapshot{
+// defaultCustomerPriceSnapshot 返回一份支持 token_v1 的基础客户售价快照。
+func defaultCustomerPriceSnapshot() CustomerPriceSnapshot {
+	return CustomerPriceSnapshot{
 		Currency:             "USD",
 		PricingUnit:          PricingUnitPer1MTokens,
 		InputPrice:           numeric(2_0000000000, -10),
@@ -28,6 +28,19 @@ func defaultPriceSnapshot() PriceSnapshot {
 		CachedInputPrice:     numeric(5000000000, -10),
 		ReasoningOutputPrice: numeric(12_0000000000, -10),
 		FormulaVersion:       FormulaVersionV1,
+	}
+}
+
+// defaultProviderCostSnapshot 返回一份支持 token_v1 的基础 provider/channel 成本价快照。
+func defaultProviderCostSnapshot() ProviderCostSnapshot {
+	return ProviderCostSnapshot{
+		Currency:            "USD",
+		PricingUnit:         PricingUnitPer1MTokens,
+		InputCost:           numeric(1_0000000000, -10),
+		OutputCost:          numeric(4_0000000000, -10),
+		CachedInputCost:     numeric(2_000000000, -10),
+		ReasoningOutputCost: numeric(6_0000000000, -10),
+		FormulaVersion:      FormulaVersionV1,
 	}
 }
 
@@ -49,17 +62,17 @@ func assertNumeric(t *testing.T, got pgtype.Numeric, wantInt int64, wantExp int3
 	}
 }
 
-// TestCalculateChargesTokenClassesSeparately 验证普通、缓存和 reasoning token 会按各自价格计费。
-func TestCalculateChargesTokenClassesSeparately(t *testing.T) {
-	settlement, err := (Service{}).Calculate(Usage{
+// TestCalculateCustomerChargeChargesTokenClassesSeparately 验证客户扣费按普通、缓存和 reasoning token 分别计费。
+func TestCalculateCustomerChargeChargesTokenClassesSeparately(t *testing.T) {
+	settlement, err := (Service{}).CalculateCustomerCharge(Usage{
 		PromptTokens:     1000,
 		CompletionTokens: 500,
 		TotalTokens:      1500,
 		CachedTokens:     200,
 		ReasoningTokens:  100,
-	}, defaultPriceSnapshot())
+	}, defaultCustomerPriceSnapshot())
 	if err != nil {
-		t.Fatalf("calculate settlement: %v", err)
+		t.Fatalf("calculate customer charge: %v", err)
 	}
 
 	if settlement.Currency != "USD" {
@@ -73,13 +86,13 @@ func TestCalculateChargesTokenClassesSeparately(t *testing.T) {
 	assertNumeric(t, settlement.Amount, 61_000000, -10)
 }
 
-// TestCalculateFallsBackToBasePricesForNullSpecialPrices 验证可空特殊价格未配置时回退到普通输入/输出价格。
-func TestCalculateFallsBackToBasePricesForNullSpecialPrices(t *testing.T) {
-	price := defaultPriceSnapshot()
+// TestCalculateCustomerChargeFallsBackToBasePricesForNullSpecialPrices 验证客户扣费在特殊价格未配置时回退到普通输入/输出价格。
+func TestCalculateCustomerChargeFallsBackToBasePricesForNullSpecialPrices(t *testing.T) {
+	price := defaultCustomerPriceSnapshot()
 	price.CachedInputPrice = nullNumeric()
 	price.ReasoningOutputPrice = nullNumeric()
 
-	settlement, err := (Service{}).Calculate(Usage{
+	settlement, err := (Service{}).CalculateCustomerCharge(Usage{
 		PromptTokens:     1000,
 		CompletionTokens: 500,
 		TotalTokens:      1500,
@@ -87,25 +100,25 @@ func TestCalculateFallsBackToBasePricesForNullSpecialPrices(t *testing.T) {
 		ReasoningTokens:  100,
 	}, price)
 	if err != nil {
-		t.Fatalf("calculate settlement: %v", err)
+		t.Fatalf("calculate customer charge: %v", err)
 	}
 
 	// (800*2 + 200*2 + 400*8 + 100*8) / 1_000_000 = 0.0060000000。
 	assertNumeric(t, settlement.Amount, 60_000000, -10)
 }
 
-// TestCalculateDefaultsEmptyFormulaVersion 验证旧数据未显式写公式版本时默认按 token_v1 计算。
-func TestCalculateDefaultsEmptyFormulaVersion(t *testing.T) {
-	price := defaultPriceSnapshot()
+// TestCalculateCustomerChargeDefaultsEmptyFormulaVersion 验证旧数据未显式写公式版本时默认按 token_v1 计算。
+func TestCalculateCustomerChargeDefaultsEmptyFormulaVersion(t *testing.T) {
+	price := defaultCustomerPriceSnapshot()
 	price.FormulaVersion = ""
 
-	settlement, err := (Service{}).Calculate(Usage{
+	settlement, err := (Service{}).CalculateCustomerCharge(Usage{
 		PromptTokens:     100,
 		CompletionTokens: 50,
 		TotalTokens:      150,
 	}, price)
 	if err != nil {
-		t.Fatalf("calculate settlement: %v", err)
+		t.Fatalf("calculate customer charge: %v", err)
 	}
 
 	if settlement.FormulaVersion != FormulaVersionV1 {
@@ -113,24 +126,77 @@ func TestCalculateDefaultsEmptyFormulaVersion(t *testing.T) {
 	}
 }
 
-// TestCalculateRoundsToAmountScale 验证金额会四舍五入到 NUMERIC(20,10) 对应的小数位。
-func TestCalculateRoundsToAmountScale(t *testing.T) {
-	price := defaultPriceSnapshot()
+// TestCalculateCustomerChargeRoundsToAmountScale 验证客户扣费金额会四舍五入到 NUMERIC(20,10) 对应的小数位。
+func TestCalculateCustomerChargeRoundsToAmountScale(t *testing.T) {
+	price := defaultCustomerPriceSnapshot()
 	price.InputPrice = numeric(5, -5)
 	price.OutputPrice = numeric(0, 0)
 	price.CachedInputPrice = nullNumeric()
 	price.ReasoningOutputPrice = nullNumeric()
 
-	settlement, err := (Service{}).Calculate(Usage{
+	settlement, err := (Service{}).CalculateCustomerCharge(Usage{
 		PromptTokens: 1,
 		TotalTokens:  1,
 	}, price)
 	if err != nil {
-		t.Fatalf("calculate settlement: %v", err)
+		t.Fatalf("calculate customer charge: %v", err)
 	}
 
 	// 0.00005 / 1_000_000 = 0.00000000005，保留 10 位后四舍五入为 0.0000000001。
 	assertNumeric(t, settlement.Amount, 1, -10)
+}
+
+// TestCalculateProviderCostReturnsCostBreakdown 验证平台成本会保存四类 token 的成本分项和总成本。
+func TestCalculateProviderCostReturnsCostBreakdown(t *testing.T) {
+	cost, err := (Service{}).CalculateProviderCost(Usage{
+		PromptTokens:     1000,
+		CompletionTokens: 500,
+		TotalTokens:      1500,
+		CachedTokens:     200,
+		ReasoningTokens:  100,
+	}, defaultProviderCostSnapshot())
+	if err != nil {
+		t.Fatalf("calculate provider cost: %v", err)
+	}
+
+	if cost.Currency != "USD" {
+		t.Fatalf("expected USD currency, got %q", cost.Currency)
+	}
+	if cost.FormulaVersion != FormulaVersionV1 {
+		t.Fatalf("expected formula version %q, got %q", FormulaVersionV1, cost.FormulaVersion)
+	}
+
+	// input=(800*1)/1M, cached=(200*0.2)/1M, output=(400*4)/1M, reasoning=(100*6)/1M。
+	assertNumeric(t, cost.InputCostAmount, 8_000000, -10)
+	assertNumeric(t, cost.CachedInputCostAmount, 400000, -10)
+	assertNumeric(t, cost.OutputCostAmount, 16_000000, -10)
+	assertNumeric(t, cost.ReasoningOutputCostAmount, 6_000000, -10)
+	assertNumeric(t, cost.TotalCostAmount, 30_400000, -10)
+}
+
+// TestCalculateProviderCostFallsBackToBaseCostsForNullSpecialCosts 验证特殊成本未配置时回退到普通输入/输出成本。
+func TestCalculateProviderCostFallsBackToBaseCostsForNullSpecialCosts(t *testing.T) {
+	costSnapshot := defaultProviderCostSnapshot()
+	costSnapshot.CachedInputCost = nullNumeric()
+	costSnapshot.ReasoningOutputCost = nullNumeric()
+
+	cost, err := (Service{}).CalculateProviderCost(Usage{
+		PromptTokens:     1000,
+		CompletionTokens: 500,
+		TotalTokens:      1500,
+		CachedTokens:     200,
+		ReasoningTokens:  100,
+	}, costSnapshot)
+	if err != nil {
+		t.Fatalf("calculate provider cost: %v", err)
+	}
+
+	// cached 回退 input=1，reasoning 回退 output=4，总成本为 0.0030000000。
+	assertNumeric(t, cost.InputCostAmount, 8_000000, -10)
+	assertNumeric(t, cost.CachedInputCostAmount, 2_000000, -10)
+	assertNumeric(t, cost.OutputCostAmount, 16_000000, -10)
+	assertNumeric(t, cost.ReasoningOutputCostAmount, 4_000000, -10)
+	assertNumeric(t, cost.TotalCostAmount, 30_000000, -10)
 }
 
 // TestEstimateAuthorizationAmountUsesHigherCompletionPrice 验证冻结金额按 output/reasoning 中更贵的 completion 价格计算。
@@ -138,7 +204,7 @@ func TestEstimateAuthorizationAmountUsesHigherCompletionPrice(t *testing.T) {
 	settlement, err := (Service{}).EstimateAuthorizationAmount(AuthorizationEstimate{
 		PromptTokens:        1000,
 		MaxCompletionTokens: 500,
-	}, defaultPriceSnapshot())
+	}, defaultCustomerPriceSnapshot())
 	if err != nil {
 		t.Fatalf("estimate reservation amount: %v", err)
 	}
@@ -156,7 +222,7 @@ func TestEstimateAuthorizationAmountUsesHigherCompletionPrice(t *testing.T) {
 
 // TestEstimateAuthorizationAmountFallsBackToOutputPrice 验证 reasoning 价格未配置时按普通 output 价格估算。
 func TestEstimateAuthorizationAmountFallsBackToOutputPrice(t *testing.T) {
-	price := defaultPriceSnapshot()
+	price := defaultCustomerPriceSnapshot()
 	price.ReasoningOutputPrice = nullNumeric()
 
 	settlement, err := (Service{}).EstimateAuthorizationAmount(AuthorizationEstimate{
@@ -189,7 +255,7 @@ func TestEstimateAuthorizationAmountRejectsInvalidEstimate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := (Service{}).EstimateAuthorizationAmount(tt.estimate, defaultPriceSnapshot())
+			_, err := (Service{}).EstimateAuthorizationAmount(tt.estimate, defaultCustomerPriceSnapshot())
 			if !errors.Is(err, ErrInvalidUsage) {
 				t.Fatalf("expected ErrInvalidUsage, got %v", err)
 			}
@@ -197,8 +263,8 @@ func TestEstimateAuthorizationAmountRejectsInvalidEstimate(t *testing.T) {
 	}
 }
 
-// TestCalculateRejectsInvalidUsage 验证 usage token 约束和数据库 usage_records 约束保持一致。
-func TestCalculateRejectsInvalidUsage(t *testing.T) {
+// TestCalculateCustomerChargeRejectsInvalidUsage 验证 usage token 约束和数据库 usage_records 约束保持一致。
+func TestCalculateCustomerChargeRejectsInvalidUsage(t *testing.T) {
 	tests := []struct {
 		name  string
 		usage Usage
@@ -223,7 +289,7 @@ func TestCalculateRejectsInvalidUsage(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := (Service{}).Calculate(tt.usage, defaultPriceSnapshot())
+			_, err := (Service{}).CalculateCustomerCharge(tt.usage, defaultCustomerPriceSnapshot())
 			if !errors.Is(err, ErrInvalidUsage) {
 				t.Fatalf("expected ErrInvalidUsage, got %v", err)
 			}
@@ -231,42 +297,42 @@ func TestCalculateRejectsInvalidUsage(t *testing.T) {
 	}
 }
 
-// TestCalculateRejectsInvalidPrice 验证价格快照缺少必填价格或含负数时会失败。
-func TestCalculateRejectsInvalidPrice(t *testing.T) {
+// TestCalculateCustomerChargeRejectsInvalidRate 验证客户售价快照缺少必填单价或含负数时会失败。
+func TestCalculateCustomerChargeRejectsInvalidRate(t *testing.T) {
 	validUsage := Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15}
 
 	tests := []struct {
 		name  string
-		price PriceSnapshot
+		price CustomerPriceSnapshot
 	}{
 		{
 			name: "empty currency",
-			price: func() PriceSnapshot {
-				price := defaultPriceSnapshot()
+			price: func() CustomerPriceSnapshot {
+				price := defaultCustomerPriceSnapshot()
 				price.Currency = ""
 				return price
 			}(),
 		},
 		{
 			name: "missing input price",
-			price: func() PriceSnapshot {
-				price := defaultPriceSnapshot()
+			price: func() CustomerPriceSnapshot {
+				price := defaultCustomerPriceSnapshot()
 				price.InputPrice = nullNumeric()
 				return price
 			}(),
 		},
 		{
 			name: "negative output price",
-			price: func() PriceSnapshot {
-				price := defaultPriceSnapshot()
+			price: func() CustomerPriceSnapshot {
+				price := defaultCustomerPriceSnapshot()
 				price.OutputPrice = numeric(-1, 0)
 				return price
 			}(),
 		},
 		{
 			name: "negative cached input price",
-			price: func() PriceSnapshot {
-				price := defaultPriceSnapshot()
+			price: func() CustomerPriceSnapshot {
+				price := defaultCustomerPriceSnapshot()
 				price.CachedInputPrice = numeric(-1, 0)
 				return price
 			}(),
@@ -275,31 +341,31 @@ func TestCalculateRejectsInvalidPrice(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := (Service{}).Calculate(validUsage, tt.price)
-			if !errors.Is(err, ErrInvalidPrice) {
-				t.Fatalf("expected ErrInvalidPrice, got %v", err)
+			_, err := (Service{}).CalculateCustomerCharge(validUsage, tt.price)
+			if !errors.Is(err, ErrInvalidRate) {
+				t.Fatalf("expected ErrInvalidRate, got %v", err)
 			}
 		})
 	}
 }
 
-// TestCalculateRejectsUnsupportedPricingUnit 验证不支持的计价单位会返回专门错误。
-func TestCalculateRejectsUnsupportedPricingUnit(t *testing.T) {
-	price := defaultPriceSnapshot()
+// TestCalculateCustomerChargeRejectsUnsupportedPricingUnit 验证不支持的计价单位会返回专门错误。
+func TestCalculateCustomerChargeRejectsUnsupportedPricingUnit(t *testing.T) {
+	price := defaultCustomerPriceSnapshot()
 	price.PricingUnit = "per_token"
 
-	_, err := (Service{}).Calculate(Usage{PromptTokens: 10, TotalTokens: 10}, price)
+	_, err := (Service{}).CalculateCustomerCharge(Usage{PromptTokens: 10, TotalTokens: 10}, price)
 	if !errors.Is(err, ErrUnsupportedPricingUnit) {
 		t.Fatalf("expected ErrUnsupportedPricingUnit, got %v", err)
 	}
 }
 
-// TestCalculateRejectsUnsupportedFormula 验证不支持的公式版本不会被错误地按 token_v1 计算。
-func TestCalculateRejectsUnsupportedFormula(t *testing.T) {
-	price := defaultPriceSnapshot()
+// TestCalculateCustomerChargeRejectsUnsupportedFormula 验证不支持的公式版本不会被错误地按 token_v1 计算。
+func TestCalculateCustomerChargeRejectsUnsupportedFormula(t *testing.T) {
+	price := defaultCustomerPriceSnapshot()
 	price.FormulaVersion = "token_v2"
 
-	_, err := (Service{}).Calculate(Usage{PromptTokens: 10, TotalTokens: 10}, price)
+	_, err := (Service{}).CalculateCustomerCharge(Usage{PromptTokens: 10, TotalTokens: 10}, price)
 	if !errors.Is(err, ErrUnsupportedFormula) {
 		t.Fatalf("expected ErrUnsupportedFormula, got %v", err)
 	}

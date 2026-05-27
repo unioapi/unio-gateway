@@ -248,7 +248,7 @@ const (
 	// CodeBillingInvalidUsage 表示 usage token 数量不满足计费约束。
 	CodeBillingInvalidUsage Code = "billing_invalid_usage"
 
-	// CodeBillingInvalidPrice 表示价格快照缺少必需价格或价格非法。
+	// CodeBillingInvalidPrice 表示客户售价或 provider 成本单价快照缺少必需单价或单价非法。
 	CodeBillingInvalidPrice Code = "billing_invalid_price"
 
 	// CodeBillingUnsupportedPricingUnit 表示不支持当前计价单位。

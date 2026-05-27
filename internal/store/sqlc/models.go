@@ -35,6 +35,23 @@ type Channel struct {
 	UpdatedAt     pgtype.Timestamptz
 }
 
+type ChannelCostPrice struct {
+	ID                  int64
+	ChannelID           int64
+	ModelID             int64
+	Currency            string
+	PricingUnit         string
+	InputCost           pgtype.Numeric
+	OutputCost          pgtype.Numeric
+	CachedInputCost     pgtype.Numeric
+	ReasoningOutputCost pgtype.Numeric
+	Status              string
+	EffectiveFrom       pgtype.Timestamptz
+	EffectiveTo         pgtype.Timestamptz
+	CreatedAt           pgtype.Timestamptz
+	UpdatedAt           pgtype.Timestamptz
+}
+
 type ChannelModel struct {
 	ID            int64
 	ChannelID     int64
@@ -43,6 +60,29 @@ type ChannelModel struct {
 	Status        string
 	CreatedAt     pgtype.Timestamptz
 	UpdatedAt     pgtype.Timestamptz
+}
+
+type CostSnapshot struct {
+	ID                        int64
+	RequestRecordID           int64
+	CostPriceID               int64
+	ProviderID                int64
+	ChannelID                 int64
+	ModelID                   int64
+	UpstreamModel             string
+	Currency                  string
+	PricingUnit               string
+	InputCost                 pgtype.Numeric
+	OutputCost                pgtype.Numeric
+	CachedInputCost           pgtype.Numeric
+	ReasoningOutputCost       pgtype.Numeric
+	InputCostAmount           pgtype.Numeric
+	OutputCostAmount          pgtype.Numeric
+	CachedInputCostAmount     pgtype.Numeric
+	ReasoningOutputCostAmount pgtype.Numeric
+	TotalCostAmount           pgtype.Numeric
+	FormulaVersion            string
+	CreatedAt                 pgtype.Timestamptz
 }
 
 type LedgerBillingException struct {

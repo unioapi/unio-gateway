@@ -247,7 +247,7 @@ sqlc 测试已覆盖 request/attempt 终态幂等和非法覆盖场景。
 <a id="task-7-20-cost-snapshot"></a>
 ### TASK-7.20 成本价与毛利审计
 
-状态：todo
+状态：in_progress
 
 定价原则：
 
@@ -264,6 +264,22 @@ sqlc 测试已覆盖 request/attempt 终态幂等和非法覆盖场景。
 3. 支持按 channel/provider 分析毛利和 fallback 成本。
 4. 第一版后台直接维护明确金额，不做倍率系统。
 5. 历史账单复算以 price snapshot 和 cost snapshot 为准。
+
+已完成：
+
+```text
+channel_cost_prices 表已建立，用 channel + model 表达 provider/channel 成本价。
+cost_snapshots 表已建立，用请求级事实保存成本单价副本和实际成本金额。
+channels 已增加 (id, provider_id) 唯一约束，支持 cost_snapshots 校验 channel/provider 归属一致。
+billing 包已拆分客户售价计算和 provider 成本计算的命名与类型，避免把成本价快照伪装成客户售价快照。
+```
+
+仍需完成：
+
+```text
+SettleSuccessfulChat 还需要查询 active channel_cost_prices、计算 provider cost，并在同一笔 settlement 事务里写入 cost_snapshots。
+重复 settlement 成功重放时还需要校验既有 cost_snapshots 一致性。
+```
 
 关联 GAP：
 

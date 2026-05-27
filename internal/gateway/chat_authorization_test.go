@@ -29,16 +29,16 @@ func (s *chatAuthorizationPriceStore) FindActivePriceForModel(ctx context.Contex
 }
 
 type chatAuthorizationBilling struct {
-	estimate   billing.AuthorizationEstimate
-	price      billing.PriceSnapshot
-	settlement billing.Settlement
-	err        error
+	estimate billing.AuthorizationEstimate
+	price    billing.CustomerPriceSnapshot
+	charge   billing.CustomerCharge
+	err      error
 }
 
-func (b *chatAuthorizationBilling) EstimateAuthorizationAmount(estimate billing.AuthorizationEstimate, price billing.PriceSnapshot) (billing.Settlement, error) {
+func (b *chatAuthorizationBilling) EstimateAuthorizationAmount(estimate billing.AuthorizationEstimate, price billing.CustomerPriceSnapshot) (billing.CustomerCharge, error) {
 	b.estimate = estimate
 	b.price = price
-	return b.settlement, b.err
+	return b.charge, b.err
 }
 
 type chatAuthorizationLedger struct {
@@ -98,7 +98,7 @@ func TestChatAuthorizationUsesAdapterInputTokenizer(t *testing.T) {
 		PricingUnit: billing.PricingUnitPer1MTokens,
 	}}
 	billingService := &chatAuthorizationBilling{
-		settlement: billing.Settlement{Amount: amount, Currency: "USD", FormulaVersion: billing.FormulaVersionV1},
+		charge: billing.CustomerCharge{Amount: amount, Currency: "USD", FormulaVersion: billing.FormulaVersionV1},
 	}
 	ledgerService := &chatAuthorizationLedger{
 		reservation: ledger.Reservation{

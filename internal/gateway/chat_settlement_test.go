@@ -24,10 +24,10 @@ import (
 
 // fakeChatBillingCalculator 是 chat settlement 测试使用的 billing calculator 替身。
 type fakeChatBillingCalculator struct {
-	usages     []billing.Usage
-	prices     []billing.PriceSnapshot
-	settlement billing.Settlement
-	err        error
+	usages []billing.Usage
+	prices []billing.CustomerPriceSnapshot
+	charge billing.CustomerCharge
+	err    error
 }
 
 // fakeChatLedgerCapturer 是 chat settlement 测试使用的 ledger reservation 替身。
@@ -38,15 +38,15 @@ type fakeChatLedgerCapturer struct {
 	err           error
 }
 
-// Calculate 记录 billing 入参，并返回测试预设结算结果。
-func (c *fakeChatBillingCalculator) Calculate(usage billing.Usage, price billing.PriceSnapshot) (billing.Settlement, error) {
+// CalculateCustomerCharge 记录 billing 入参，并返回测试预设客户扣费结果。
+func (c *fakeChatBillingCalculator) CalculateCustomerCharge(usage billing.Usage, price billing.CustomerPriceSnapshot) (billing.CustomerCharge, error) {
 	c.usages = append(c.usages, usage)
 	c.prices = append(c.prices, price)
 	if c.err != nil {
-		return billing.Settlement{}, c.err
+		return billing.CustomerCharge{}, c.err
 	}
 
-	return c.settlement, nil
+	return c.charge, nil
 }
 
 // CaptureWithQueries 记录事务内 ledger capture 参数，并返回测试预设错误。
@@ -409,7 +409,7 @@ func insertChatSettlementModel(t *testing.T, ctx context.Context, pool *pgxpool.
 // chatSettlementBilling 创建测试用 billing calculator。
 func chatSettlementBilling(amount pgtype.Numeric) *fakeChatBillingCalculator {
 	return &fakeChatBillingCalculator{
-		settlement: billing.Settlement{
+		charge: billing.CustomerCharge{
 			Amount:         amount,
 			Currency:       "USD",
 			FormulaVersion: billing.FormulaVersionV1,
@@ -418,8 +418,8 @@ func chatSettlementBilling(amount pgtype.Numeric) *fakeChatBillingCalculator {
 }
 
 // chatSettlementAuthorizationPrice 返回 seed 中创建价格对应的 billing 快照。
-func chatSettlementAuthorizationPrice() billing.PriceSnapshot {
-	return billing.PriceSnapshot{
+func chatSettlementAuthorizationPrice() billing.CustomerPriceSnapshot {
+	return billing.CustomerPriceSnapshot{
 		Currency:             "USD",
 		PricingUnit:          billing.PricingUnitPer1MTokens,
 		InputPrice:           testNumeric(2_0000000000, -10),

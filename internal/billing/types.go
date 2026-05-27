@@ -11,8 +11,8 @@ type Usage struct {
 	ReasoningTokens  int64
 }
 
-// PriceSnapshot 表示一次请求结算时冻结下来的价格副本。
-type PriceSnapshot struct {
+// CustomerPriceSnapshot 表示一次请求结算时冻结下来的客户侧售价副本。
+type CustomerPriceSnapshot struct {
 	Currency             string
 	PricingUnit          string
 	InputPrice           pgtype.Numeric
@@ -22,8 +22,30 @@ type PriceSnapshot struct {
 	FormulaVersion       string
 }
 
-// Settlement 表示 billing service 计算出来的结算结果。
-type Settlement struct {
+// ProviderCostSnapshot 表示一次请求结算时冻结下来的 provider/channel 成本价副本。
+type ProviderCostSnapshot struct {
+	Currency            string
+	PricingUnit         string
+	InputCost           pgtype.Numeric
+	OutputCost          pgtype.Numeric
+	CachedInputCost     pgtype.Numeric
+	ReasoningOutputCost pgtype.Numeric
+	FormulaVersion      string
+}
+
+// ProviderCost 表示 billing service 计算出来的平台上游成本结果。
+type ProviderCost struct {
+	InputCostAmount           pgtype.Numeric
+	OutputCostAmount          pgtype.Numeric
+	CachedInputCostAmount     pgtype.Numeric
+	ReasoningOutputCostAmount pgtype.Numeric
+	TotalCostAmount           pgtype.Numeric
+	Currency                  string
+	FormulaVersion            string
+}
+
+// CustomerCharge 表示 billing service 计算出来的客户侧扣费结果。
+type CustomerCharge struct {
 	Amount         pgtype.Numeric
 	Currency       string
 	FormulaVersion string

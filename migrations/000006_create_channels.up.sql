@@ -30,6 +30,10 @@ CREATE TABLE channels (
     -- updated_at: 记录更新时间。--
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 
+    -- channel ID 与 provider 组合需要支持下游账务事实复合引用。--
+    CONSTRAINT uq_channels_id_provider
+        UNIQUE (id, provider_id),
+
     -- 同一 provider 下 channel 名称不能重复。--
     UNIQUE (provider_id, name)
 );

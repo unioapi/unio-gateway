@@ -1,6 +1,6 @@
 # Project Status
 
-更新时间：2026-05-26
+更新时间：2026-05-27
 
 实现主线：
 
@@ -12,8 +12,8 @@
 当前协作焦点：
 
 ```text
-阶段 7 billing 拆分、ledger reservation、冻结金额估算和 gateway authorization baseline 已完成。
-TASK-7.21 已完成 safe/internal error 和 usage source 审计；GAP-7-005、GAP-7-008 已关闭。GAP-7-007 仍保留为 worker recovery 阻断项。
+阶段 7 TASK-7.20 已开始：provider/channel 成本价 schema、cost snapshot schema、sqlc 查询和 billing 客户售价/成本价语义拆分已完成。
+下一步仍在 GAP-7-009：把成本价查询、provider cost 计算和 cost_snapshots 写入接入 settlement。GAP-7-007 仍保留为 worker recovery 阻断项。
 ```
 
 说明：
@@ -45,6 +45,7 @@ Release blockers 表示公开生产前必须关闭，不等于每次学习或复
 15. 阶段 7 request/attempt 状态机守卫已完成：`request_records` 和 `request_attempts` 终态不会被并发补偿或重复更新覆盖，重复终态更新会读回第一次终态事实；`GAP-7-003` 已关闭并移出 release blockers。
 16. 阶段 7 settlement 成功重放检查已完成：重复 `SettleSuccessfulChat` 会锁定 request，已成功请求只校验既有 usage、price snapshot、reservation、ledger 和 write-off 事实，一致才幂等成功。
 17. 阶段 7 外部事务内 debit 幂等重入已完成：`DebitWithQueries` 在扣余额前按 ledger entry `idempotency_key` 获取 transaction-level advisory lock；`GAP-7-012` 已关闭并移出 release blockers。
+18. 阶段 7 成本价与毛利审计已开始：`channel_cost_prices`、`cost_snapshots` schema 与查询已落地，billing 包已拆分客户售价计算和 provider 成本计算语义；`GAP-7-009` 仍需继续接入 settlement 写入请求级成本快照。
 
 重要产品判断：
 
@@ -60,7 +61,7 @@ Release blockers 表示公开生产前必须关闭，不等于每次学习或复
 go test ./...
 ```
 
-最近一次验证通过：2026-05-26。
+最近一次验证通过：2026-05-27。本次收尾只更新交接文档，提交前按要求未重新运行测试。
 
 ## 阶段总览
 
@@ -72,7 +73,7 @@ go test ./...
 | 阶段 4 | [OpenAI-compatible API](chapters/phase-04-openai-compatible-api/STATUS.md) | partial | `/v1/models`、`/v1/chat/completions`、SSE 基础入口、严格 JSON 和 Chat DTO text-only 校验已完成；project 模型可见性和 SSE 写出后观测随阶段 6/7/8 收口。 |
 | 阶段 5 | [Adapter 边界](chapters/phase-05-adapter-boundary/STATUS.md) | partial | adapter 接口、OpenAI 非流式/流式、usage 映射、当前 HTTP DTO 可透传参数 contract 和项目级 SSE event reader 已完成；provider error metadata 进入阶段 8 观测主线。 |
 | 阶段 6 | [模型与渠道](chapters/phase-06-model-channel-routing/STATUS.md) | done | provider/channel/model/routing/fallback、project 模型 allow-list/deny-list、adapter/routing/gateway/http/server app bootstrap 和启动期 provider.adapter preflight 已接入；credential 正式解析和 provider/project 后台策略推迟到阶段 9，预算约束推迟到阶段 7。 |
-| 阶段 7 | [计费与账本](chapters/phase-07-billing-ledger/STATUS.md) | in_progress | request/attempt/usage/ledger/settlement、stream final usage、ledger reservation、billing 冻结金额估算、gateway authorization baseline、部分余额授权、平台差额核销、无 final usage 风险敞口记录、输入 token 估算、request/attempt 状态机守卫、settlement 成功重放检查、外部事务内 debit 幂等重入、usage source 审计和 safe/internal error 审计已完成；worker recovery、成本快照和价格窗口仍未完成。 |
+| 阶段 7 | [计费与账本](chapters/phase-07-billing-ledger/STATUS.md) | in_progress | request/attempt/usage/ledger/settlement、stream final usage、ledger reservation、billing 冻结金额估算、gateway authorization baseline、部分余额授权、平台差额核销、无 final usage 风险敞口记录、输入 token 估算、request/attempt 状态机守卫、settlement 成功重放检查、外部事务内 debit 幂等重入、usage source 审计和 safe/internal error 审计已完成；成本价/cost snapshot schema 与 billing 成本计算语义已落地；worker recovery、settlement 写 cost snapshot 和价格窗口仍未完成。 |
 | 阶段 8 | [可观测性与稳定性](chapters/phase-08-observability-stability/STATUS.md) | planned | 尚未正式进入。当前只有少量 adapter metadata 相关前置 TODO。 |
 | 阶段 9 | [后台管理](chapters/phase-09-admin/STATUS.md) | planned | 尚未正式进入。进入前必须先处理 credential resolver 和后台管理边界。 |
 
@@ -89,6 +90,6 @@ go test ./...
 
 阶段 7 下一小节目标：
 
-1. 继续推进 [GAP-7-009](production/TODO_REGISTER.md#gap-7-009) 成本价和 cost snapshot；第一版不支持倍率，账务核心直接落明确金额和请求级快照。
+1. 继续推进 [GAP-7-009](production/TODO_REGISTER.md#gap-7-009) 成本价和 cost snapshot：下一步把 active 成本价查询、provider cost 计算和 `cost_snapshots` 写入接入 settlement。
 2. 继续推进 [GAP-7-010](production/TODO_REGISTER.md#gap-7-010) 价格生效窗口约束。
 3. 后续进入 worker/recovery 线时处理 GAP-7-007。
