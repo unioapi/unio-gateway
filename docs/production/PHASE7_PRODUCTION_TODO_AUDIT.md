@@ -454,7 +454,7 @@ P1
 位置：
 
 ```text
-migrations/000012_create_prices/000012_create_prices.up.sql:2
+migrations/000012_create_prices.up.sql:2
 ```
 
 新增 TODO：
@@ -489,7 +489,7 @@ P1
 位置：
 
 ```text
-migrations/000012_create_prices/000012_create_prices.up.sql:24
+migrations/000012_create_prices.up.sql:24
 ```
 
 新增 TODO：

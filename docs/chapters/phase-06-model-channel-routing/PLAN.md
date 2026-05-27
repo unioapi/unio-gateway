@@ -16,10 +16,10 @@
 
 | 文件 | 作用 |
 | --- | --- |
-| [migrations/000005_create_providers/000005_create_providers.up.sql](../../../migrations/000005_create_providers/000005_create_providers.up.sql) | provider schema。 |
-| [migrations/000006_create_channels/000006_create_channels.up.sql](../../../migrations/000006_create_channels/000006_create_channels.up.sql) | channel schema。 |
-| [migrations/000007_create_models/000007_create_models.up.sql](../../../migrations/000007_create_models/000007_create_models.up.sql) | model schema。 |
-| [migrations/000008_create_channel_models/000008_create_channel_models.up.sql](../../../migrations/000008_create_channel_models/000008_create_channel_models.up.sql) | channel-model mapping schema。 |
+| [migrations/000005_create_providers.up.sql](../../../migrations/000005_create_providers.up.sql) | provider schema。 |
+| [migrations/000006_create_channels.up.sql](../../../migrations/000006_create_channels.up.sql) | channel schema。 |
+| [migrations/000007_create_models.up.sql](../../../migrations/000007_create_models.up.sql) | model schema。 |
+| [migrations/000008_create_channel_models.up.sql](../../../migrations/000008_create_channel_models.up.sql) | channel-model mapping schema。 |
 | [sql/queries/models.sql](../../../sql/queries/models.sql) | `/v1/models` 和模型存在性查询。 |
 | [sql/queries/channel_models.sql](../../../sql/queries/channel_models.sql) | routing 候选查询。 |
 | [sql/queries/project_model_policies.sql](../../../sql/queries/project_model_policies.sql) | project 模型可见性策略查询。 |

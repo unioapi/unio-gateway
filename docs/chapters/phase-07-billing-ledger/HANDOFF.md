@@ -191,10 +191,10 @@ request succeeded
 10. `sql/queries/ledger_entries.sql`
 11. `sql/queries/ledger_reservations.sql`
 12. `sql/queries/ledger_billing_exceptions.sql`
-13. `migrations/000014_create_user_balances/000014_create_user_balances.up.sql`
-14. `migrations/000015_create_ledger_entries/000015_create_ledger_entries.up.sql`
-15. `migrations/000017_create_ledger_reservations/000017_create_ledger_reservations.up.sql`
-16. `migrations/000018_create_ledger_billing_exceptions/000018_create_ledger_billing_exceptions.up.sql`
+13. `migrations/000014_create_user_balances.up.sql`
+14. `migrations/000015_create_ledger_entries.up.sql`
+15. `migrations/000017_create_ledger_reservations.up.sql`
+16. `migrations/000018_create_ledger_billing_exceptions.up.sql`
 
 ## 注意事项
 

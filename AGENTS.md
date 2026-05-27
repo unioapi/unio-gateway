@@ -347,14 +347,12 @@ Provider / upstream 错误规则：
 
 Migration 文件规则：
 
-- `migrations` 必须按“一张表一个文件夹”组织。
-- 文件夹命名必须使用 `00000N_create_表名`。
-- 文件夹内必须包含同名 `.up.sql` 和 `.down.sql`，例如：
+- `migrations` 必须按“一张表一组 up/down 文件”组织，直接平铺在 `migrations/` 目录下，不再为每张表额外建文件夹。
+- 文件命名必须使用 `00000N_create_表名.up.sql` 和 `00000N_create_表名.down.sql`，例如：
 
 ```text
-migrations/000015_create_ledger_entries/
-  000015_create_ledger_entries.up.sql
-  000015_create_ledger_entries.down.sql
+migrations/000015_create_ledger_entries.up.sql
+migrations/000015_create_ledger_entries.down.sql
 ```
 
 - 一个表 migration 文件只能创建、约束、索引和删除当前表。
@@ -367,7 +365,7 @@ migrations/000015_create_ledger_entries/
 - 不要因为整理 migration 删除已有 production TODO。
 - 每次改完一个表 migration 后，必须检查它是否仍符合以上规则。
 - 调整 migration 结构或表定义时，必须先对当前本地库执行一次 down，再修改文件，最后执行 up 验证。
-- `sqlc.yaml` 的 schema 路径必须能覆盖嵌套 migration 目录；当前使用 `migrations/**/*.up.sql`。
+- `sqlc.yaml` 的 schema 路径只读取 up migration；当前使用 `migrations/*.up.sql`。
 
 SQL query 文件规则：
 
