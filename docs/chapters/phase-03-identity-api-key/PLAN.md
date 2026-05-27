@@ -16,8 +16,12 @@
 
 | 文件 | 作用 |
 | --- | --- |
-| [migrations/000002_create_identity_tables.up.sql](../../../migrations/000002_create_identity_tables.up.sql) | user/project/API key schema。 |
-| [sql/queries/identity.sql](../../../sql/queries/identity.sql) | identity 相关 SQL。 |
+| [migrations/000002_create_users/000002_create_users.up.sql](../../../migrations/000002_create_users/000002_create_users.up.sql) | user schema。 |
+| [migrations/000003_create_projects/000003_create_projects.up.sql](../../../migrations/000003_create_projects/000003_create_projects.up.sql) | project schema。 |
+| [migrations/000004_create_api_keys/000004_create_api_keys.up.sql](../../../migrations/000004_create_api_keys/000004_create_api_keys.up.sql) | API key schema。 |
+| [sql/queries/users.sql](../../../sql/queries/users.sql) | user 相关 SQL。 |
+| [sql/queries/projects.sql](../../../sql/queries/projects.sql) | project 相关 SQL。 |
+| [sql/queries/api_keys.sql](../../../sql/queries/api_keys.sql) | API key 相关 SQL。 |
 | [internal/apikey](../../../internal/apikey) | API key 生成和创建服务。 |
 | [internal/auth](../../../internal/auth) | API key 认证和 request auth context。 |
 | [internal/middleware/api_key_auth.go](../../../internal/middleware/api_key_auth.go) | HTTP API key auth middleware。 |

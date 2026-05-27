@@ -1,4 +1,5 @@
 -- name: CreatePrice :one
+-- CreatePrice 创建模型客户侧售卖价配置。
 INSERT INTO prices (
     model_id,
     currency,
@@ -39,6 +40,7 @@ RETURNING
     updated_at;
 
 -- name: FindActivePriceForModel :one
+-- FindActivePriceForModel 查找指定模型在指定时间生效的客户侧售卖价。
 SELECT
     id,
     model_id,
@@ -63,55 +65,3 @@ WHERE model_id = sqlc.arg(model_id)
     )
 ORDER BY effective_from DESC, id DESC
 LIMIT 1;
-
--- name: CreatePriceSnapshot :one
-INSERT INTO price_snapshots (
-    request_record_id,
-    price_id,
-    currency,
-    pricing_unit,
-    input_price,
-    output_price,
-    cached_input_price,
-    reasoning_output_price,
-    formula_version
-)
-VALUES (
-           sqlc.arg(request_record_id),
-           sqlc.arg(price_id),
-           sqlc.arg(currency),
-           sqlc.arg(pricing_unit),
-           sqlc.arg(input_price),
-           sqlc.arg(output_price),
-           sqlc.arg(cached_input_price),
-           sqlc.arg(reasoning_output_price),
-           sqlc.arg(formula_version)
-       )
-RETURNING
-    id,
-    request_record_id,
-    price_id,
-    currency,
-    pricing_unit,
-    input_price,
-    output_price,
-    cached_input_price,
-    reasoning_output_price,
-    formula_version,
-    created_at;
-
--- name: GetPriceSnapshotByRequest :one
-SELECT
-    id,
-    request_record_id,
-    price_id,
-    currency,
-    pricing_unit,
-    input_price,
-    output_price,
-    cached_input_price,
-    reasoning_output_price,
-    formula_version,
-    created_at
-FROM price_snapshots
-WHERE request_record_id = sqlc.arg(request_record_id);

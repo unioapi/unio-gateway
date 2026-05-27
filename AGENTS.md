@@ -343,6 +343,63 @@ Provider / upstream 错误规则：
 - 计费和账本操作显式使用事务。
 - 金额、余额、token 计费数据不要用 float 存储。
 
+## Migration 与 SQL Query 组织规则
+
+Migration 文件规则：
+
+- `migrations` 必须按“一张表一个文件夹”组织。
+- 文件夹命名必须使用 `00000N_create_表名`。
+- 文件夹内必须包含同名 `.up.sql` 和 `.down.sql`，例如：
+
+```text
+migrations/000015_create_ledger_entries/
+  000015_create_ledger_entries.up.sql
+  000015_create_ledger_entries.down.sql
+```
+
+- 一个表 migration 文件只能创建、约束、索引和删除当前表。
+- 与该表相关的 `INDEX` 必须放在该表自己的 `.up.sql` 文件中。
+- 不允许在某个表文件中用 `ALTER TABLE` 补充其他表字段或约束。
+- 开发阶段数据库没有正式数据时，字段或约束变更应直接修改对应表的源 migration 文件。
+- 每个表必须有一句话表注释，放在 `CREATE TABLE` 上方。
+- 每个字段定义上方必须有字段说明。
+- 表级约束必须有业务意图注释；多个约束之间必须用空行隔开。
+- 不要因为整理 migration 删除已有 production TODO。
+- 每次改完一个表 migration 后，必须检查它是否仍符合以上规则。
+- 调整 migration 结构或表定义时，必须先对当前本地库执行一次 down，再修改文件，最后执行 up 验证。
+- `sqlc.yaml` 的 schema 路径必须能覆盖嵌套 migration 目录；当前使用 `migrations/**/*.up.sql`。
+
+SQL query 文件规则：
+
+- `sql/queries` 必须按“一张表一个文件”组织。
+- 文件名必须使用主表表名，例如 `request_records.sql`、`ledger_entries.sql`。
+- 每个 query 文件只放该表作为主表的查询。
+- 如果查询涉及跨表 join，以“主业务对象 / 主返回对象 / 被更新对象”为主表归属。
+  - 例如 API key 查询 join projects，但主对象是 API key，应放在 `api_keys.sql`。
+  - routing 候选以 channel-model 映射为主，应放在 `channel_models.sql`。
+  - 模型列表以模型为主，应放在 `models.sql`。
+- 不再使用 `identity.sql`、`ledger.sql`、`routing.sql` 这类按模块大类混放的 query 文件。
+- 每个 sqlc query 必须在 `-- name:` 下一行写方法注释。
+- 方法注释必须以生成的 Go 方法名开头，因为 sqlc 会把它转换成 Go 方法注释，例如：
+
+```sql
+-- name: MarkRequestSucceeded :one
+-- MarkRequestSucceeded 将 running 请求原子推进到 succeeded，重复 succeeded 返回第一次成功事实。
+WITH updated AS (
+    UPDATE request_records
+        SET status = 'succeeded'
+        WHERE request_records.id = sqlc.arg(request_record_id)
+            AND request_records.status = 'running'
+        RETURNING request_records.*
+)
+SELECT *
+FROM updated;
+```
+
+- `-- name:` 行必须保持 sqlc 标准格式，不能在末尾额外追加 `--`。
+- 重整 query 文件后必须执行 `sqlc generate`，并删除不再由当前 query 文件生成的旧 `.sql.go` 文件。
+- query 重整后必须运行 `go test ./...`。
+
 ## 第三方库
 
 商业项目不以“少用第三方库”为目标。

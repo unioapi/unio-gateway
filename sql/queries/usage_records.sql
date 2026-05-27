@@ -1,4 +1,5 @@
 -- name: CreateUsageRecord :one
+-- CreateUsageRecord 创建一次请求最终用于计费和审计的 usage 记录。
 INSERT INTO usage_records (
     request_record_id,
     prompt_tokens,
@@ -29,6 +30,7 @@ RETURNING
     created_at;
 
 -- name: GetUsageRecordByRequest :one
+-- GetUsageRecordByRequest 按请求 ID 读取 usage 记录。
 SELECT
     id,
     request_record_id,

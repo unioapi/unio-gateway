@@ -65,6 +65,7 @@ type CreatePriceParams struct {
 	EffectiveTo          pgtype.Timestamptz
 }
 
+// CreatePrice 创建模型客户侧售卖价配置。
 func (q *Queries) CreatePrice(ctx context.Context, arg CreatePriceParams) (Price, error) {
 	row := q.db.QueryRow(ctx, createPrice,
 		arg.ModelID,
@@ -93,84 +94,6 @@ func (q *Queries) CreatePrice(ctx context.Context, arg CreatePriceParams) (Price
 		&i.EffectiveTo,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-	)
-	return i, err
-}
-
-const createPriceSnapshot = `-- name: CreatePriceSnapshot :one
-INSERT INTO price_snapshots (
-    request_record_id,
-    price_id,
-    currency,
-    pricing_unit,
-    input_price,
-    output_price,
-    cached_input_price,
-    reasoning_output_price,
-    formula_version
-)
-VALUES (
-           $1,
-           $2,
-           $3,
-           $4,
-           $5,
-           $6,
-           $7,
-           $8,
-           $9
-       )
-RETURNING
-    id,
-    request_record_id,
-    price_id,
-    currency,
-    pricing_unit,
-    input_price,
-    output_price,
-    cached_input_price,
-    reasoning_output_price,
-    formula_version,
-    created_at
-`
-
-type CreatePriceSnapshotParams struct {
-	RequestRecordID      int64
-	PriceID              pgtype.Int8
-	Currency             string
-	PricingUnit          string
-	InputPrice           pgtype.Numeric
-	OutputPrice          pgtype.Numeric
-	CachedInputPrice     pgtype.Numeric
-	ReasoningOutputPrice pgtype.Numeric
-	FormulaVersion       string
-}
-
-func (q *Queries) CreatePriceSnapshot(ctx context.Context, arg CreatePriceSnapshotParams) (PriceSnapshot, error) {
-	row := q.db.QueryRow(ctx, createPriceSnapshot,
-		arg.RequestRecordID,
-		arg.PriceID,
-		arg.Currency,
-		arg.PricingUnit,
-		arg.InputPrice,
-		arg.OutputPrice,
-		arg.CachedInputPrice,
-		arg.ReasoningOutputPrice,
-		arg.FormulaVersion,
-	)
-	var i PriceSnapshot
-	err := row.Scan(
-		&i.ID,
-		&i.RequestRecordID,
-		&i.PriceID,
-		&i.Currency,
-		&i.PricingUnit,
-		&i.InputPrice,
-		&i.OutputPrice,
-		&i.CachedInputPrice,
-		&i.ReasoningOutputPrice,
-		&i.FormulaVersion,
-		&i.CreatedAt,
 	)
 	return i, err
 }
@@ -207,6 +130,7 @@ type FindActivePriceForModelParams struct {
 	AtTime  pgtype.Timestamptz
 }
 
+// FindActivePriceForModel 查找指定模型在指定时间生效的客户侧售卖价。
 func (q *Queries) FindActivePriceForModel(ctx context.Context, arg FindActivePriceForModelParams) (Price, error) {
 	row := q.db.QueryRow(ctx, findActivePriceForModel, arg.ModelID, arg.AtTime)
 	var i Price
@@ -224,42 +148,6 @@ func (q *Queries) FindActivePriceForModel(ctx context.Context, arg FindActivePri
 		&i.EffectiveTo,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-	)
-	return i, err
-}
-
-const getPriceSnapshotByRequest = `-- name: GetPriceSnapshotByRequest :one
-SELECT
-    id,
-    request_record_id,
-    price_id,
-    currency,
-    pricing_unit,
-    input_price,
-    output_price,
-    cached_input_price,
-    reasoning_output_price,
-    formula_version,
-    created_at
-FROM price_snapshots
-WHERE request_record_id = $1
-`
-
-func (q *Queries) GetPriceSnapshotByRequest(ctx context.Context, requestRecordID int64) (PriceSnapshot, error) {
-	row := q.db.QueryRow(ctx, getPriceSnapshotByRequest, requestRecordID)
-	var i PriceSnapshot
-	err := row.Scan(
-		&i.ID,
-		&i.RequestRecordID,
-		&i.PriceID,
-		&i.Currency,
-		&i.PricingUnit,
-		&i.InputPrice,
-		&i.OutputPrice,
-		&i.CachedInputPrice,
-		&i.ReasoningOutputPrice,
-		&i.FormulaVersion,
-		&i.CreatedAt,
 	)
 	return i, err
 }

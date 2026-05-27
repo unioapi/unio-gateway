@@ -15,6 +15,7 @@ VALUES ($1)
 RETURNING id, name, created_at
 `
 
+// CreateSchemaHealthCheck 创建一条 schema 健康检查记录。
 func (q *Queries) CreateSchemaHealthCheck(ctx context.Context, name string) (SchemaHealthCheck, error) {
 	row := q.db.QueryRow(ctx, createSchemaHealthCheck, name)
 	var i SchemaHealthCheck
@@ -28,6 +29,7 @@ FROM schema_health_checks
 WHERE name = $1
 `
 
+// GetSchemaHealthCheckByName 按名称读取 schema 健康检查记录。
 func (q *Queries) GetSchemaHealthCheckByName(ctx context.Context, name string) (SchemaHealthCheck, error) {
 	row := q.db.QueryRow(ctx, getSchemaHealthCheckByName, name)
 	var i SchemaHealthCheck

@@ -143,7 +143,7 @@ go test ./internal/store/sqlc
 2. 引入正式 migration runner 或 schema version checker。
 3. 启动前检查当前 schema version。
 4. version 不匹配时拒绝启动。
-5. 决定 [000001_create_schema_health_checks.up.sql](../../../migrations/000001_create_schema_health_checks.up.sql) 的长期定位。
+5. 决定 [000001_create_schema_health_checks.up.sql](../../../migrations/000001_create_schema_health_checks/000001_create_schema_health_checks.up.sql) 的长期定位。
 
 常见坑：
 
@@ -178,7 +178,7 @@ go test ./internal/store/sqlc
 
 涉及文件：
 
-1. [migrations/000002_create_identity_tables.up.sql](../../../migrations/000002_create_identity_tables.up.sql)
+1. [migrations/000002_create_users/000002_create_users.up.sql](../../../migrations/000002_create_users/000002_create_users.up.sql)
 2. [sql/queries](../../../sql/queries)
 
 关联 GAP：

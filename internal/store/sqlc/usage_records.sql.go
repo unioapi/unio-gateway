@@ -50,6 +50,7 @@ type CreateUsageRecordParams struct {
 	Source           string
 }
 
+// CreateUsageRecord 创建一次请求最终用于计费和审计的 usage 记录。
 func (q *Queries) CreateUsageRecord(ctx context.Context, arg CreateUsageRecordParams) (UsageRecord, error) {
 	row := q.db.QueryRow(ctx, createUsageRecord,
 		arg.RequestRecordID,
@@ -90,6 +91,7 @@ FROM usage_records
 WHERE request_record_id = $1
 `
 
+// GetUsageRecordByRequest 按请求 ID 读取 usage 记录。
 func (q *Queries) GetUsageRecordByRequest(ctx context.Context, requestRecordID int64) (UsageRecord, error) {
 	row := q.db.QueryRow(ctx, getUsageRecordByRequest, requestRecordID)
 	var i UsageRecord

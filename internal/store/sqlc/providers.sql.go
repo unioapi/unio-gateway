@@ -25,6 +25,7 @@ type ListEnabledProviderAdaptersRow struct {
 	Adapter string
 }
 
+// ListEnabledProviderAdapters 列出启用 provider 的 adapter 注册键。
 func (q *Queries) ListEnabledProviderAdapters(ctx context.Context) ([]ListEnabledProviderAdaptersRow, error) {
 	rows, err := q.db.Query(ctx, listEnabledProviderAdapters)
 	if err != nil {
