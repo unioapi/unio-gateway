@@ -44,12 +44,12 @@ unio-web
 = OpenAI-compatible
 = opaque API key 认证
 
-/admin/*
+/admin/v1/*
 = 平台管理员调用
 = 管理 provider/channel/model/price/user/billing/audit
 = admin 登录认证
 
-/console/*
+/console/v1/*
 = 普通用户调用
 = 管理 project/api key/balance/usage/request logs
 = user 登录认证
@@ -85,22 +85,22 @@ unio-web
 - 过早微服务会引入分布式事务、RPC、服务发现、链路追踪、部署成本和运维负担。
 - 边界清晰后，模块化单体可以自然拆成服务。
 
-当前部署形态：
+当前第一大阶段部署形态：
 
 ```text
-unio-api server
-unio-api worker
+gateway-server
+worker-server
 PostgreSQL
 Redis
 ```
 
-未来可拆形态：
+全服务目标进程形态：
 
 ```text
-unio-gateway-api
-unio-admin-api
-unio-console-api
-unio-worker
+gateway-server
+admin-server
+console-server
+worker-server
 unio-web
 ```
 
@@ -112,28 +112,38 @@ unio-web
 
 ## 目录边界
 
+全服务目标目录结构、分层职责和依赖方向见 [docs/architecture/PROJECT_STRUCTURE.md](docs/architecture/PROJECT_STRUCTURE.md)。`AGENTS.md` 只保留长期目录边界原则，不维护完整目录树，避免双写漂移。
+
 第一大阶段允许围绕 `/v1/*` 使用这些后端目录：
 
 ```text
-cmd/server
-cmd/worker
-internal/httpapi
-internal/gateway
-internal/routing
-internal/adapter
-internal/modelcatalog
-internal/billing
-internal/ledger
-internal/usage
-internal/requestlog
-internal/auth
-internal/apikey
-internal/provider
-internal/channel
-internal/credential
-internal/store
-internal/redis
-internal/observability
+cmd/gateway-server
+cmd/worker-server
+internal/bootstrap
+internal/app/gatewayapi
+internal/app/gatewayapi/middleware
+internal/app/workers
+internal/service/gateway
+internal/core/routing
+internal/core/adapter
+internal/core/modelcatalog
+internal/core/billing
+internal/core/ledger
+internal/core/usage
+internal/core/requestlog
+internal/core/auth
+internal/core/apikey
+internal/core/provider
+internal/core/channel
+internal/core/credential
+internal/platform/config
+internal/platform/store
+internal/platform/redis
+internal/platform/httpx
+internal/platform/httpmw
+internal/platform/ratelimit
+internal/platform/failure
+internal/platform/observability
 migrations
 sql/queries
 docs
@@ -142,8 +152,10 @@ docs
 后续大阶段再加入：
 
 ```text
-internal/adminapi
-internal/consoleapi
+internal/app/adminapi
+internal/app/consoleapi
+internal/service/admin
+internal/service/console
 ```
 
 前端不放在 `unio-api` 长期目录中，后续独立为 `unio-web`。
@@ -287,7 +299,7 @@ Provider、channel、model、price、fallback、health 和 rate policy 属于业
 
 ## Failure 错误规范
 
-项目内部稳定错误统一使用 `internal/failure` 表达。
+项目内部稳定错误统一使用 `internal/platform/failure` 表达。
 
 基本规则：
 

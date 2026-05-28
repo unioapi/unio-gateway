@@ -17,12 +17,12 @@
 
 | 文件 | 作用 |
 | --- | --- |
-| [internal/auth](../../../internal/auth) | customer API key auth 已存在，后台 admin auth 需要独立设计。 |
-| [internal/apikey](../../../internal/apikey) | API key 管理 service。 |
-| [internal/credential/resolver.go](../../../internal/credential/resolver.go) | credential_ref 解析边界。 |
-| [internal/routing](../../../internal/routing) | 后台 channel/model 变更影响 routing。 |
-| [internal/modelcatalog](../../../internal/modelcatalog) | 后台模型可见性影响 `/v1/models`。 |
-| [internal/gateway](../../../internal/gateway) | request log 和 billing log 查询的事实来源。 |
+| [internal/core/auth](../../../internal/core/auth) | customer API key auth 已存在，后台 admin auth 需要独立设计。 |
+| [internal/core/apikey](../../../internal/core/apikey) | API key 管理 service。 |
+| [internal/core/credential/resolver.go](../../../internal/core/credential/resolver.go) | credential_ref 解析边界。 |
+| [internal/core/routing](../../../internal/core/routing) | 后台 channel/model 变更影响 routing。 |
+| [internal/core/modelcatalog](../../../internal/core/modelcatalog) | 后台模型可见性影响 `/v1/models`。 |
+| [internal/service/gateway](../../../internal/service/gateway) | request log 和 billing log 查询的事实来源。 |
 | [docs/production/DECISIONS.md](../../production/DECISIONS.md) | 关键商业语义决策。 |
 
 ## 任务

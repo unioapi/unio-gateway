@@ -3,8 +3,8 @@ package bootstrap
 import (
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/credential"
-	"github.com/ThankCat/unio-api/internal/routing"
+	"github.com/ThankCat/unio-api/internal/core/credential"
+	"github.com/ThankCat/unio-api/internal/core/routing"
 )
 
 const defaultChatRouteTimeout = 30 * time.Second

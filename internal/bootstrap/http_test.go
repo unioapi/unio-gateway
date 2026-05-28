@@ -9,18 +9,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ThankCat/unio-api/internal/config"
-	"github.com/ThankCat/unio-api/internal/httpapi"
-	"github.com/ThankCat/unio-api/internal/store/sqlc"
+	"github.com/ThankCat/unio-api/internal/app/gatewayapi"
+	"github.com/ThankCat/unio-api/internal/platform/config"
+	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
 )
 
 type fakeHTTPChatCompletionService struct{}
 
-func (s fakeHTTPChatCompletionService) CreateChatCompletion(ctx context.Context, req httpapi.ChatCompletionRequest) (*httpapi.ChatCompletionResponse, error) {
-	return &httpapi.ChatCompletionResponse{}, nil
+func (s fakeHTTPChatCompletionService) CreateChatCompletion(ctx context.Context, req gatewayapi.ChatCompletionRequest) (*gatewayapi.ChatCompletionResponse, error) {
+	return &gatewayapi.ChatCompletionResponse{}, nil
 }
 
-func (s fakeHTTPChatCompletionService) StreamChatCompletion(ctx context.Context, req httpapi.ChatCompletionRequest, emit func(httpapi.ChatCompletionStreamResponse) error) error {
+func (s fakeHTTPChatCompletionService) StreamChatCompletion(ctx context.Context, req gatewayapi.ChatCompletionRequest, emit func(gatewayapi.ChatCompletionStreamResponse) error) error {
 	return nil
 }
 

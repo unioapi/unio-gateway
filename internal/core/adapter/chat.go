@@ -1,0 +1,89 @@
+package adapter
+
+import (
+	"context"
+
+	"github.com/ThankCat/unio-api/internal/core/channel"
+)
+
+// ChatAdapter 定义聊天补全 adapter 需要提供的协议转换和上游调用能力。
+type ChatAdapter interface {
+	ChatCompletions(ctx context.Context, ch channel.Runtime, req ChatRequest) (*ChatResponse, error)
+}
+
+// StreamChatAdapter 定义聊天补全流式 adapter 能力。
+type StreamChatAdapter interface {
+	StreamChatCompletions(ctx context.Context, ch channel.Runtime, req ChatRequest, emit func(ChatStreamChunk) error) error
+}
+
+// ChatRequest 是 gateway 传给聊天补全 adapter 的内部请求 DTO。
+type ChatRequest struct {
+	Model    string
+	Messages []ChatMessage
+
+	// Temperature 控制输出随机性；nil 表示调用方没有传该参数。
+	Temperature *float64
+
+	// TopP 控制 nucleus sampling；nil 表示调用方没有传该参数。
+	TopP *float64
+
+	// MaxTokens 控制最大输出 token 数；nil 表示调用方没有传该参数。
+	MaxTokens *int
+
+	// PresencePenalty 降低重复主题倾向；nil 表示调用方没有传该参数。
+	PresencePenalty *float64
+
+	// FrequencyPenalty 降低重复词语倾向；nil 表示调用方没有传该参数。
+	FrequencyPenalty *float64
+
+	// Stop 是停止序列；nil 表示调用方没有传该参数。
+	Stop []string
+
+	// User 是终端用户标识，用于上游审计或风控；nil 表示调用方没有传该参数。
+	User *string
+}
+
+// ChatMessage 表示 adapter 层的单条聊天消息。
+type ChatMessage struct {
+	Role    string
+	Content string
+}
+
+// ChatResponse 是聊天补全 adapter 返回给 gateway 的内部响应 DTO。
+type ChatResponse struct {
+	ID      string
+	Model   string
+	Content string
+	Usage   ChatUsage
+}
+
+// ChatUsage 表示 adapter 从上游响应中解析出的 token 用量。
+type ChatUsage struct {
+	// PromptTokens 是输入 prompt token 总数。
+	PromptTokens int
+
+	// CompletionTokens 是输出 completion token 总数，包含 reasoning tokens。
+	CompletionTokens int
+
+	// TotalTokens 是本次请求总 token 数，通常等于 PromptTokens + CompletionTokens。
+	TotalTokens int
+
+	// CachedTokens 是 prompt tokens 中命中上游 prompt cache 的数量。
+	CachedTokens int
+
+	// ReasoningTokens 是 completion tokens 中用于模型内部推理的数量。
+	ReasoningTokens int
+}
+
+// ChatStreamChunk 表示 adapter 返回给 gateway 的一段聊天补全流式内容。
+type ChatStreamChunk struct {
+	ID           string
+	Model        string
+	Role         string
+	Content      string
+	FinishReason *string
+
+	// Usage 只在 provider 返回 final usage stream chunk 时设置。
+	// 普通内容 chunk 必须为 nil。
+	Usage *ChatUsage
+}

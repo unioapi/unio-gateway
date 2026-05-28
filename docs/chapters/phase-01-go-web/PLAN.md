@@ -15,13 +15,13 @@
 
 | 文件 | 作用 |
 | --- | --- |
-| [cmd/server/main.go](../../../cmd/server/main.go) | 进程入口，负责配置加载、依赖装配、HTTP server 生命周期和退出信号。 |
-| [internal/httpapi/router.go](../../../internal/httpapi/router.go) | HTTP router 组装，chi 只允许出现在这一层。 |
-| [internal/httpx/response.go](../../../internal/httpx/response.go) | JSON/error response 基础工具。 |
-| [internal/httpx/request_id.go](../../../internal/httpx/request_id.go) | 从 context 读取 correlation id 的 HTTP 辅助函数。 |
-| [internal/middleware/request_id.go](../../../internal/middleware/request_id.go) | 请求 correlation id middleware。 |
-| [internal/middleware/logger.go](../../../internal/middleware/logger.go) | HTTP structured log middleware。 |
-| [internal/middleware/recoverer.go](../../../internal/middleware/recoverer.go) | panic recovery middleware。 |
+| [cmd/gateway-server/main.go](../../../cmd/gateway-server/main.go) | 进程入口，负责配置加载、依赖装配、HTTP server 生命周期和退出信号。 |
+| [internal/app/gatewayapi/router.go](../../../internal/app/gatewayapi/router.go) | HTTP router 组装，chi 只允许出现在这一层。 |
+| [internal/platform/httpx/response.go](../../../internal/platform/httpx/response.go) | JSON/error response 基础工具。 |
+| [internal/platform/httpx/request_id.go](../../../internal/platform/httpx/request_id.go) | 从 context 读取 correlation id 的 HTTP 辅助函数。 |
+| [internal/platform/httpmw/request_id.go](../../../internal/platform/httpmw/request_id.go) | 请求 correlation id middleware。 |
+| [internal/platform/httpmw/logger.go](../../../internal/platform/httpmw/logger.go) | HTTP structured log middleware。 |
+| [internal/platform/httpmw/recoverer.go](../../../internal/platform/httpmw/recoverer.go) | panic recovery middleware。 |
 
 ## 任务
 
@@ -38,7 +38,7 @@
 
 实现内容：
 
-1. 创建 [cmd/server/main.go](../../../cmd/server/main.go)。
+1. 创建 [cmd/gateway-server/main.go](../../../cmd/gateway-server/main.go)。
 2. 使用 `chi` 创建 router，但不让 chi 类型进入业务 service。
 3. 创建 `/healthz`。
 4. 接入 `slog`。
@@ -48,7 +48,7 @@
 
 完成标准：
 
-1. `go run ./cmd/server` 能启动。
+1. `go run ./cmd/gateway-server` 能启动。
 2. `GET /healthz` 能返回成功响应。
 3. 关闭进程时能走 graceful shutdown。
 4. handler 测试不需要真实网络端口。
@@ -90,14 +90,14 @@ startup timeout 仍硬编码，readiness 状态还没有独立。
 
 涉及文件：
 
-1. [cmd/server/main.go](../../../cmd/server/main.go)
-2. [internal/config/config.go](../../../internal/config/config.go)
-3. [internal/httpapi/router.go](../../../internal/httpapi/router.go)
+1. [cmd/gateway-server/main.go](../../../cmd/gateway-server/main.go)
+2. [internal/platform/config/config.go](../../../internal/platform/config/config.go)
+3. [internal/app/gatewayapi/router.go](../../../internal/app/gatewayapi/router.go)
 
 验证方式：
 
 ```bash
-go test ./internal/config ./internal/httpapi
+go test ./internal/platform/config ./internal/app/gatewayapi
 go test ./...
 ```
 
@@ -135,14 +135,14 @@ middleware 会校验客户端 X-Request-ID 的长度和字符集。
 
 涉及文件：
 
-1. [internal/middleware/request_id.go](../../../internal/middleware/request_id.go)
-2. [internal/httpx/request_id.go](../../../internal/httpx/request_id.go)
-3. [internal/requestlog/request_id.go](../../../internal/requestlog/request_id.go)
+1. [internal/platform/httpmw/request_id.go](../../../internal/platform/httpmw/request_id.go)
+2. [internal/platform/httpx/request_id.go](../../../internal/platform/httpx/request_id.go)
+3. [internal/core/requestlog/request_id.go](../../../internal/core/requestlog/request_id.go)
 
 验证方式：
 
 ```bash
-go test ./internal/middleware ./internal/httpx ./internal/requestlog
+go test ./internal/platform/httpmw ./internal/platform/httpx ./internal/core/requestlog
 ```
 
 完成标准：

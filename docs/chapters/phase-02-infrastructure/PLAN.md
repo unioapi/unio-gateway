@@ -16,12 +16,12 @@
 
 | 文件 | 作用 |
 | --- | --- |
-| [internal/config/config.go](../../../internal/config/config.go) | 进程配置加载和默认值。 |
-| [internal/store/postgres.go](../../../internal/store/postgres.go) | PostgreSQL pool 创建和健康检查入口。 |
-| [internal/redis/client.go](../../../internal/redis/client.go) | Redis client 创建入口。 |
+| [internal/platform/config/config.go](../../../internal/platform/config/config.go) | 进程配置加载和默认值。 |
+| [internal/platform/store/postgres.go](../../../internal/platform/store/postgres.go) | PostgreSQL pool 创建和健康检查入口。 |
+| [internal/platform/redis/client.go](../../../internal/platform/redis/client.go) | Redis client 创建入口。 |
 | [migrations](../../../migrations) | 数据库结构迁移。 |
 | [sql/queries](../../../sql/queries) | sqlc 查询定义。 |
-| [internal/store/sqlc](../../../internal/store/sqlc) | sqlc 生成代码和数据库测试。 |
+| [internal/platform/store/sqlc](../../../internal/platform/store/sqlc) | sqlc 生成代码和数据库测试。 |
 
 ## 任务
 
@@ -75,14 +75,14 @@
 1. 在 config 中增加 `MaxConns`、`MinConns`。
 2. 增加 `MaxConnLifetime`、`MaxConnIdleTime`。
 3. 增加连接池 health check period。
-4. 在 [internal/store/postgres.go](../../../internal/store/postgres.go) 中使用 `pgxpool.ParseConfig` 配置 pool。
+4. 在 [internal/platform/store/postgres.go](../../../internal/platform/store/postgres.go) 中使用 `pgxpool.ParseConfig` 配置 pool。
 5. 启动阶段执行轻量 ping，失败时阻止服务启动。
 
 验证方式：
 
 ```bash
-go test ./internal/config ./internal/store
-go test ./internal/store/sqlc
+go test ./internal/platform/config ./internal/platform/store
+go test ./internal/platform/store/sqlc
 ```
 
 关联 GAP：
@@ -107,7 +107,7 @@ go test ./internal/store/sqlc
 1. 在 config 中增加 Redis dial/read/write timeout。
 2. 增加 Redis pool size。
 3. 增加 Redis retry 参数。
-4. 在 [internal/redis/client.go](../../../internal/redis/client.go) 中使用 config 注入 Redis client 连接参数。
+4. 在 [internal/platform/redis/client.go](../../../internal/platform/redis/client.go) 中使用 config 注入 Redis client 连接参数。
 5. 在 `.env.example` 中登记 Redis client 可配置项。
 6. 增加全局 key namespace，例如 `unio:dev`、`unio:prod`。
 7. rate limit Redis key 已统一拼接 namespace。
@@ -115,9 +115,9 @@ go test ./internal/store/sqlc
 
 涉及文件：
 
-1. [internal/config/config.go](../../../internal/config/config.go)
-2. [internal/redis/client.go](../../../internal/redis/client.go)
-3. [internal/ratelimit/redis_store.go](../../../internal/ratelimit/redis_store.go)
+1. [internal/platform/config/config.go](../../../internal/platform/config/config.go)
+2. [internal/platform/redis/client.go](../../../internal/platform/redis/client.go)
+3. [internal/platform/ratelimit/redis_store.go](../../../internal/platform/ratelimit/redis_store.go)
 
 关联 GAP：
 

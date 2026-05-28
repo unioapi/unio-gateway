@@ -23,10 +23,10 @@
 | [sql/queries/models.sql](../../../sql/queries/models.sql) | `/v1/models` 和模型存在性查询。 |
 | [sql/queries/channel_models.sql](../../../sql/queries/channel_models.sql) | routing 候选查询。 |
 | [sql/queries/project_model_policies.sql](../../../sql/queries/project_model_policies.sql) | project 模型可见性策略查询。 |
-| [internal/modelcatalog/catalog.go](../../../internal/modelcatalog/catalog.go) | model catalog service。 |
-| [internal/routing/router.go](../../../internal/routing/router.go) | routing service。 |
-| [internal/credential/resolver.go](../../../internal/credential/resolver.go) | credential_ref 解析边界。 |
-| [internal/channel/runtime.go](../../../internal/channel/runtime.go) | 传给 adapter 的运行时 channel 参数。 |
+| [internal/core/modelcatalog/catalog.go](../../../internal/core/modelcatalog/catalog.go) | model catalog service。 |
+| [internal/core/routing/router.go](../../../internal/core/routing/router.go) | routing service。 |
+| [internal/core/credential/resolver.go](../../../internal/core/credential/resolver.go) | credential_ref 解析边界。 |
+| [internal/core/channel/runtime.go](../../../internal/core/channel/runtime.go) | 传给 adapter 的运行时 channel 参数。 |
 
 ## 任务
 
@@ -111,14 +111,14 @@
 已完成：
 
 1. 新增 `internal/bootstrap` provider adapter preflight。
-2. adapter registry 构建已从 `cmd/server/main.go` 迁入 `internal/bootstrap`。
-3. credential resolver 和 chat routing 构建已从 `cmd/server/main.go` 迁入 `internal/bootstrap`。
-4. chat gateway、request log、settlement、billing calculator 和 ledger service 构建已从 `cmd/server/main.go` 迁入 `internal/bootstrap`。
-5. API key auth、model catalog、rate limit 和 HTTP router 构建已从 `cmd/server/main.go` 迁入 `internal/bootstrap`。
+2. adapter registry 构建已从 `cmd/gateway-server/main.go` 迁入 `internal/bootstrap`。
+3. credential resolver 和 chat routing 构建已从 `cmd/gateway-server/main.go` 迁入 `internal/bootstrap`。
+4. chat gateway、request log、settlement、billing calculator 和 ledger service 构建已从 `cmd/gateway-server/main.go` 迁入 `internal/bootstrap`。
+5. API key auth、model catalog、rate limit 和 HTTP router 构建已从 `cmd/gateway-server/main.go` 迁入 `internal/bootstrap`。
 6. 启动时读取数据库中 enabled provider 的 adapter key。
 7. 启动时校验 adapter registry 同时具备 chat 和 stream chat 能力。
 8. preflight 失败时返回 `bootstrap_*` failure code，并携带 provider_id、provider_slug、adapter_key 和 capability 安全字段。
-9. server app wiring 已收敛到 `internal/bootstrap.NewServerApp`，`cmd/server/main.go` 只保留 config、资源启动、HTTP server lifecycle 和退出信号处理。
+9. server app wiring 已收敛到 `internal/bootstrap.NewGatewayServerApp`，`cmd/gateway-server/main.go` 只保留 config、资源启动、HTTP server lifecycle 和退出信号处理。
 10. 后台写入 provider.adapter 的 registry 校验推迟到阶段 9 provider CRUD。
 
 计划实现：

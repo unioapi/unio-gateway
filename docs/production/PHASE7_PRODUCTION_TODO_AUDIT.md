@@ -60,23 +60,23 @@ go vet ./...
 本次审计覆盖：
 
 ```text
-cmd/server
-internal/config
-internal/httpapi
-internal/httpx
-internal/middleware
-internal/auth
-internal/apikey
-internal/ratelimit
-internal/adapter
-internal/adapter/openai
-internal/routing
-internal/modelcatalog
-internal/gateway
-internal/billing
-internal/ledger
-internal/requestlog
-internal/store
+cmd/gateway-server
+internal/platform/config
+internal/app/gatewayapi
+internal/platform/httpx
+internal/app/gatewayapi/middleware 与 internal/platform/httpmw
+internal/core/auth
+internal/core/apikey
+internal/platform/ratelimit
+internal/core/adapter
+internal/core/adapter/openai
+internal/core/routing
+internal/core/modelcatalog
+internal/service/gateway
+internal/core/billing
+internal/core/ledger
+internal/core/requestlog
+internal/platform/store
 migrations
 sql/queries
 ```
@@ -139,7 +139,7 @@ stream 无 final usage 风险
 位置：
 
 ```text
-internal/middleware/request_id.go:19
+internal/platform/httpmw/request_id.go:19
 ```
 
 新增 TODO：
@@ -174,7 +174,7 @@ P2
 位置：
 
 ```text
-internal/apikey/service.go:55
+internal/core/apikey/service.go:55
 ```
 
 当前 TODO：
@@ -209,7 +209,7 @@ P1
 位置：
 
 ```text
-internal/middleware/rate_limit.go:39
+internal/app/gatewayapi/middleware/rate_limit.go:39
 ```
 
 关闭记录：
@@ -244,7 +244,7 @@ P2
 位置：
 
 ```text
-internal/httpx/json.go:25
+internal/platform/httpx/json.go:25
 ```
 
 关闭记录：
@@ -279,7 +279,7 @@ P2
 位置：
 
 ```text
-internal/httpapi/chat_completions_handler.go:55
+internal/app/gatewayapi/chat_completions_handler.go:55
 ```
 
 关闭记录：
@@ -314,7 +314,7 @@ P1
 位置：
 
 ```text
-internal/adapter/chat.go:20
+internal/core/adapter/chat.go:20
 ```
 
 关闭记录：
@@ -349,7 +349,7 @@ P1
 位置：
 
 ```text
-internal/adapter/openai/chat.go:153
+internal/core/adapter/openai/chat.go:153
 ```
 
 新增 TODO：
@@ -384,7 +384,7 @@ P2
 位置：
 
 ```text
-internal/modelcatalog/catalog.go:32
+internal/core/modelcatalog/catalog.go:32
 ```
 
 新增 TODO：
@@ -419,7 +419,7 @@ P1
 位置：
 
 ```text
-internal/routing/router.go:96
+internal/core/routing/router.go:96
 ```
 
 新增 TODO：
@@ -559,7 +559,7 @@ P1
 位置：
 
 ```text
-internal/gateway/chat_completion.go:65
+internal/service/gateway/chat_completion.go:65
 ```
 
 新增 TODO：
@@ -594,7 +594,7 @@ P0
 位置：
 
 ```text
-internal/gateway/chat_stream.go:105
+internal/service/gateway/chat_stream.go:105
 ```
 
 新增 TODO：
@@ -629,7 +629,7 @@ P0
 位置：
 
 ```text
-internal/gateway/chat_request_record.go:94
+internal/service/gateway/chat_request_record.go:94
 ```
 
 新增 TODO：
@@ -664,7 +664,7 @@ P2
 位置：
 
 ```text
-internal/gateway/chat_settlement.go:93
+internal/service/gateway/chat_settlement.go:93
 ```
 
 新增 TODO：
@@ -699,7 +699,7 @@ P0
 位置：
 
 ```text
-internal/gateway/chat_settlement.go:106
+internal/service/gateway/chat_settlement.go:106
 ```
 
 新增 TODO：
@@ -734,7 +734,7 @@ P1
 位置：
 
 ```text
-internal/ledger/service.go:33
+internal/core/ledger/service.go:33
 ```
 
 新增 TODO：
@@ -769,7 +769,7 @@ P0
 位置：
 
 ```text
-internal/ledger/service.go:184
+internal/core/ledger/service.go:184
 ```
 
 新增 TODO：

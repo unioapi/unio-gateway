@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 
-	"github.com/ThankCat/unio-api/internal/failure"
-	"github.com/ThankCat/unio-api/internal/store/sqlc"
+	"github.com/ThankCat/unio-api/internal/platform/failure"
+	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
 )
 
 var (

@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/ThankCat/unio-api/internal/adapter"
-	"github.com/ThankCat/unio-api/internal/routing"
-	"github.com/ThankCat/unio-api/internal/store/sqlc"
+	"github.com/ThankCat/unio-api/internal/core/adapter"
+	"github.com/ThankCat/unio-api/internal/core/routing"
+	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
 	"github.com/jackc/pgx/v5"
 )
 

@@ -1,350 +1,344 @@
 # Phase 7 Handoff - Billing Ledger
 
-更新时间：2026-05-27
+更新时间：2026-05-28
 
 ## 当前状态
 
 阶段 7 尚未完成，不应进入阶段 8。
 
+当前阶段主线已经完成：
+
+1. request / attempt / usage / price snapshot / ledger 基础链路。
+2. gateway 请求前余额授权、冻结、capture、release。
+3. 部分余额授权与平台差额核销。
+4. stream final usage settlement 与无 final usage risk exposure。
+5. request / attempt 状态机守卫。
+6. settlement 成功重放一致性校验。
+7. 客户售价与 provider/channel 成本价分离。
+8. request-level `cost_snapshots` 成本快照写入与幂等重放校验。
+9. `prices` enabled 生效窗口重叠约束。
+10. 全服务目录结构改造。
+
+当前剩余 P0 阻断项：
+
+```text
+GAP-7-007：上游成功且有可靠 usage 后，如果首次 settlement 失败，需要 worker 持久化 recovery job + 幂等 settlement 重试收口。
+```
+
 ## 本班次交接重点
 
-本班次围绕计费边界和账务收口做了 6 个生产修正：
+本班次完成了 4 组工作。
 
-1. 非流式 OpenAI usage 缺失不再被当成 0 usage 成功请求。
-   - `internal/adapter/openai/dto.go` 将 usage 改为指针语义。
-   - 缺少 usage 或 token 字段时，adapter 返回稳定 failure。
-2. authorization 和 settlement 不再读取两次不同价格。
-   - `ChatAuthorization` 保存 authorization 时的 `PriceID` 和 `billing.PriceSnapshot`。
-   - settlement 使用 authorization 快照创建 `price_snapshots` 并计算费用。
-3. 余额不足错误已映射成用户友好的 OpenAI-compatible `insufficient_quota`。
-   - HTTP 状态码为 429。
-   - 内部仍通过 `failure.CodeLedgerInsufficientBalance` 判断。
-4. `GAP-7-014` 已关闭。
-   - authorization 拆分 `estimated_amount` 与 `authorized_amount`。
-   - `available_balance <= 0` 时拒绝。
-   - `0 < available_balance < estimated_amount` 时冻结全部可用余额并继续请求。
-   - `actual_amount > authorized_amount` 时只 capture 已冻结金额，差额写 `write_off`。
-5. `GAP-7-004` 已关闭。
-   - 已经可能产生上游成本但没有 final usage 的 stream 路径不扣用户钱。
-   - 释放冻结余额，并写 `risk_exposure` 审计事实。
-6. 账务异常统一进 `ledger_billing_exceptions`。
-   - `event_type = write_off`：真实费用已知但超过冻结金额。
-   - `event_type = risk_exposure`：真实费用未知但平台可能已有成本风险。
+### 1. 成本价与成本快照已接入 settlement
 
-本班次不要再恢复旧表名 `ledger_write_offs`；后台、报表和后续查询都应该围绕 `ledger_billing_exceptions` 读取。
+已完成内容：
 
-## 本次新增决策
+1. `SettleSuccessfulChat` 按最终 `channel + model` 和 attempt time 查询 active `channel_cost_prices`。
+2. 使用 `billing.CalculateProviderCost` 计算 provider 成本分项和总成本。
+3. 在同一笔 settlement 事务里写入 `cost_snapshots`。
+4. 重复 settlement 成功重放时，读取既有 `cost_snapshots` 并校验：
+   - request / provider / channel / model / upstream_model。
+   - currency / pricing_unit / formula_version。
+   - input / output / cached / reasoning 单价。
+   - input / output / cached / reasoning / total 成本金额。
+5. `GAP-7-009` 已关闭。
 
-1. settlement 成功语义后的失败暂时不在当前小节实现补偿 worker。
-2. 第一版不支持倍率，当前阶段账务核心先落地明确金额的成本价和 cost snapshot。
-3. 成本价第一版按 `channel + model` 定义，不做 provider 级成本价。
-4. `migrations` 已改为一表一组平铺 up/down 文件；`sql/queries` 已改为一表一个查询文件。
+关键文件：
 
-具体判断：
+```text
+internal/service/gateway/chat_settlement.go
+internal/service/gateway/chat_settlement_test.go
+internal/core/billing/service.go
+internal/core/billing/types.go
+sql/queries/channel_cost_prices.sql
+sql/queries/cost_snapshots.sql
+migrations/000019_create_channel_cost_prices.up.sql
+migrations/000020_create_cost_snapshots.up.sql
+```
+
+### 2. 价格 enabled 生效窗口约束已完成
+
+已完成内容：
+
+1. `prices` 使用 PostgreSQL `btree_gist` + exclusion constraint。
+2. 禁止同一 `model_id + currency + pricing_unit` 下 enabled 价格窗口重叠。
+3. 使用 `[)` 时间区间，允许相邻窗口无缝切换。
+4. disabled 价格草稿允许重叠。
+5. 不同 model / currency / pricing_unit 不互相阻塞。
+6. `GAP-7-010` 已关闭。
+
+关键文件：
+
+```text
+migrations/000012_create_prices.up.sql
+internal/platform/store/sqlc/prices_test.go
+```
+
+注意：
+
+```text
+CREATE EXTENSION IF NOT EXISTS btree_gist;
+```
+
+这是 PostgreSQL extension 语法，不是普通 SQL 标准语法。它让 GiST exclusion constraint 可以比较 `uuid`、`text` 这类普通等值字段。
+
+### 3. 全服务目录结构改造已完成
+
+目标结构已落地：
+
+```text
+cmd/gateway-server
+cmd/admin-server
+cmd/console-server
+cmd/worker-server
+internal/bootstrap
+internal/app/gatewayapi
+internal/service/gateway
+internal/core/*
+internal/platform/*
+```
+
+当前真实代码迁移：
+
+```text
+cmd/server                       -> cmd/gateway-server
+internal/httpapi                 -> internal/app/gatewayapi
+internal/gateway                 -> internal/service/gateway
+internal/billing                 -> internal/core/billing
+internal/ledger                  -> internal/core/ledger
+internal/requestlog              -> internal/core/requestlog
+internal/routing                 -> internal/core/routing
+internal/adapter                 -> internal/core/adapter
+internal/apikey                  -> internal/core/apikey
+internal/auth                    -> internal/core/auth
+internal/channel                 -> internal/core/channel
+internal/modelcatalog            -> internal/core/modelcatalog
+internal/credential              -> internal/core/credential
+internal/config                  -> internal/platform/config
+internal/store                   -> internal/platform/store
+internal/redis                   -> internal/platform/redis
+internal/httpx                   -> internal/platform/httpx
+internal/failure                 -> internal/platform/failure
+internal/ratelimit               -> internal/platform/ratelimit
+internal/middleware/request_id   -> internal/platform/httpmw/request_id
+internal/middleware/logger       -> internal/platform/httpmw/logger
+internal/middleware/recoverer    -> internal/platform/httpmw/recoverer
+internal/middleware/api_key_auth -> internal/app/gatewayapi/middleware/api_key_auth
+internal/middleware/rate_limit   -> internal/app/gatewayapi/middleware/rate_limit
+```
+
+`sqlc.yaml` 已改为：
+
+```text
+out: internal/platform/store/sqlc
+```
+
+进程入口目录：
+
+```text
+cmd/gateway-server/main.go
+cmd/admin-server/.gitkeep
+cmd/console-server/.gitkeep
+cmd/worker-server/.gitkeep
+```
+
+`.gitkeep` 只用于让 Git 跟踪目标入口目录，不代表 Admin API、Console API、Worker 已实现。
+
+架构文档：
+
+```text
+docs/architecture/PROJECT_STRUCTURE.md
+```
+
+### 4. 文档状态已同步
+
+已同步文档：
+
+```text
+AGENTS.md
+docs/README.md
+docs/PROJECT_STATUS.md
+docs/architecture/PROJECT_STRUCTURE.md
+docs/chapters/phase-07-billing-ledger/PLAN.md
+docs/chapters/phase-07-billing-ledger/STATUS.md
+docs/production/TODO_REGISTER.md
+docs/production/PHASE7_PRODUCTION_TODO_AUDIT.md
+```
+
+`AGENTS.md` 中 API 前缀已固定为：
+
+```text
+/v1/*
+/admin/v1/*
+/console/v1/*
+```
+
+## 已完成 GAP
+
+本班次关闭：
+
+```text
+GAP-7-009：provider/channel 成本价与 request-level cost snapshot。
+GAP-7-010：价格 enabled 生效窗口重叠约束。
+```
+
+此前已关闭的阶段 7 关键 GAP：
+
+```text
+GAP-7-003：request/attempt 状态机守卫。
+GAP-7-004：无 final usage 的 stream risk exposure。
+GAP-7-005：safe/internal error 审计。
+GAP-7-008：usage source 审计。
+GAP-7-012：外部事务内 debit 幂等重入。
+GAP-7-013：provider/model 输入 token 估算。
+GAP-7-014：部分余额授权与平台差额核销。
+```
+
+## 仍需收口
+
+下一步只剩阶段 7 worker recovery 主线。
+
+必须先处理：
+
+```text
+GAP-7-007
+```
+
+业务语义：
 
 ```text
 上游已经成功并返回可靠 usage 后，如果 SettleSuccessfulChat 失败，不能简单 release 冻结余额。
 因为 provider 侧可能已经产生成本，业务语义应优先补偿重试 settlement/capture。
-
-当前接受这个风险暂时存在：
-request 会被标记 failed，reservation 可能保持 authorized，reserved_balance 可能悬挂。
-
-该问题不使用 gateway goroutine 处理。
-后续进入 worker/settlement recovery 线时，用数据库持久化 recovery job + 幂等 settlement 重试收口。
 ```
 
-`GAP-7-003` 和 `GAP-7-012` 已关闭。settlement 成功重放检查已完成；`GAP-7-007` 仍保留为 worker recovery 阻断项。
-
-价格体系判断：
+当前风险：
 
 ```text
-倍率、分组折扣和批量调价不是第一版能力。
-TASK-7.20 直接做 provider/channel 明确成本价和请求级 cost snapshot。
-
-结算时必须使用明确金额：
-用户扣费 = usage * price snapshot
-平台成本 = usage * cost snapshot
-毛利 = 用户扣费 - 平台成本
-
-后续如果确有批量调价需求，再单独决策是否引入倍率/折扣辅助工具；第一版不做。
+request 可能被标记 failed。
+reservation 可能保持 authorized。
+reserved_balance 可能悬挂。
 ```
 
-成本价表数据定义判断：
+目标方案：
 
 ```text
-成本价配置数据：channel_cost_prices
-请求级成本快照事实：cost_snapshots
+worker 持久化 recovery job + 幂等 settlement 重试。
 ```
 
-不使用 `provider_cost_prices` 作为第一版主表。
-
-原因：
+建议落点：
 
 ```text
-同一个 provider 下不同 channel 的真实采购成本可能不同。
-例如 OpenAI 官方、代理商、Azure OpenAI 都可能服务同一模型，但成本价不同。
-所以第一版成本价以 channel + model 为最小业务粒度。
+cmd/worker-server/main.go
+internal/bootstrap/worker_server.go
+internal/app/workers/runner.go
+internal/app/workers/settlement_recovery_worker.go
+internal/service/gateway/chat_settlement_recovery.go
+migrations/000021_create_settlement_recovery_jobs.up.sql
+migrations/000021_create_settlement_recovery_jobs.down.sql
+sql/queries/settlement_recovery_jobs.sql
 ```
 
-`channel_cost_prices` 语义：
+建议顺序：
+
+1. 设计 `settlement_recovery_jobs` 表。
+2. 写 sqlc query：创建 job、claim job、mark succeeded、mark retry、mark failed。
+3. 在 gateway 首次 settlement 失败路径创建 recovery job。
+4. 在 `internal/service/gateway` 增加 recovery service，复用现有幂等 settlement 逻辑。
+5. 在 `internal/app/workers` 增加 runner 和 settlement recovery worker。
+6. 在 `cmd/worker-server` 增加真实 `main.go`，替换 `.gitkeep`。
+7. 增加测试覆盖 job claim、幂等重试、成功收口、失败重试次数。
+
+## 当前关键文件
+
+结构入口：
 
 ```text
-某个 channel 服务某个 Unio model 时，上游成本单价是多少。
+cmd/gateway-server/main.go
+cmd/admin-server/.gitkeep
+cmd/console-server/.gitkeep
+cmd/worker-server/.gitkeep
+internal/bootstrap/gateway_server.go
+internal/bootstrap/http.go
 ```
 
-已落地字段：
+Gateway API：
 
 ```text
-id
-channel_id
-model_id
-currency
-pricing_unit
-input_cost
-output_cost
-cached_input_cost
-reasoning_output_cost
-status
-effective_from
-effective_to
-created_at
-updated_at
+internal/app/gatewayapi/router.go
+internal/app/gatewayapi/chat_completions_handler.go
+internal/app/gatewayapi/models_handler.go
+internal/app/gatewayapi/middleware/api_key_auth.go
+internal/app/gatewayapi/middleware/rate_limit.go
 ```
 
-关键约束：
+Gateway service：
 
 ```text
-1. (channel_id, model_id) 必须对应 channel_models 中真实存在的映射。
-2. currency 不能为空。
-3. pricing_unit 第一版固定 per_1m_tokens。
-4. input/output 成本不能为负数。
-5. cached/reasoning 成本可空，但非空时不能为负数。
-6. effective_to 为空表示长期有效；非空时必须晚于 effective_from。
-7. (id, channel_id, model_id) 提供给 cost_snapshots 做复合外键校验。
+internal/service/gateway/chat_authorization.go
+internal/service/gateway/chat_completion.go
+internal/service/gateway/chat_stream.go
+internal/service/gateway/chat_settlement.go
+internal/service/gateway/service.go
 ```
 
-`cost_snapshots` 语义：
+Core：
 
 ```text
-某次请求最终使用哪个 provider/channel/model 成本价，以及本次实际平台成本是多少。
+internal/core/billing
+internal/core/ledger
+internal/core/requestlog
+internal/core/routing
+internal/core/adapter
+internal/core/apikey
+internal/core/auth
+internal/core/channel
+internal/core/modelcatalog
+internal/core/credential
 ```
 
-已落地字段：
+Platform：
 
 ```text
-id
-request_record_id
-cost_price_id
-provider_id
-channel_id
-model_id
-upstream_model
-currency
-pricing_unit
-input_cost
-output_cost
-cached_input_cost
-reasoning_output_cost
-input_cost_amount
-output_cost_amount
-cached_input_cost_amount
-reasoning_output_cost_amount
-total_cost_amount
-formula_version
-created_at
+internal/platform/config
+internal/platform/store
+internal/platform/store/sqlc
+internal/platform/redis
+internal/platform/httpx
+internal/platform/httpmw
+internal/platform/ratelimit
+internal/platform/failure
 ```
 
-关键约束：
+文档：
 
 ```text
-1. request_record_id 唯一，一次请求只能有一条成本快照。
-2. cost_price_id 指向结算时命中的 channel_cost_prices。
-3. provider_id/channel_id/model_id/upstream_model 保存请求级审计事实。
-4. 单价字段保存当时成本价副本，不能靠当前配置复算历史账单。
-5. amount 字段保存本次请求各部分实际成本和总成本。
-6. total_cost_amount 必须等于各成本分项合计。
-7. formula_version 必须保存，用于未来公式升级后的历史审计。
-8. (channel_id, provider_id) 复合外键保证请求事实里的 channel 属于对应 provider。
-9. (cost_price_id, channel_id, model_id) 复合外键保证成本价配置与请求 channel/model 一致。
+AGENTS.md
+docs/README.md
+docs/PROJECT_STATUS.md
+docs/architecture/PROJECT_STRUCTURE.md
+docs/chapters/phase-07-billing-ledger/PLAN.md
+docs/chapters/phase-07-billing-ledger/STATUS.md
+docs/production/TODO_REGISTER.md
+docs/production/RELEASE_BLOCKERS.md
+docs/production/DECISIONS.md
 ```
-
-谁创建和消费：
-
-```text
-channel_cost_prices
-- 现在：开发期 seed / 手动 SQL
-- 以后：Admin API / 后台管理
-- 消费方：authorization/settlement、成本报表、毛利报表
-
-cost_snapshots
-- 创建方：SettleSuccessfulChat
-- 消费方：后台请求详情、成本报表、毛利报表、worker recovery、审计排查
-- 性质：账务事实，不应手动改写
-```
-
-已经完成：
-
-1. request record 和 attempt record 基础链路。
-2. usage record 基础链路。
-3. price snapshot 基础链路。
-4. ledger credit/debit 基础链路。
-5. 非流式 settlement。
-6. OpenAI stream final usage 解析。
-7. adapter stream contract 扩展 usage chunk。
-8. stream 有 final usage 时的 settlement。
-9. cached token 和 reasoning token 进入 usage 和 billing。
-10. request_id 与 correlation id 分离。
-11. ledger reservation 表已创建，并已接入 `user_balances.reserved_balance`。
-12. `ledger.Service` 已拆出 `entry.go`、`reservation.go`、`numeric.go`、`convert.go`、`errors.go`、`constant.go`。
-13. `ledger.Service.PreAuthorize`、`Capture`、`Release` 已实现，支持冻结、真实扣费、释放和幂等重入。
-14. `billing.Service.EstimateAuthorizationAmount` 已实现，可按预估 prompt/max completion 和当前价格计算调用上游前需要冻结的金额。
-15. `ChatAuthorizer` 已装入 `ChatCompletionService`，非流式和流式调用上游前都会创建 request-level authorization。
-16. 非流式成功 settlement 会带上同一笔 `ChatAuthorization`；取消、non-retryable error、fallback 全失败、fallback adapter missing 会 release。
-17. 流式成功 settlement 会带上同一笔 `ChatAuthorization`；普通失败和 fallback 失败路径会 release，可能产生上游成本但没有 final usage 的路径会 exception release。
-18. gateway authorization 行为测试已覆盖成功、不调用 adapter、fallback、取消、release、settlement failure 等关键路径。
-19. `GAP-7-014` 已关闭：authorization 已拆分 `estimated_amount` 与 `authorized_amount`，低余额可冻结全部可用余额并继续请求，`actual_amount > authorized_amount` 时 capture 已冻结金额并写入 `ledger_billing_exceptions` 的 `write_off` 平台核销事实。
-20. `GAP-7-004` 已关闭：可能产生上游成本但没有 final usage 的 stream 路径会释放用户冻结余额，并写入 `ledger_billing_exceptions` 的 `risk_exposure` 事实。
-21. `GAP-7-013` 已关闭：gateway authorization 已通过 adapter registry 调用 provider adapter 注册的 `ChatInputTokenizer`；OpenAI adapter 已用 `tiktoken-go/tokenizer` 按 upstream model 估算 chat 输入 token，旧的字符串长度临时估算已移除。
-22. `GAP-7-003` 已关闭：`request_records` 和 `request_attempts` 已增加 SQL 原子状态机守卫；重复终态更新会读回第一次终态事实，跨终态覆盖会返回 `requestlog_invalid_state_transition`。
-23. request-level settlement 成功重放检查已完成：重复 `SettleSuccessfulChat` 会校验既有 usage、price snapshot、reservation、ledger 和 write-off 事实，一致才幂等成功。
-24. `GAP-7-012` 已关闭：`DebitWithQueries` 在外部事务内按 ledger entry `idempotency_key` 获取 transaction-level advisory lock，重复并发 debit 不再通过唯一约束冲突污染调用方事务。
-25. `GAP-7-008` 已关闭：`ChatSettlementParams` 显式携带 usage source，非流式写入 `upstream_response`，流式 final usage 写入 `upstream_stream`。
-26. `GAP-7-005` 已关闭：request/attempt 新增 `internal_error_detail`，`error_message` 只保存安全展示文案，内部错误文本截断后进入内部详情字段。
-27. 定价体系边界已确认：第一版不支持倍率，账务核心必须使用明确客户售价、provider/channel 成本价、price snapshot 和 cost snapshot。
-28. migration 结构已收口为平铺文件：`migrations/00000N_create_表名.up.sql` / `.down.sql`。
-29. sqlc 查询已收口为一表一个文件；跨表查询按主业务对象、主返回对象或被更新对象归属。
-30. `channel_cost_prices` migration 已落地，并通过 `channel_models` 约束成本价只能配置在真实可路由的 channel/model 上。
-31. `cost_snapshots` migration 已落地，请求级成本快照会保存 provider/channel/model、上游模型、成本单价副本、成本金额分项和总成本。
-32. `channels` 已增加 `(id, provider_id)` 唯一约束，供 `cost_snapshots` 校验 channel/provider 归属一致。
-33. `sql/queries/channel_cost_prices.sql` 和 `sql/queries/cost_snapshots.sql` 已新增，sqlc 生成物已更新。
-34. billing 语义已拆分：客户侧为 `CustomerPriceSnapshot` / `CustomerCharge` / `CalculateCustomerCharge`，provider 成本侧为 `ProviderCostSnapshot` / `ProviderCost` / `CalculateProviderCost`。
-
-仍需收口：
-
-1. 上游成功后的首次 settlement 失败 worker recovery。
-2. settlement 成功路径查询成本价、计算 provider cost，并写入 `cost_snapshots`。
-3. settlement 幂等重放读取并校验既有 `cost_snapshots`。
-4. 价格生效窗口。
-
-## 已定死的新方案
-
-最终产品规则：**部分余额授权 + 平台差额核销，不允许用户负余额或隐性欠费。**
-
-核心语义：
-
-```text
-estimated_amount  = 平台按请求、模型、价格和 max_tokens 估算的风险金额
-authorized_amount = 实际从用户可用余额里冻结的金额
-actual_amount     = 上游成功后根据真实 usage 算出的应收金额
-captured_amount   = min(actual_amount, authorized_amount)
-written_off_amount = max(actual_amount - captured_amount, 0)
-```
-
-授权阶段：
-
-1. `available_balance <= 0`：拒绝请求，不调用上游。
-2. `available_balance >= estimated_amount`：冻结 `estimated_amount`。
-3. `0 < available_balance < estimated_amount`：冻结全部 `available_balance`，请求仍可继续。
-
-结算阶段：
-
-1. `actual_amount <= authorized_amount`：capture `actual_amount`，release 多余冻结金额。
-2. `actual_amount > authorized_amount`：capture `authorized_amount`，差额写为平台核销；上游成功且有可靠 usage 时 request 仍应成功。
-3. 不允许把差额变成用户隐性欠费，不允许用户余额变负，不允许充值后偷偷追扣旧账。
-
-例子：
-
-```text
-用户可用余额 0.80
-预估需要 1.00
-实际花费 1.00
-
-授权：冻结 0.80，请求继续
-结算：扣用户 0.80，平台核销 0.20
-用户最终看到余额 0
-request succeeded
-```
-
-当前代码已落地这个逻辑：
-
-1. `ChatAuthorizationService.AuthorizeChat` 传入 `estimated_amount`，`ledger.PreAuthorize` 根据可用余额写入真实 `authorized_amount`。
-2. `ledger.captureWithQueries` 使用 `captured_amount = min(actual_amount, authorized_amount)`。
-3. `actual_amount > authorized_amount` 时会写入 `ledger_billing_exceptions` 的 `write_off` 事件，记录平台核销事实。
-4. 无 final usage 的 stream 客户端取消、emit 后中断和正常结束缺 final usage 会写入 `ledger_billing_exceptions` 的 `risk_exposure` 事件。
-
-## 下一步
-
-下一节第一步：
-
-```text
-7.20 成本价与毛利审计：继续把 channel_cost_prices 接入 settlement，并写入 request-level cost_snapshots；第一版不做倍率系统。
-```
-
-建议接入顺序：
-
-1. 复核剩余 P0 blocker，确认 `GAP-7-007` 仍暂不插队。
-2. 在 `ChatSettlementService` 成功 settlement 路径中，根据最终 channel/model 查询 active `channel_cost_prices`。
-3. 使用 `billing.CalculateProviderCost` 计算 provider 成本分项和总成本。
-4. 在同一笔 settlement 事务里写入 `cost_snapshots`。
-5. 幂等重放时读取既有 `cost_snapshots`，校验成本单价、成本金额和请求事实一致。
-6. 后续后台/报表查询需要同时读取 `price_snapshots`、`cost_snapshots` 和 `ledger_billing_exceptions` 中的 `write_off` / `risk_exposure` 事件。
-7. price effective window 放在 [GAP-7-010](../../production/TODO_REGISTER.md#gap-7-010)；settlement recovery 暂时不做，等进入 `cmd/worker` / recovery job 小节时再处理。
-
-必须先处理的 GAP：
-
-- [GAP-7-009](../../production/TODO_REGISTER.md#gap-7-009)
-
-相关文档：
-
-1. [PLAN.md](PLAN.md#task-7-17-preauthorization)
-2. [STATUS.md](STATUS.md)
-3. [ACCEPTANCE.md](ACCEPTANCE.md)
-4. [TODO_REGISTER.md](../../production/TODO_REGISTER.md)
-5. [RELEASE_BLOCKERS.md](../../production/RELEASE_BLOCKERS.md)
-6. [DECISIONS.md](../../production/DECISIONS.md#dec-006-部分余额放行与平台差额核销)
-7. [DECISIONS.md](../../production/DECISIONS.md#dec-007-settlement-失败补偿归属-worker)
-
-当前关键文件：
-
-1. `internal/billing/service.go`
-2. `internal/billing/types.go`
-3. `internal/ledger/reservation.go`
-4. `internal/gateway/chat_authorization.go`
-5. `internal/gateway/chat_completion.go`
-6. `internal/gateway/chat_stream.go`
-7. `internal/gateway/chat_settlement.go`
-8. `internal/gateway/service_test.go`
-9. `sql/queries/user_balances.sql`
-10. `sql/queries/ledger_entries.sql`
-11. `sql/queries/ledger_reservations.sql`
-12. `sql/queries/ledger_billing_exceptions.sql`
-13. `migrations/000014_create_user_balances.up.sql`
-14. `migrations/000015_create_ledger_entries.up.sql`
-15. `migrations/000017_create_ledger_reservations.up.sql`
-16. `migrations/000018_create_ledger_billing_exceptions.up.sql`
-17. `migrations/000019_create_channel_cost_prices.up.sql`
-18. `migrations/000020_create_cost_snapshots.up.sql`
-19. `sql/queries/channel_cost_prices.sql`
-20. `sql/queries/cost_snapshots.sql`
-21. `internal/store/sqlc/channel_cost_prices.sql.go`
-22. `internal/store/sqlc/cost_snapshots.sql.go`
 
 ## 注意事项
 
 1. 不要退回“用户必须自己算 token 才能调用”的产品体验。
 2. 不要实现隐性欠费、负余额或充值后追扣；如果未来要做信用额度，必须另开决策和账务模型。
-3. `estimated_amount` 和 `authorized_amount` 是两个概念；当前代码已拆分二者，后续不要重新把预估金额等同于实际冻结金额。
-4. 上游成功且有可靠 usage 时，`actual_amount > authorized_amount` 不应再导致普通 settlement failed。
+3. `estimated_amount` 和 `authorized_amount` 是两个概念，不能重新混用。
+4. 上游成功且有可靠 usage 时，`actual_amount > authorized_amount` 不应导致普通 settlement failed。
 5. write-off 必须是可审计账务事实，不能只写日志。
 6. stream 不能只复用非流式后扣费模型，需要 authorization、release、capture、write-off 和 risk-exposure 语义。
 7. ledger-first 不能被绕过，余额变化和核销都必须有账务事实。
-8. reservation 表方案已经落地，下一步不要再重开“reservation 表还是 reservation ledger”的设计。
-9. 所有补偿和重试都要考虑幂等。
-10. `Capture` 的 0 金额场景应走 `Release`，不是写 0 金额 ledger entry。
-11. 上游成功且有可靠 usage 后 settlement 失败，不要直接 release；后续必须用 worker 持久化补偿任务和幂等 settlement 重试处理。
-12. 成本价不要做倍率，不要只按 provider 定价，第一版按 channel + model 维护明确金额。
-13. cost snapshot 不能只存单价，必须同时保存请求级实际平台成本金额。
-14. 历史成本、毛利和审计只能依赖请求级快照事实，不能用当前成本价配置回算历史。
+8. 所有补偿和重试都要考虑幂等。
+9. 上游成功且有可靠 usage 后 settlement 失败，不要直接 release；必须由 worker recovery 收口。
+10. 成本价不要做倍率，不要只按 provider 定价，第一版按 channel + model 维护明确金额。
+11. cost snapshot 不能只存单价，必须同时保存请求级实际平台成本金额。
+12. 历史成本、毛利和审计只能依赖请求级快照事实，不能用当前成本价配置回算历史。
+13. 新代码必须进入新目录结构，不要再使用迁移前路径。
+14. `cmd/admin-server`、`cmd/console-server`、`cmd/worker-server` 当前只有 `.gitkeep`，不要误认为进程已实现。
 
 ## 最近验证
 
@@ -353,7 +347,8 @@ request succeeded
 ```bash
 sqlc generate
 go test ./...
+go list ./...
 git diff --check
 ```
 
-结果：通过，时间为 2026-05-27。本次收尾只更新交接文档，提交前按要求未重新运行测试。
+结果：通过，时间为 2026-05-28。

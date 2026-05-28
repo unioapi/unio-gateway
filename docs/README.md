@@ -6,10 +6,11 @@
 
 1. 先读根目录 [AGENTS.md](../AGENTS.md)，确认产品边界、技术栈、协作规则和 AI 行为规范。
 2. 再读 [PROJECT_STATUS.md](PROJECT_STATUS.md)，确认当前项目整体状态和下一步。
-3. 进入具体章节时，从 [chapters/README.md](chapters/README.md) 进入对应阶段的 `PLAN.md`、`STATUS.md`、`ACCEPTANCE.md`。
-4. 检查生产欠账时，阅读 [production/TODO_REGISTER.md](production/TODO_REGISTER.md)。
-5. 涉及重大取舍时，阅读 [production/DECISIONS.md](production/DECISIONS.md)。
-6. 选择第三方库或决定是否手写基础设施时，阅读 [production/THIRD_PARTY_POLICY.md](production/THIRD_PARTY_POLICY.md)。
+3. 查看全服务目录方案时，阅读 [architecture/PROJECT_STRUCTURE.md](architecture/PROJECT_STRUCTURE.md)。
+4. 进入具体章节时，从 [chapters/README.md](chapters/README.md) 进入对应阶段的 `PLAN.md`、`STATUS.md`、`ACCEPTANCE.md`。
+5. 检查生产欠账时，阅读 [production/TODO_REGISTER.md](production/TODO_REGISTER.md)。
+6. 涉及重大取舍时，阅读 [production/DECISIONS.md](production/DECISIONS.md)。
+7. 选择第三方库或决定是否手写基础设施时，阅读 [production/THIRD_PARTY_POLICY.md](production/THIRD_PARTY_POLICY.md)。
 
 ## 目录职责
 
@@ -17,6 +18,7 @@
 | --- | --- |
 | [README.md](README.md) | 文档入口和阅读顺序。 |
 | [PROJECT_STATUS.md](PROJECT_STATUS.md) | 当前全局状态。只记录阶段完成度、当前阻断项和下一步。 |
+| [architecture/PROJECT_STRUCTURE.md](architecture/PROJECT_STRUCTURE.md) | 全服务目标目录结构、分层职责、依赖方向和部署关系。 |
 | [chapters](chapters/README.md) | 每个阶段的详细计划、状态、验收标准和交接内容。 |
 | [production/TODO_REGISTER.md](production/TODO_REGISTER.md) | 全局生产欠账登记表。每个代码 TODO 必须有 GAP 编号并链接回章节任务。 |
 | [production/DECISIONS.md](production/DECISIONS.md) | 重大架构和商业规则决策记录。 |

@@ -22,11 +22,11 @@
 | [sql/queries/users.sql](../../../sql/queries/users.sql) | user 相关 SQL。 |
 | [sql/queries/projects.sql](../../../sql/queries/projects.sql) | project 相关 SQL。 |
 | [sql/queries/api_keys.sql](../../../sql/queries/api_keys.sql) | API key 相关 SQL。 |
-| [internal/apikey](../../../internal/apikey) | API key 生成和创建服务。 |
-| [internal/auth](../../../internal/auth) | API key 认证和 request auth context。 |
-| [internal/middleware/api_key_auth.go](../../../internal/middleware/api_key_auth.go) | HTTP API key auth middleware。 |
-| [internal/ratelimit](../../../internal/ratelimit) | 限流器和 Redis store。 |
-| [internal/middleware/rate_limit.go](../../../internal/middleware/rate_limit.go) | HTTP 限流 middleware。 |
+| [internal/core/apikey](../../../internal/core/apikey) | API key 生成和创建服务。 |
+| [internal/core/auth](../../../internal/core/auth) | API key 认证和 request auth context。 |
+| [internal/app/gatewayapi/middleware/api_key_auth.go](../../../internal/app/gatewayapi/middleware/api_key_auth.go) | HTTP API key auth middleware。 |
+| [internal/platform/ratelimit](../../../internal/platform/ratelimit) | 限流器和 Redis store。 |
+| [internal/app/gatewayapi/middleware/rate_limit.go](../../../internal/app/gatewayapi/middleware/rate_limit.go) | HTTP 限流 middleware。 |
 
 ## 任务
 
@@ -117,8 +117,8 @@
 
 涉及文件：
 
-1. [internal/apikey/service.go](../../../internal/apikey/service.go)
-2. [internal/auth/apikey.go](../../../internal/auth/apikey.go)
+1. [internal/core/apikey/service.go](../../../internal/core/apikey/service.go)
+2. [internal/core/auth/apikey.go](../../../internal/core/auth/apikey.go)
 3. 未来后台 handler。
 
 关联 GAP：
@@ -154,14 +154,14 @@
 
 涉及文件：
 
-1. [cmd/server/main.go](../../../cmd/server/main.go)
-2. [internal/ratelimit/redis_store.go](../../../internal/ratelimit/redis_store.go)
-3. [internal/middleware/rate_limit.go](../../../internal/middleware/rate_limit.go)
+1. [cmd/gateway-server/main.go](../../../cmd/gateway-server/main.go)
+2. [internal/platform/ratelimit/redis_store.go](../../../internal/platform/ratelimit/redis_store.go)
+3. [internal/app/gatewayapi/middleware/rate_limit.go](../../../internal/app/gatewayapi/middleware/rate_limit.go)
 
 验证方式：
 
 ```bash
-go test ./internal/ratelimit ./internal/middleware
+go test ./internal/platform/ratelimit ./internal/app/gatewayapi/middleware
 ```
 
 关联 GAP：

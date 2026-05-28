@@ -1,11 +1,11 @@
 package bootstrap
 
 import (
-	"github.com/ThankCat/unio-api/internal/billing"
-	"github.com/ThankCat/unio-api/internal/gateway"
-	"github.com/ThankCat/unio-api/internal/ledger"
-	"github.com/ThankCat/unio-api/internal/requestlog"
-	"github.com/ThankCat/unio-api/internal/store/sqlc"
+	"github.com/ThankCat/unio-api/internal/core/billing"
+	"github.com/ThankCat/unio-api/internal/core/ledger"
+	"github.com/ThankCat/unio-api/internal/core/requestlog"
+	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
+	"github.com/ThankCat/unio-api/internal/service/gateway"
 )
 
 // NewChatGateway 创建当前 server 进程使用的 chat gateway service。

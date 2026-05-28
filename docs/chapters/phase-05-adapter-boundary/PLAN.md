@@ -25,12 +25,12 @@ adapter 不负责：
 
 | 文件 | 作用 |
 | --- | --- |
-| [internal/adapter/chat.go](../../../internal/adapter/chat.go) | 内部 chat adapter contract。 |
-| [internal/adapter/registry.go](../../../internal/adapter/registry.go) | adapter registry。 |
-| [internal/adapter/sse/reader.go](../../../internal/adapter/sse/reader.go) | 项目级 SSE event reader。 |
-| [internal/adapter/openai/dto.go](../../../internal/adapter/openai/dto.go) | OpenAI 上游 wire DTO。 |
-| [internal/adapter/openai/chat.go](../../../internal/adapter/openai/chat.go) | OpenAI adapter 实现。 |
-| [internal/channel/runtime.go](../../../internal/channel/runtime.go) | gateway/routing 传给 adapter 的运行时 channel 参数。 |
+| [internal/core/adapter/chat.go](../../../internal/core/adapter/chat.go) | 内部 chat adapter contract。 |
+| [internal/core/adapter/registry.go](../../../internal/core/adapter/registry.go) | adapter registry。 |
+| [internal/core/adapter/sse/reader.go](../../../internal/core/adapter/sse/reader.go) | 项目级 SSE event reader。 |
+| [internal/core/adapter/openai/dto.go](../../../internal/core/adapter/openai/dto.go) | OpenAI 上游 wire DTO。 |
+| [internal/core/adapter/openai/chat.go](../../../internal/core/adapter/openai/chat.go) | OpenAI adapter 实现。 |
+| [internal/core/channel/runtime.go](../../../internal/core/channel/runtime.go) | gateway/routing 传给 adapter 的运行时 channel 参数。 |
 
 ## 任务
 
@@ -47,16 +47,16 @@ adapter 不负责：
 
 已完成：
 
-1. 盘点 [internal/httpapi/openai_dto.go](../../../internal/httpapi/openai_dto.go) 中 chat request 当前已接收字段。
-2. 将 `temperature`、`top_p`、`max_tokens`、`presence_penalty`、`frequency_penalty`、`stop`、`user` 加入 [internal/adapter/chat.go](../../../internal/adapter/chat.go)。
-3. 将这些可透传字段映射到 [internal/adapter/openai/dto.go](../../../internal/adapter/openai/dto.go)。
+1. 盘点 [internal/app/gatewayapi/openai_dto.go](../../../internal/app/gatewayapi/openai_dto.go) 中 chat request 当前已接收字段。
+2. 将 `temperature`、`top_p`、`max_tokens`、`presence_penalty`、`frequency_penalty`、`stop`、`user` 加入 [internal/core/adapter/chat.go](../../../internal/core/adapter/chat.go)。
+3. 将这些可透传字段映射到 [internal/core/adapter/openai/dto.go](../../../internal/core/adapter/openai/dto.go)。
 4. 非流式和流式 OpenAI adapter 均会把可透传字段写入上游请求 body。
 5. optional scalar 使用指针保留显式零值。
 
 验证方式：
 
 ```bash
-go test ./internal/adapter ./internal/adapter/openai ./internal/gateway ./internal/httpapi
+go test ./internal/core/adapter ./internal/core/adapter/openai ./internal/service/gateway ./internal/app/gatewayapi
 ```
 
 完成标准：
@@ -114,7 +114,7 @@ go test ./internal/adapter ./internal/adapter/openai ./internal/gateway ./intern
 2. 解析普通 delta chunk。
 3. 解析 usage-only final chunk。
 4. 将 final usage 放入 `adapter.ChatStreamChunk.Usage`。
-5. 评估成熟 SSE parser 后，选择自研项目级 `internal/adapter/sse` event reader，避免第三方错误类型污染 adapter/gateway 契约。
+5. 评估成熟 SSE parser 后，选择自研项目级 `internal/core/adapter/sse` event reader，避免第三方错误类型污染 adapter/gateway 契约。
 6. OpenAI stream adapter 已按 SSE event 边界解析上游响应，而不是逐行解析 `data:`。
 7. SSE reader 支持多行 `data:` 聚合、comment 忽略、`event`/`id`/`retry` 字段、CRLF/LF/CR 行结束、line/event size 上限和稳定错误。
 8. 流式测试已覆盖 final usage、多行 data、大 event、bad JSON、emit backpressure 和 `[DONE]`。

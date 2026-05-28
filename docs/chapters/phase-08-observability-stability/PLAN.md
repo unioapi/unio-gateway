@@ -18,11 +18,11 @@
 
 | 文件 | 作用 |
 | --- | --- |
-| [internal/gateway](../../../internal/gateway) | request 编排、attempt 状态、fallback 决策。 |
-| [internal/adapter](../../../internal/adapter) | provider error 和 upstream metadata 的来源。 |
-| [internal/middleware/logger.go](../../../internal/middleware/logger.go) | HTTP structured log。 |
-| [internal/middleware/request_id.go](../../../internal/middleware/request_id.go) | correlation id。 |
-| [internal/routing/router.go](../../../internal/routing/router.go) | channel 选择和后续 health 策略入口。 |
+| [internal/service/gateway](../../../internal/service/gateway) | request 编排、attempt 状态、fallback 决策。 |
+| [internal/core/adapter](../../../internal/core/adapter) | provider error 和 upstream metadata 的来源。 |
+| [internal/platform/httpmw/logger.go](../../../internal/platform/httpmw/logger.go) | HTTP structured log。 |
+| [internal/platform/httpmw/request_id.go](../../../internal/platform/httpmw/request_id.go) | correlation id。 |
+| [internal/core/routing/router.go](../../../internal/core/routing/router.go) | channel 选择和后续 health 策略入口。 |
 | [docs/production/THIRD_PARTY_POLICY.md](../../production/THIRD_PARTY_POLICY.md) | Prometheus/OpenTelemetry 等依赖选择规则。 |
 
 ## 任务
@@ -159,8 +159,8 @@ curl /metrics
 
 当前状态：
 
-1. `internal/adapter/sse.Reader` 已负责解析上游 provider SSE。
-2. HTTP 写出侧当前只有 [httpx.WriteSSE](../../../internal/httpx/response.go)，可支持 `data: <json>` 和 `data: [DONE]`。
+1. `internal/core/adapter/sse.Reader` 已负责解析上游 provider SSE。
+2. HTTP 写出侧当前只有 [httpx.WriteSSE](../../../internal/platform/httpx/response.go)，可支持 `data: <json>` 和 `data: [DONE]`。
 3. 写出侧尚未抽象 event、id、retry、heartbeat、错误事件和 context-aware flush。
 
 计划实现：

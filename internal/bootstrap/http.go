@@ -4,12 +4,12 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/ThankCat/unio-api/internal/auth"
-	"github.com/ThankCat/unio-api/internal/config"
-	"github.com/ThankCat/unio-api/internal/httpapi"
-	"github.com/ThankCat/unio-api/internal/modelcatalog"
-	"github.com/ThankCat/unio-api/internal/ratelimit"
-	"github.com/ThankCat/unio-api/internal/store/sqlc"
+	"github.com/ThankCat/unio-api/internal/app/gatewayapi"
+	"github.com/ThankCat/unio-api/internal/core/auth"
+	"github.com/ThankCat/unio-api/internal/core/modelcatalog"
+	"github.com/ThankCat/unio-api/internal/platform/config"
+	"github.com/ThankCat/unio-api/internal/platform/ratelimit"
+	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -19,7 +19,7 @@ func NewHTTPHandler(
 	queries *sqlc.Queries,
 	redisClient redis.Cmdable,
 	cfg config.Config,
-	chatCompletionService httpapi.ChatCompletionService,
+	chatCompletionService gatewayapi.ChatCompletionService,
 ) http.Handler {
 	apiKeyAuthenticator := auth.NewAPIKeyAuthenticator(queries)
 	modelCatalogService := modelcatalog.NewService(queries)
@@ -27,7 +27,7 @@ func NewHTTPHandler(
 	rateLimitStore := ratelimit.NewRedisStore(redisClient, cfg.Redis.KeyNamespace)
 	rateLimiter := ratelimit.NewLimiter(rateLimitStore)
 
-	return httpapi.NewRouter(httpapi.RouterDeps{
+	return gatewayapi.NewRouter(gatewayapi.RouterDeps{
 		Logger:              logger,
 		APIKeyAuthenticator: apiKeyAuthenticator,
 		RateLimiter:         rateLimiter,

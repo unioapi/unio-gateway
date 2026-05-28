@@ -10,7 +10,7 @@
 | TASK-8.02 | planned | Prometheus metrics 尚未实现。 |
 | TASK-8.03 | planned | OpenTelemetry 尚未实现。 |
 | TASK-8.04 | planned | retry/circuit breaker 尚未实现。 |
-| TASK-8.05 | planned | HTTP SSE Writer 尚未实现；当前 [httpx.WriteSSE](../../../internal/httpx/response.go) 只覆盖 OpenAI-compatible data-only 写出，关联 [GAP-8-002](../../production/TODO_REGISTER.md#gap-8-002)。 |
+| TASK-8.05 | planned | HTTP SSE Writer 尚未实现；当前 [httpx.WriteSSE](../../../internal/platform/httpx/response.go) 只覆盖 OpenAI-compatible data-only 写出，关联 [GAP-8-002](../../production/TODO_REGISTER.md#gap-8-002)。 |
 
 ## 进入阶段 8 前置条件
 

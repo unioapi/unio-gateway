@@ -14,13 +14,13 @@
 
 | 文件 | 作用 |
 | --- | --- |
-| [internal/httpapi/openai_dto.go](../../../internal/httpapi/openai_dto.go) | 对外 OpenAI-compatible DTO。 |
-| [internal/httpapi/chat_completions_handler.go](../../../internal/httpapi/chat_completions_handler.go) | `/v1/chat/completions` HTTP handler。 |
-| [internal/httpapi/models_handler.go](../../../internal/httpapi/models_handler.go) | `/v1/models` HTTP handler。 |
-| [internal/httpapi/router.go](../../../internal/httpapi/router.go) | HTTP route 装配。 |
-| [internal/httpx/json.go](../../../internal/httpx/json.go) | JSON decode。 |
-| [internal/httpx/response.go](../../../internal/httpx/response.go) | JSON/error response。 |
-| [internal/gateway](../../../internal/gateway) | chat completions 的业务编排。 |
+| [internal/app/gatewayapi/openai_dto.go](../../../internal/app/gatewayapi/openai_dto.go) | 对外 OpenAI-compatible DTO。 |
+| [internal/app/gatewayapi/chat_completions_handler.go](../../../internal/app/gatewayapi/chat_completions_handler.go) | `/v1/chat/completions` HTTP handler。 |
+| [internal/app/gatewayapi/models_handler.go](../../../internal/app/gatewayapi/models_handler.go) | `/v1/models` HTTP handler。 |
+| [internal/app/gatewayapi/router.go](../../../internal/app/gatewayapi/router.go) | HTTP route 装配。 |
+| [internal/platform/httpx/json.go](../../../internal/platform/httpx/json.go) | JSON decode。 |
+| [internal/platform/httpx/response.go](../../../internal/platform/httpx/response.go) | JSON/error response。 |
+| [internal/service/gateway](../../../internal/service/gateway) | chat completions 的业务编排。 |
 
 ## 任务
 
@@ -114,7 +114,7 @@
 验证方式：
 
 ```bash
-go test ./internal/httpapi
+go test ./internal/app/gatewayapi
 ```
 
 关联 GAP：
@@ -144,14 +144,14 @@ go test ./internal/httpapi
 验证方式：
 
 ```bash
-go test ./internal/httpx ./internal/httpapi
+go test ./internal/platform/httpx ./internal/app/gatewayapi
 ```
 
 涉及文件：
 
-1. [internal/httpx/json.go](../../../internal/httpx/json.go)
-2. [internal/httpx/response.go](../../../internal/httpx/response.go)
-3. [internal/httpapi/chat_completions_handler.go](../../../internal/httpapi/chat_completions_handler.go)
+1. [internal/platform/httpx/json.go](../../../internal/platform/httpx/json.go)
+2. [internal/platform/httpx/response.go](../../../internal/platform/httpx/response.go)
+3. [internal/app/gatewayapi/chat_completions_handler.go](../../../internal/app/gatewayapi/chat_completions_handler.go)
 
 关联 GAP：
 
