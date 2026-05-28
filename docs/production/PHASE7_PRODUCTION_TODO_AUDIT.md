@@ -659,37 +659,41 @@ P2
 
 ---
 
-### 16. Settlement 缺少请求级幂等完成检测
+### 16. Settlement recovery 与请求级幂等
 
 位置：
 
 ```text
-internal/service/gateway/chat_settlement.go:93
+internal/service/gateway/chat_settlement.go
+internal/service/gateway/chat_settlement_recovery.go
+internal/app/workers/settlement_recovery_worker.go
 ```
 
-新增 TODO：
+状态：
 
-```go
-// TODO(阶段7/production): [GAP-7-007] settlement 缺少请求级幂等完成检测，重复补偿或并发 settlement 可能撞上 usage/price snapshot 唯一约束并把已成功请求误标失败；引入补偿任务或并发重试前；按 request_record_id 检测既有 usage/snapshot/ledger 并返回幂等成功。
+```text
+已完成，GAP-7-007 已关闭。
 ```
 
 风险：
 
 ```text
-ledger debit 自身有幂等，但整个 settlement 没有请求级幂等完成检测。
-如果重复执行 settlement，可能撞上 usage_records / price_snapshots 唯一约束。
+上游成功且有可靠 usage 后，首次 settlement 失败不能 release 冻结余额。
 ```
 
-计划完善时机：
+已完成方案：
 
 ```text
-引入补偿任务或并发重试前。
+settlement 已按 request_record_id 做成功重放一致性检查。
+gateway 成功拿到可靠 usage 后先持久化 settlement_recovery_jobs。
+首次 settlement 失败后由 worker claim job 并复用幂等 settlement 重试。
+成功标记 succeeded，失败退避重试，耗尽后标记 dead 等人工处理。
 ```
 
 建议优先级：
 
 ```text
-P0
+已关闭
 ```
 
 ---

@@ -18,6 +18,11 @@ func NewChatGateway(db gateway.ChatTxBeginner, queries *sqlc.Queries, router gat
 		billing.Service{},
 		ledgerService,
 	)
+	chatSettlementRecoveryStore := gateway.NewChatSettlementRecoveryStore(queries)
+	chatSettlementExecutor := gateway.NewRecoverableChatSettlementExecutor(
+		chatSettlementService,
+		chatSettlementRecoveryStore,
+	)
 	chatAuthorizationServer := gateway.NewChatAuthorizationService(
 		queries,
 		billing.Service{},
@@ -30,7 +35,7 @@ func NewChatGateway(db gateway.ChatTxBeginner, queries *sqlc.Queries, router gat
 		registry,
 		nil,
 		requestLogStore,
-		chatSettlementService,
+		chatSettlementExecutor,
 		chatAuthorizationServer,
 	)
 }

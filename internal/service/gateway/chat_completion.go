@@ -149,8 +149,10 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ga
 			Usage:                 adapterResp.Usage,
 			UsageSource:           ChatSettlementUsageSourceUpstreamResponse,
 		}); err != nil {
-			s.markRequestRecordFailed(ctx, requestRecord, "chat_settlement_failed", err)
-			return nil, err
+			if !IsChatSettlementRecoveryScheduled(err) {
+				s.markRequestRecordFailed(ctx, requestRecord, "chat_settlement_failed", err)
+				return nil, err
+			}
 		}
 
 		return &gatewayapi.ChatCompletionResponse{

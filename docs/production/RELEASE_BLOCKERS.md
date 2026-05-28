@@ -6,7 +6,7 @@
 
 | ID | GAP | 阶段 | 阻断原因 | 关联任务 |
 | --- | --- | --- | --- | --- |
-| RB-007 | [GAP-7-007](TODO_REGISTER.md#gap-7-007) | 阶段 7 | settlement 已支持成功重放一致性检查；上游成功后的首次 settlement 失败仍可能导致冻结余额悬挂，后续需由 worker recovery 持久化补偿并幂等重试。 | [TASK-7.19](../chapters/phase-07-billing-ledger/PLAN.md#task-7-19-settlement-idempotency) |
+| 无 | - | - | 当前没有 P0 release blocker。 | - |
 
 ## 使用规则
 

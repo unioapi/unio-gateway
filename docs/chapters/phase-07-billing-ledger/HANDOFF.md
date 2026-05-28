@@ -18,16 +18,17 @@
 8. request-level `cost_snapshots` 成本快照写入与幂等重放校验。
 9. `prices` enabled 生效窗口重叠约束。
 10. 全服务目录结构改造。
+11. settlement recovery worker：上游成功且有可靠 usage 后，首次 settlement 失败由持久化 job 和 worker 幂等重试收口。
 
 当前剩余 P0 阻断项：
 
 ```text
-GAP-7-007：上游成功且有可靠 usage 后，如果首次 settlement 失败，需要 worker 持久化 recovery job + 幂等 settlement 重试收口。
+无。GAP-7-007 已关闭。
 ```
 
 ## 本班次交接重点
 
-本班次完成了 4 组工作。
+本班次完成了 5 组工作。
 
 ### 1. 成本价与成本快照已接入 settlement
 
@@ -139,10 +140,10 @@ out: internal/platform/store/sqlc
 cmd/gateway-server/main.go
 cmd/admin-server/.gitkeep
 cmd/console-server/.gitkeep
-cmd/worker-server/.gitkeep
+cmd/worker-server/main.go
 ```
 
-`.gitkeep` 只用于让 Git 跟踪目标入口目录，不代表 Admin API、Console API、Worker 已实现。
+Admin API、Console API 仍只有 `.gitkeep`；Worker 已有 settlement recovery 入口。
 
 架构文档：
 
@@ -173,6 +174,31 @@ docs/production/PHASE7_PRODUCTION_TODO_AUDIT.md
 /console/v1/*
 ```
 
+### 5. Settlement recovery worker 已完成
+
+已完成内容：
+
+1. 新增 `settlement_recovery_jobs` 表，保存 request、attempt、reservation、usage、价格快照、provider/channel/model 等 recovery 所需事实。
+2. gateway 成功拿到可靠 usage 后先创建 recovery job，再执行真实 settlement。
+3. 首次 settlement 失败时不 release 冻结余额；非流式仍返回上游成功响应，流式有 final usage 时按成功账务事实收口。
+4. worker claim 到期 pending 或锁过期 running job，复用 `ChatSettlementService` 的 request-level 幂等 settlement 重试。
+5. worker 成功后标记 `succeeded`；失败按指数退避回到 `pending`；达到 `max_attempts` 或耗尽任务标记 `dead` 等人工处理。
+6. `cmd/worker-server/main.go` 和 `internal/bootstrap/worker_server.go` 已接入真实 worker 入口。
+7. `GAP-7-007` 已关闭并移出 release blockers。
+
+关键文件：
+
+```text
+cmd/worker-server/main.go
+internal/bootstrap/worker_server.go
+internal/app/workers/runner.go
+internal/app/workers/settlement_recovery_worker.go
+internal/service/gateway/chat_settlement_recovery.go
+migrations/000021_create_settlement_recovery_jobs.up.sql
+migrations/000021_create_settlement_recovery_jobs.down.sql
+sql/queries/settlement_recovery_jobs.sql
+```
+
 ## 已完成 GAP
 
 本班次关闭：
@@ -180,6 +206,7 @@ docs/production/PHASE7_PRODUCTION_TODO_AUDIT.md
 ```text
 GAP-7-009：provider/channel 成本价与 request-level cost snapshot。
 GAP-7-010：价格 enabled 生效窗口重叠约束。
+GAP-7-007：上游成功且有可靠 usage 后的 settlement recovery worker。
 ```
 
 此前已关闭的阶段 7 关键 GAP：
@@ -196,57 +223,20 @@ GAP-7-014：部分余额授权与平台差额核销。
 
 ## 仍需收口
 
-下一步只剩阶段 7 worker recovery 主线。
+下一步处理阶段 7 / 阶段 8 交界的 stream 写出后错误观测。
 
-必须先处理：
+必须先复核：
 
 ```text
-GAP-7-007
+GAP-7-006
 ```
 
 业务语义：
 
 ```text
-上游已经成功并返回可靠 usage 后，如果 SettleSuccessfulChat 失败，不能简单 release 冻结余额。
-因为 provider 侧可能已经产生成本，业务语义应优先补偿重试 settlement/capture。
+SSE 已写出后不能再返回 OpenAI-compatible JSON error。
+后续需要通过 stream error event、request 状态和 observability 指标让中断原因可追踪。
 ```
-
-当前风险：
-
-```text
-request 可能被标记 failed。
-reservation 可能保持 authorized。
-reserved_balance 可能悬挂。
-```
-
-目标方案：
-
-```text
-worker 持久化 recovery job + 幂等 settlement 重试。
-```
-
-建议落点：
-
-```text
-cmd/worker-server/main.go
-internal/bootstrap/worker_server.go
-internal/app/workers/runner.go
-internal/app/workers/settlement_recovery_worker.go
-internal/service/gateway/chat_settlement_recovery.go
-migrations/000021_create_settlement_recovery_jobs.up.sql
-migrations/000021_create_settlement_recovery_jobs.down.sql
-sql/queries/settlement_recovery_jobs.sql
-```
-
-建议顺序：
-
-1. 设计 `settlement_recovery_jobs` 表。
-2. 写 sqlc query：创建 job、claim job、mark succeeded、mark retry、mark failed。
-3. 在 gateway 首次 settlement 失败路径创建 recovery job。
-4. 在 `internal/service/gateway` 增加 recovery service，复用现有幂等 settlement 逻辑。
-5. 在 `internal/app/workers` 增加 runner 和 settlement recovery worker。
-6. 在 `cmd/worker-server` 增加真实 `main.go`，替换 `.gitkeep`。
-7. 增加测试覆盖 job claim、幂等重试、成功收口、失败重试次数。
 
 ## 当前关键文件
 
@@ -256,7 +246,7 @@ sql/queries/settlement_recovery_jobs.sql
 cmd/gateway-server/main.go
 cmd/admin-server/.gitkeep
 cmd/console-server/.gitkeep
-cmd/worker-server/.gitkeep
+cmd/worker-server/main.go
 internal/bootstrap/gateway_server.go
 internal/bootstrap/http.go
 ```
@@ -333,12 +323,12 @@ docs/production/DECISIONS.md
 6. stream 不能只复用非流式后扣费模型，需要 authorization、release、capture、write-off 和 risk-exposure 语义。
 7. ledger-first 不能被绕过，余额变化和核销都必须有账务事实。
 8. 所有补偿和重试都要考虑幂等。
-9. 上游成功且有可靠 usage 后 settlement 失败，不要直接 release；必须由 worker recovery 收口。
+9. 上游成功且有可靠 usage 后 settlement 失败，不要直接 release；当前已由 worker recovery 收口，后续改动不能破坏该语义。
 10. 成本价不要做倍率，不要只按 provider 定价，第一版按 channel + model 维护明确金额。
 11. cost snapshot 不能只存单价，必须同时保存请求级实际平台成本金额。
 12. 历史成本、毛利和审计只能依赖请求级快照事实，不能用当前成本价配置回算历史。
 13. 新代码必须进入新目录结构，不要再使用迁移前路径。
-14. `cmd/admin-server`、`cmd/console-server`、`cmd/worker-server` 当前只有 `.gitkeep`，不要误认为进程已实现。
+14. `cmd/admin-server`、`cmd/console-server` 当前只有 `.gitkeep`；`cmd/worker-server` 已有 settlement recovery 入口。
 
 ## 最近验证
 

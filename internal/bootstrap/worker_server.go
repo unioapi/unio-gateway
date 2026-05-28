@@ -1,0 +1,71 @@
+package bootstrap
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"os"
+	"time"
+
+	"github.com/ThankCat/unio-api/internal/app/workers"
+	"github.com/ThankCat/unio-api/internal/core/billing"
+	"github.com/ThankCat/unio-api/internal/core/ledger"
+	"github.com/ThankCat/unio-api/internal/platform/config"
+	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
+	"github.com/ThankCat/unio-api/internal/service/gateway"
+)
+
+// WorkerServerAppDB 定义 worker server app 构建时需要的数据库能力。
+type WorkerServerAppDB interface {
+	sqlc.DBTX
+	gateway.ChatTxBeginner
+}
+
+// WorkerServerAppDeps 表示构建 worker server app 需要的进程级依赖。
+type WorkerServerAppDeps struct {
+	Logger *slog.Logger
+	Config config.Config
+	DB     WorkerServerAppDB
+}
+
+// WorkerServerApp 表示当前 worker-server 进程已经装配完成的后台任务应用。
+type WorkerServerApp struct {
+	Runner *workers.Runner
+}
+
+// NewWorkerServerApp 装配当前 worker-server 进程的后台任务应用。
+func NewWorkerServerApp(_ context.Context, deps WorkerServerAppDeps) (*WorkerServerApp, error) {
+	queries := sqlc.New(deps.DB)
+	ledgerService := ledger.NewService(deps.DB, queries)
+	chatSettlementService := gateway.NewChatSettlementService(
+		deps.DB,
+		queries,
+		billing.Service{},
+		ledgerService,
+	)
+	chatSettlementRecoveryService := gateway.NewChatSettlementRecoveryService(queries, chatSettlementService)
+
+	settlementRecoveryWorker := workers.NewSettlementRecoveryWorker(
+		queries,
+		chatSettlementRecoveryService,
+		defaultWorkerID("settlement-recovery"),
+		30*time.Second,
+	)
+
+	runner := workers.NewRunner(
+		deps.Logger,
+		time.Second,
+		settlementRecoveryWorker,
+	)
+
+	return &WorkerServerApp{Runner: runner}, nil
+}
+
+func defaultWorkerID(prefix string) string {
+	hostname, err := os.Hostname()
+	if err != nil || hostname == "" {
+		hostname = "unknown-host"
+	}
+
+	return fmt.Sprintf("%s:%s:%d", prefix, hostname, os.Getpid())
+}

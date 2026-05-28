@@ -6,14 +6,14 @@
 
 ```text
 阶段 7：计费与账本
-当前建议小节：7.19 Settlement recovery
+当前建议小节：GAP-7-006 Stream write observability
 ```
 
 当前协作焦点：
 
 ```text
-阶段 7 TASK-7.22 已完成：prices 已通过 PostgreSQL exclusion constraint 防止同一 model/currency/pricing_unit 出现重叠 enabled 生效窗口；GAP-7-010 已关闭。
-下一步建议进入 GAP-7-007：上游成功且有可靠 usage 后的首次 settlement 失败，需要 worker 持久化 recovery job + 幂等重试收口。
+阶段 7 TASK-7.19 已完成：上游成功且有可靠 usage 后，gateway 会先持久化 settlement recovery job；首次 settlement 失败由 worker 幂等重试收口；GAP-7-007 已关闭。
+下一步建议处理 GAP-7-006：stream 写出后错误观测。
 ```
 
 说明：
@@ -47,6 +47,7 @@ Release blockers 表示公开生产前必须关闭，不等于每次学习或复
 17. 阶段 7 外部事务内 debit 幂等重入已完成：`DebitWithQueries` 在扣余额前按 ledger entry `idempotency_key` 获取 transaction-level advisory lock；`GAP-7-012` 已关闭并移出 release blockers。
 18. 阶段 7 成本价与毛利审计已完成：`channel_cost_prices`、`cost_snapshots` schema 与查询已落地，billing 包已拆分客户售价计算和 provider 成本计算语义；`SettleSuccessfulChat` 会按 attempt time 查询 channel/model 成本价、计算 provider cost、在同一事务写入请求级 `cost_snapshots`，并在幂等重放时校验成本快照事实；`GAP-7-009` 已关闭。
 19. 阶段 7 价格生效窗口约束已完成：`prices` 使用 `btree_gist` + exclusion constraint，禁止同一 model/currency/pricing_unit 的 enabled 价格窗口重叠；相邻窗口、disabled 重叠和不同 scope 重叠已有测试覆盖；`GAP-7-010` 已关闭。
+20. 阶段 7 settlement recovery 已完成：`settlement_recovery_jobs`、gateway recovery wrapper、worker claim/retry/dead 状态机和 `cmd/worker-server` 入口已落地；非流式/流式有可靠 usage 时首次 settlement 失败不再 release，而是由 worker 幂等重试；`GAP-7-007` 已关闭并移出 release blockers。
 
 重要产品判断：
 
@@ -54,7 +55,7 @@ Release blockers 表示公开生产前必须关闭，不等于每次学习或复
 2. 当前 text-only MVP 不假装支持这些能力；SSE parser 已补稳，后续进入正式实现前仍必须设计 tool/multimodal DTO、adapter contract、stream delta、usage/billing 和 fallback 语义。
 3. 阶段 6 已收口；credential 正式解析和 provider/project 后台策略推迟到阶段 9，预算约束推迟到阶段 7。
 4. 阶段 7 计费产品规则已定：部分余额授权 + 平台差额核销；不允许用户负余额、隐性欠费或充值后追扣旧账。
-5. 上游成功且已有可靠 usage 后，settlement 失败不能简单 release 冻结余额；该问题暂时不实现 goroutine 补偿，后续进入 worker/settlement recovery 线时用持久化任务和幂等重试收口。
+5. 上游成功且已有可靠 usage 后，settlement 失败不能简单 release 冻结余额；当前已用持久化 recovery job 和 worker 幂等重试收口，不使用 gateway goroutine 补偿。
 
 验证状态：
 
@@ -74,7 +75,7 @@ go test ./...
 | 阶段 4 | [OpenAI-compatible API](chapters/phase-04-openai-compatible-api/STATUS.md) | partial | `/v1/models`、`/v1/chat/completions`、SSE 基础入口、严格 JSON 和 Chat DTO text-only 校验已完成；project 模型可见性和 SSE 写出后观测随阶段 6/7/8 收口。 |
 | 阶段 5 | [Adapter 边界](chapters/phase-05-adapter-boundary/STATUS.md) | partial | adapter 接口、OpenAI 非流式/流式、usage 映射、当前 HTTP DTO 可透传参数 contract 和项目级 SSE event reader 已完成；provider error metadata 进入阶段 8 观测主线。 |
 | 阶段 6 | [模型与渠道](chapters/phase-06-model-channel-routing/STATUS.md) | done | provider/channel/model/routing/fallback、project 模型 allow-list/deny-list、adapter/routing/gateway/http/server app bootstrap 和启动期 provider.adapter preflight 已接入；credential 正式解析和 provider/project 后台策略推迟到阶段 9，预算约束推迟到阶段 7。 |
-| 阶段 7 | [计费与账本](chapters/phase-07-billing-ledger/STATUS.md) | in_progress | request/attempt/usage/ledger/settlement、stream final usage、ledger reservation、billing 冻结金额估算、gateway authorization baseline、部分余额授权、平台差额核销、无 final usage 风险敞口记录、输入 token 估算、request/attempt 状态机守卫、settlement 成功重放检查、外部事务内 debit 幂等重入、usage source 审计、safe/internal error 审计、请求级 cost snapshot 和价格生效窗口约束已完成；worker recovery 仍未完成。 |
+| 阶段 7 | [计费与账本](chapters/phase-07-billing-ledger/STATUS.md) | in_progress | request/attempt/usage/ledger/settlement、stream final usage、ledger reservation、billing 冻结金额估算、gateway authorization baseline、部分余额授权、平台差额核销、无 final usage 风险敞口记录、输入 token 估算、request/attempt 状态机守卫、settlement 成功重放检查、外部事务内 debit 幂等重入、usage source 审计、safe/internal error 审计、请求级 cost snapshot、价格生效窗口约束和 worker settlement recovery 已完成；stream 写出后错误观测仍未完成。 |
 | 阶段 8 | [可观测性与稳定性](chapters/phase-08-observability-stability/STATUS.md) | planned | 尚未正式进入。当前只有少量 adapter metadata 相关前置 TODO。 |
 | 阶段 9 | [后台管理](chapters/phase-09-admin/STATUS.md) | planned | 尚未正式进入。进入前必须先处理 credential resolver 和后台管理边界。 |
 
@@ -82,14 +83,12 @@ go test ./...
 
 当前不应进入生产公开计费 API，原因：
 
-1. 上游成功后首次 settlement 失败仍可能导致冻结余额悬挂；该问题保留为 worker/recovery 阶段处理，不在当前状态机小节实现。
-2. stream 写出后错误观测仍依赖 request 状态和后续 observability 收口。
+1. stream 写出后错误观测仍依赖 request 状态和后续 observability 收口。
 
 ## 下一步
 
-下一步可继续阶段 7 worker/settlement recovery 线。
+下一步可继续阶段 7 / 阶段 8 stream observability 线。
 
 阶段 7 下一小节目标：
 
-1. 继续推进 [GAP-7-007](production/TODO_REGISTER.md#gap-7-007)：上游成功且有可靠 usage 后，首次 settlement 失败的持久化 recovery job 与幂等重试。
-2. 后续处理 [GAP-7-006](production/TODO_REGISTER.md#gap-7-006) stream 写出后错误观测。
+1. 处理 [GAP-7-006](production/TODO_REGISTER.md#gap-7-006) stream 写出后错误观测。

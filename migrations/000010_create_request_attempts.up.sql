@@ -52,7 +52,11 @@ CREATE TABLE request_attempts (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 
     -- 同一请求下 attempt_index 不能重复。--
-    UNIQUE (request_record_id, attempt_index)
+    UNIQUE (request_record_id, attempt_index),
+
+    -- recovery job 需要校验 attempt 属于同一个 request。--
+    CONSTRAINT uq_request_attempts_id_request
+        UNIQUE (id, request_record_id)
 );
 
 -- channel 健康、审计和 fallback 排查会按 channel 倒序查看尝试记录。

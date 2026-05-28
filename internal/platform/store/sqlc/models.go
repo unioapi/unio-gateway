@@ -246,6 +246,48 @@ type SchemaHealthCheck struct {
 	CreatedAt pgtype.Timestamptz
 }
 
+type SettlementRecoveryJob struct {
+	ID                      int64
+	UserID                  int64
+	RequestRecordID         int64
+	AttemptID               int64
+	ReservationID           int64
+	ResponseModelID         string
+	ModelID                 int64
+	ProviderID              int64
+	ChannelID               int64
+	UpstreamResponseModel   string
+	UsagePromptTokens       int64
+	UsageCompletionTokens   int64
+	UsageTotalTokens        int64
+	UsageCachedTokens       int64
+	UsageReasoningTokens    int64
+	UsageSource             string
+	PriceID                 int64
+	Currency                string
+	PricingUnit             string
+	InputPrice              pgtype.Numeric
+	OutputPrice             pgtype.Numeric
+	CachedInputPrice        pgtype.Numeric
+	ReasoningOutputPrice    pgtype.Numeric
+	FormulaVersion          string
+	EstimatedAmount         pgtype.Numeric
+	AuthorizedAmount        pgtype.Numeric
+	Status                  string
+	AttemptCount            int32
+	MaxAttempts             int32
+	NextRunAt               pgtype.Timestamptz
+	LockedBy                pgtype.Text
+	LockedUntil             pgtype.Timestamptz
+	LastErrorCode           pgtype.Text
+	LastErrorMessage        pgtype.Text
+	LastInternalErrorDetail pgtype.Text
+	LastAttemptedAt         pgtype.Timestamptz
+	CompletedAt             pgtype.Timestamptz
+	CreatedAt               pgtype.Timestamptz
+	UpdatedAt               pgtype.Timestamptz
+}
+
 type UsageRecord struct {
 	ID               int64
 	RequestRecordID  int64

@@ -95,7 +95,7 @@ ledger entry
 <a id="task-7-05-non-stream-settlement"></a>
 ### TASK-7.05 非流式 settlement
 
-状态：partial
+状态：done
 
 范围：
 
@@ -104,7 +104,7 @@ ledger entry
 3. 创建 ledger debit。
 4. 标记 request/attempt succeeded。
 5. 调用上游前 request-level authorization 已接入。
-6. 后续补部分余额授权、差额核销和 settlement 幂等。
+6. 部分余额授权、差额核销、settlement 幂等和首次 settlement 失败 recovery 已完成。
 
 关联 GAP：
 
@@ -136,7 +136,7 @@ ledger entry
 2. 客户端取消但已拿到 final usage 时仍 settlement。
 3. 无 final usage 时不强行估算扣费；已经可能产生上游成本的路径释放用户冻结余额，并记录 `risk_exposure`。
 4. 调用上游前 request-level authorization 已接入。
-5. request/attempt 状态机守卫已完成；后续补 settlement 幂等和观测字段。
+5. request/attempt 状态机守卫、settlement 幂等和首次 settlement 失败 recovery 已完成；SSE 写出后错误观测仍由 GAP-7-006 后续收口。
 
 关联 GAP：
 
@@ -227,7 +227,7 @@ sqlc 测试已覆盖 request/attempt 终态幂等和非法覆盖场景。
 <a id="task-7-19-settlement-idempotency"></a>
 ### TASK-7.19 Settlement 幂等
 
-状态：partial
+状态：done
 
 范围：
 
@@ -235,14 +235,28 @@ sqlc 测试已覆盖 request/attempt 终态幂等和非法覆盖场景。
 2. 重复 settlement 时检测既有 usage/snapshot/ledger。已完成。
 3. 并发 settlement 不能把已成功请求误标失败。已完成。
 4. 外部事务内的 ledger 幂等冲突需要稳定重入策略。已完成。
-5. 上游成功且有可靠 usage 后，settlement 失败不能直接 release 冻结余额。仍保留为 worker recovery 问题。
-6. settlement recovery 后续应由 worker 持久化任务处理，不使用 gateway goroutine。未完成。
-7. recovery worker 重试 settlement 前，必须先保证 usage、price snapshot、ledger capture 和 request 状态更新幂等。成功重放和外部 debit 幂等已完成，持久化 recovery job 未完成。
+5. 上游成功且有可靠 usage 后，settlement 失败不能直接 release 冻结余额；gateway 已先持久化 recovery job。
+6. settlement recovery 由 worker 持久化任务处理，不使用 gateway goroutine。已完成。
+7. recovery worker 重试 settlement 前，usage、price snapshot、ledger capture 和 request 状态更新均复用 request-level 幂等 settlement。已完成。
+
+已完成：
+
+```text
+新增 settlement_recovery_jobs 表保存 request/attempt/reservation、usage、价格快照和 route 事实。
+gateway 成功拿到可靠 usage 后，会先创建 recovery job，再执行真实 settlement。
+首次 settlement 失败时，非流式仍返回上游成功响应；流式有 final usage 时按成功账务事实收口，不 release 冻结余额。
+worker 会 claim pending 或锁过期 running job，复用 ChatSettlementService 幂等重试 settlement。
+成功后 job 标记 succeeded；失败按指数退避回到 pending；达到 max_attempts 或耗尽任务会标记 dead，等待人工处理。
+```
 
 关联 GAP：
 
 - [GAP-7-007](../../production/TODO_REGISTER.md#gap-7-007)
 - [GAP-7-012](../../production/TODO_REGISTER.md#gap-7-012) 已关闭
+
+已关闭 GAP：
+
+- [GAP-7-007](../../production/TODO_REGISTER.md#gap-7-007)
 
 
 <a id="task-7-20-cost-snapshot"></a>
@@ -282,7 +296,7 @@ SettleSuccessfulChat 已按最终 channel/model 和 attempt time 查询 active c
 ```text
 GAP-7-009 已关闭。
 价格 enabled 生效窗口重叠风险已由 TASK-7.22 / GAP-7-010 收口。
-上游成功后的首次 settlement 失败 recovery 仍由 TASK-7.19 / GAP-7-007 在 worker recovery 线处理。
+上游成功后的首次 settlement 失败 recovery 已由 TASK-7.19 / GAP-7-007 收口。
 ```
 
 关联 GAP：

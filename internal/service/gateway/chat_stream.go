@@ -189,8 +189,10 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 			// 即使后续发生客户端取消、连接尾部错误或 adapter 返回错误，也不能让已产生成本的请求免费。
 			if finalUsage != nil {
 				if settleErr := settleStreamFinalUsage(); settleErr != nil {
-					s.markRequestRecordFailed(ctx, requestRecord, "stream_chat_settlement_failed", settleErr)
-					return settleErr
+					if !IsChatSettlementRecoveryScheduled(settleErr) {
+						s.markRequestRecordFailed(ctx, requestRecord, "stream_chat_settlement_failed", settleErr)
+						return settleErr
+					}
 				}
 
 				// 账务已经成功收口，但调用方仍需知道 stream 末尾发生过错误；
@@ -274,8 +276,10 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 		}
 
 		if settleErr := settleStreamFinalUsage(); settleErr != nil {
-			s.markRequestRecordFailed(ctx, requestRecord, "stream_chat_settlement_failed", settleErr)
-			return settleErr
+			if !IsChatSettlementRecoveryScheduled(settleErr) {
+				s.markRequestRecordFailed(ctx, requestRecord, "stream_chat_settlement_failed", settleErr)
+				return settleErr
+			}
 		}
 
 		return nil

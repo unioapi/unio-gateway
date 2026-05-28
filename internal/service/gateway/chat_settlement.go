@@ -171,7 +171,6 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 	txRequestLog := requestlog.NewStore(txQueries)
 	usage := params.Usage
 
-	// TODO(阶段7/production): [GAP-7-007] settlement 已具备成功重放一致性检查，但上游成功且有可靠 usage 后 settlement 失败仍缺少持久化 recovery job，可能导致 reservation 长期 authorized；引入 worker recovery 前；由 worker 持久化重试幂等 settlement。
 	// TODO(阶段8/production): [GAP-8-001] adapter 成功响应缺少真实 upstream status/request id 会影响渠道审计精度；接入 provider error classification / adapter metadata 时；从 adapter response metadata 写入真实 upstream_status_code 和 upstream_request_id。
 	_, err = txRequestLog.MarkAttemptSucceeded(ctx, requestlog.MarkAttemptSucceededParams{
 		ID:                    params.AttemptRecord.ID,
