@@ -37,12 +37,19 @@
 1. Provider 原始错误 body 的脱敏解析和 metadata contract。
 2. retry/fallback 基于 provider 错误类型的精细分类。
 3. channel health 根据错误率降权或熔断。
-4. SSE Writer、heartbeat、写出后错误事件和 stream observability。
+4. SSE Writer、heartbeat 和更完整的 stream observability。
 
 相关 GAP：
 
-1. [GAP-7-006](../../production/TODO_REGISTER.md#gap-7-006)
-2. [GAP-8-001](../../production/TODO_REGISTER.md#gap-8-001)
+1. [GAP-8-001](../../production/TODO_REGISTER.md#gap-8-001)
+2. [GAP-8-002](../../production/TODO_REGISTER.md#gap-8-002)
+
+说明：
+
+```text
+GAP-7-006 已在 2026-05-29 关闭：Chat Completions SSE 已开始后会写出 OpenAI-compatible data-only error chunk，并且不写 [DONE]。
+阶段 8 后续只增强项目级 SSE Writer、metrics、日志和 observability，不再阻塞阶段 7。
+```
 
 ## 建议阅读顺序
 

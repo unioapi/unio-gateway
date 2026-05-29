@@ -15,6 +15,7 @@ import (
 
 const (
 	defaultSettlementRecoveryLockTTL = 30 * time.Second
+	settlementRecoveryLockMargin     = 5 * time.Second
 	maxRecoveryErrorDetailBytes      = 2048
 )
 
@@ -95,7 +96,9 @@ func (w *SettlementRecoveryWorker) RunOnce(ctx context.Context) (bool, error) {
 		)
 	}
 
-	jobCtx, cancel := context.WithTimeout(ctx, w.lockTTL)
+	// job 执行超时必须短于数据库锁 TTL，给当前 worker 留出更新 job 状态的时间。
+	// 否则锁刚过期时旧 worker 才取消，容易和新 worker 的重新 claim 发生竞争。
+	jobCtx, cancel := context.WithTimeout(ctx, w.recoveryTimeout())
 	defer cancel()
 
 	if err := w.recoverer.RecoverChatSettlement(jobCtx, job); err != nil {
@@ -147,12 +150,19 @@ func (w *SettlementRecoveryWorker) markFailed(ctx context.Context, job sqlc.Sett
 	if job.AttemptCount >= job.MaxAttempts {
 		_, err := w.store.MarkSettlementRecoveryJobDead(ctx, sqlc.MarkSettlementRecoveryJobDeadParams{
 			ID:                      job.ID,
+			LockedBy:                job.LockedBy,
+			LockedUntil:             job.LockedUntil,
+			AttemptCount:            job.AttemptCount,
 			LastErrorCode:           nullableText(code),
 			LastErrorMessage:        nullableText(safeMessage),
 			LastInternalErrorDetail: nullableText(internalDetail),
 			CompletedAt:             pgtype.Timestamptz{Time: now, Valid: true},
 		})
 		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil
+			}
+
 			return failure.Wrap(
 				failure.CodeGatewayChatSettlementFailed,
 				err,
@@ -165,6 +175,9 @@ func (w *SettlementRecoveryWorker) markFailed(ctx context.Context, job sqlc.Sett
 
 	_, err := w.store.MarkSettlementRecoveryJobRetry(ctx, sqlc.MarkSettlementRecoveryJobRetryParams{
 		ID:                      job.ID,
+		LockedBy:                job.LockedBy,
+		LockedUntil:             job.LockedUntil,
+		AttemptCount:            job.AttemptCount,
 		NextRunAt:               pgtype.Timestamptz{Time: now.Add(settlementRecoveryBackoff(job.AttemptCount)), Valid: true},
 		LastErrorCode:           nullableText(code),
 		LastErrorMessage:        nullableText(safeMessage),
@@ -172,6 +185,10 @@ func (w *SettlementRecoveryWorker) markFailed(ctx context.Context, job sqlc.Sett
 		UpdatedAt:               pgtype.Timestamptz{Time: now, Valid: true},
 	})
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+
 		return failure.Wrap(
 			failure.CodeGatewayChatSettlementFailed,
 			err,
@@ -180,6 +197,21 @@ func (w *SettlementRecoveryWorker) markFailed(ctx context.Context, job sqlc.Sett
 	}
 
 	return nil
+}
+
+func (w *SettlementRecoveryWorker) recoveryTimeout() time.Duration {
+	if w.lockTTL <= 0 {
+		return defaultSettlementRecoveryLockTTL - settlementRecoveryLockMargin
+	}
+	if w.lockTTL <= settlementRecoveryLockMargin {
+		timeout := w.lockTTL / 2
+		if timeout <= 0 {
+			return w.lockTTL
+		}
+		return timeout
+	}
+
+	return w.lockTTL - settlementRecoveryLockMargin
 }
 
 func settlementRecoveryBackoff(attemptCount int32) time.Duration {

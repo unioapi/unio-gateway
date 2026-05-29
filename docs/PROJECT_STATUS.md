@@ -1,19 +1,19 @@
 # Project Status
 
-更新时间：2026-05-28
+更新时间：2026-05-29
 
 实现主线：
 
 ```text
-阶段 7：计费与账本
-当前建议小节：GAP-7-006 Stream write observability
+阶段 8：可观测性与稳定性
+当前建议小节：阶段 8 observability / stability 边界复核
 ```
 
 当前协作焦点：
 
 ```text
-阶段 7 TASK-7.19 已完成：上游成功且有可靠 usage 后，gateway 会先持久化 settlement recovery job；首次 settlement 失败由 worker 幂等重试收口；GAP-7-007 已关闭。
-下一步建议处理 GAP-7-006：stream 写出后错误观测。
+阶段 7 已收口：计费、账本、stream final usage、reservation、部分余额授权、平台差额核销、settlement 幂等、worker recovery 和 stream 写出后 data-only SSE error chunk 均已完成。
+下一步建议进入阶段 8：可观测性与稳定性。
 ```
 
 说明：
@@ -48,6 +48,7 @@ Release blockers 表示公开生产前必须关闭，不等于每次学习或复
 18. 阶段 7 成本价与毛利审计已完成：`channel_cost_prices`、`cost_snapshots` schema 与查询已落地，billing 包已拆分客户售价计算和 provider 成本计算语义；`SettleSuccessfulChat` 会按 attempt time 查询 channel/model 成本价、计算 provider cost、在同一事务写入请求级 `cost_snapshots`，并在幂等重放时校验成本快照事实；`GAP-7-009` 已关闭。
 19. 阶段 7 价格生效窗口约束已完成：`prices` 使用 `btree_gist` + exclusion constraint，禁止同一 model/currency/pricing_unit 的 enabled 价格窗口重叠；相邻窗口、disabled 重叠和不同 scope 重叠已有测试覆盖；`GAP-7-010` 已关闭。
 20. 阶段 7 settlement recovery 已完成：`settlement_recovery_jobs`、gateway recovery wrapper、worker claim/retry/dead 状态机和 `cmd/worker-server` 入口已落地；非流式/流式有可靠 usage 时首次 settlement 失败不再 release，而是由 worker 幂等重试；`GAP-7-007` 已关闭并移出 release blockers。
+21. 阶段 7 stream 写出后错误观测已完成：SSE 已开始后，HTTP handler 会写出 OpenAI-compatible data-only error chunk，并且不写 `[DONE]`；`GAP-7-006` 已关闭。
 
 重要产品判断：
 
@@ -72,23 +73,23 @@ go test ./...
 | 阶段 1 | [Go Web 骨架](chapters/phase-01-go-web/STATUS.md) | partial | 基础骨架已完成，HTTP timeout 和 request id 输入约束已收口；startup timeout/readiness 仍是生产欠账。 |
 | 阶段 2 | [基础设施](chapters/phase-02-infrastructure/STATUS.md) | partial | PostgreSQL、Redis、migration、sqlc 基础能力已完成；config 边界、PostgreSQL pool 和 Redis timeout/pool/retry/namespace 已生产化，migration runner 和 schema 版本检查未生产化。 |
 | 阶段 3 | [用户与 API Key](chapters/phase-03-identity-api-key/STATUS.md) | partial | 用户、project、API key、认证、基础限流已完成，默认限流配置、Redis namespace、Redis 原子计数和故障策略已收口；API key 创建已校验 actor/project 归属，list、revoke、disable 和 audit log 仍未完成。 |
-| 阶段 4 | [OpenAI-compatible API](chapters/phase-04-openai-compatible-api/STATUS.md) | partial | `/v1/models`、`/v1/chat/completions`、SSE 基础入口、严格 JSON 和 Chat DTO text-only 校验已完成；project 模型可见性和 SSE 写出后观测随阶段 6/7/8 收口。 |
+| 阶段 4 | [OpenAI-compatible API](chapters/phase-04-openai-compatible-api/STATUS.md) | partial | `/v1/models`、`/v1/chat/completions`、SSE 基础入口、严格 JSON、Chat DTO text-only 校验和 SSE 写出后 data-only error chunk 已完成；project 模型可见性随阶段 9 项目策略继续扩展。 |
 | 阶段 5 | [Adapter 边界](chapters/phase-05-adapter-boundary/STATUS.md) | partial | adapter 接口、OpenAI 非流式/流式、usage 映射、当前 HTTP DTO 可透传参数 contract 和项目级 SSE event reader 已完成；provider error metadata 进入阶段 8 观测主线。 |
 | 阶段 6 | [模型与渠道](chapters/phase-06-model-channel-routing/STATUS.md) | done | provider/channel/model/routing/fallback、project 模型 allow-list/deny-list、adapter/routing/gateway/http/server app bootstrap 和启动期 provider.adapter preflight 已接入；credential 正式解析和 provider/project 后台策略推迟到阶段 9，预算约束推迟到阶段 7。 |
-| 阶段 7 | [计费与账本](chapters/phase-07-billing-ledger/STATUS.md) | in_progress | request/attempt/usage/ledger/settlement、stream final usage、ledger reservation、billing 冻结金额估算、gateway authorization baseline、部分余额授权、平台差额核销、无 final usage 风险敞口记录、输入 token 估算、request/attempt 状态机守卫、settlement 成功重放检查、外部事务内 debit 幂等重入、usage source 审计、safe/internal error 审计、请求级 cost snapshot、价格生效窗口约束和 worker settlement recovery 已完成；stream 写出后错误观测仍未完成。 |
+| 阶段 7 | [计费与账本](chapters/phase-07-billing-ledger/STATUS.md) | done | request/attempt/usage/ledger/settlement、stream final usage、ledger reservation、billing 冻结金额估算、gateway authorization baseline、部分余额授权、平台差额核销、无 final usage 风险敞口记录、输入 token 估算、request/attempt 状态机守卫、settlement 成功重放检查、外部事务内 debit 幂等重入、usage source 审计、safe/internal error 审计、请求级 cost snapshot、价格生效窗口约束、worker settlement recovery 和 stream 写出后 data-only error chunk 已完成。 |
 | 阶段 8 | [可观测性与稳定性](chapters/phase-08-observability-stability/STATUS.md) | planned | 尚未正式进入。当前只有少量 adapter metadata 相关前置 TODO。 |
 | 阶段 9 | [后台管理](chapters/phase-09-admin/STATUS.md) | planned | 尚未正式进入。进入前必须先处理 credential resolver 和后台管理边界。 |
 
 ## 当前上线阻断
 
-当前不应进入生产公开计费 API，原因：
-
-1. stream 写出后错误观测仍依赖 request 状态和后续 observability 收口。
+当前没有阶段 7 P0 release blocker。
 
 ## 下一步
 
-下一步可继续阶段 7 / 阶段 8 stream observability 线。
+下一步可进入阶段 8 observability / stability 线。
 
-阶段 7 下一小节目标：
+阶段 8 下一小节目标：
 
-1. 处理 [GAP-7-006](production/TODO_REGISTER.md#gap-7-006) stream 写出后错误观测。
+1. 按 `AGENTS.md` 扫描全局 TODO/GAP。
+2. 阅读阶段 8 `PLAN.md`、`STATUS.md`、`ACCEPTANCE.md` 和 `HANDOFF.md`。
+3. 确认 provider error classification、adapter metadata、metrics/logs 和 SSE Writer 的实现顺序。

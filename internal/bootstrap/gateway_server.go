@@ -55,6 +55,7 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 		queries,
 		chatRouter,
 		adapterRegistry,
+		deps.Config.Worker,
 	)
 
 	handler := NewHTTPHandler(

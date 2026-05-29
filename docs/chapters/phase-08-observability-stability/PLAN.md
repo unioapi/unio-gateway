@@ -169,7 +169,7 @@ curl /metrics
 2. 支持 `data`、`event`、`id`、`retry` 和 comment heartbeat。
 3. 多行 data 必须按 SSE 规则拆成多行 `data:`。
 4. 写出前检查 request context，flush 失败返回稳定错误。
-5. 支持阶段 8 stream 写出后错误观测，例如 `event: error` 或内部中断原因记录。
+5. 支持阶段 8 更完整的 stream observability，例如内部中断原因记录、日志和指标。
 6. 测试覆盖 data-only、event+data、heartbeat、多行 data、flush 不支持、客户端取消。
 
 关联 GAP：

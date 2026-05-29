@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"time"
 
 	"github.com/ThankCat/unio-api/internal/app/workers"
 	"github.com/ThankCat/unio-api/internal/core/billing"
@@ -49,12 +48,12 @@ func NewWorkerServerApp(_ context.Context, deps WorkerServerAppDeps) (*WorkerSer
 		queries,
 		chatSettlementRecoveryService,
 		defaultWorkerID("settlement-recovery"),
-		30*time.Second,
+		deps.Config.Worker.SettlementRecoveryLockTTL,
 	)
 
 	runner := workers.NewRunner(
 		deps.Logger,
-		time.Second,
+		deps.Config.Worker.RunnerIdleInterval,
 		settlementRecoveryWorker,
 	)
 

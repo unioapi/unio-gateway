@@ -137,6 +137,21 @@ func TestLoadInfrastructureDefaults(t *testing.T) {
 	if cfg.RateLimit.FailurePolicy != "fail_closed" {
 		t.Fatalf("expected rate limit failure policy %q, got %q", "fail_closed", cfg.RateLimit.FailurePolicy)
 	}
+	if cfg.Worker.StartupTimeout != 5*time.Second {
+		t.Fatalf("expected worker startup timeout %v, got %v", 5*time.Second, cfg.Worker.StartupTimeout)
+	}
+	if cfg.Worker.RunnerIdleInterval != time.Second {
+		t.Fatalf("expected worker runner idle interval %v, got %v", time.Second, cfg.Worker.RunnerIdleInterval)
+	}
+	if cfg.Worker.SettlementRecoveryLockTTL != 30*time.Second {
+		t.Fatalf("expected worker settlement recovery lock ttl %v, got %v", 30*time.Second, cfg.Worker.SettlementRecoveryLockTTL)
+	}
+	if cfg.Worker.SettlementRecoveryInitialDelay != 30*time.Second {
+		t.Fatalf("expected worker settlement recovery initial delay %v, got %v", 30*time.Second, cfg.Worker.SettlementRecoveryInitialDelay)
+	}
+	if cfg.Worker.SettlementRecoverySettleTimeout != 10*time.Second {
+		t.Fatalf("expected worker settlement recovery settle timeout %v, got %v", 10*time.Second, cfg.Worker.SettlementRecoverySettleTimeout)
+	}
 }
 
 func TestLoadInfrastructureOverrides(t *testing.T) {
@@ -162,6 +177,11 @@ func TestLoadInfrastructureOverrides(t *testing.T) {
 	t.Setenv("RATE_LIMIT_DEFAULT_LIMIT", "120")
 	t.Setenv("RATE_LIMIT_DEFAULT_WINDOW", "30s")
 	t.Setenv("RATE_LIMIT_FAILURE_POLICY", "fail_open")
+	t.Setenv("WORKER_STARTUP_TIMEOUT", "9s")
+	t.Setenv("WORKER_RUNNER_IDLE_INTERVAL", "2s")
+	t.Setenv("WORKER_SETTLEMENT_RECOVERY_LOCK_TTL", "45s")
+	t.Setenv("WORKER_SETTLEMENT_RECOVERY_INITIAL_DELAY", "5s")
+	t.Setenv("WORKER_SETTLEMENT_RECOVERY_SETTLE_TIMEOUT", "12s")
 
 	cfg, err := Load()
 	if err != nil {
@@ -227,6 +247,21 @@ func TestLoadInfrastructureOverrides(t *testing.T) {
 	}
 	if cfg.RateLimit.FailurePolicy != "fail_open" {
 		t.Fatalf("expected rate limit failure policy %q, got %q", "fail_open", cfg.RateLimit.FailurePolicy)
+	}
+	if cfg.Worker.StartupTimeout != 9*time.Second {
+		t.Fatalf("expected worker startup timeout %v, got %v", 9*time.Second, cfg.Worker.StartupTimeout)
+	}
+	if cfg.Worker.RunnerIdleInterval != 2*time.Second {
+		t.Fatalf("expected worker runner idle interval %v, got %v", 2*time.Second, cfg.Worker.RunnerIdleInterval)
+	}
+	if cfg.Worker.SettlementRecoveryLockTTL != 45*time.Second {
+		t.Fatalf("expected worker settlement recovery lock ttl %v, got %v", 45*time.Second, cfg.Worker.SettlementRecoveryLockTTL)
+	}
+	if cfg.Worker.SettlementRecoveryInitialDelay != 5*time.Second {
+		t.Fatalf("expected worker settlement recovery initial delay %v, got %v", 5*time.Second, cfg.Worker.SettlementRecoveryInitialDelay)
+	}
+	if cfg.Worker.SettlementRecoverySettleTimeout != 12*time.Second {
+		t.Fatalf("expected worker settlement recovery settle timeout %v, got %v", 12*time.Second, cfg.Worker.SettlementRecoverySettleTimeout)
 	}
 }
 
@@ -347,6 +382,11 @@ func clearInfrastructureEnv(t *testing.T) {
 		"RATE_LIMIT_DEFAULT_LIMIT",
 		"RATE_LIMIT_DEFAULT_WINDOW",
 		"RATE_LIMIT_FAILURE_POLICY",
+		"WORKER_STARTUP_TIMEOUT",
+		"WORKER_RUNNER_IDLE_INTERVAL",
+		"WORKER_SETTLEMENT_RECOVERY_LOCK_TTL",
+		"WORKER_SETTLEMENT_RECOVERY_INITIAL_DELAY",
+		"WORKER_SETTLEMENT_RECOVERY_SETTLE_TIMEOUT",
 	} {
 		t.Setenv(key, "")
 	}

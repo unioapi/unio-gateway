@@ -452,6 +452,9 @@ SET
     updated_at = $4
 WHERE settlement_recovery_jobs.id = $5
   AND settlement_recovery_jobs.status = 'running'
+  AND settlement_recovery_jobs.locked_by = $6
+  AND settlement_recovery_jobs.locked_until = $7
+  AND settlement_recovery_jobs.attempt_count = $8
 RETURNING id, user_id, request_record_id, attempt_id, reservation_id, response_model_id, model_id, provider_id, channel_id, upstream_response_model, usage_prompt_tokens, usage_completion_tokens, usage_total_tokens, usage_cached_tokens, usage_reasoning_tokens, usage_source, price_id, currency, pricing_unit, input_price, output_price, cached_input_price, reasoning_output_price, formula_version, estimated_amount, authorized_amount, status, attempt_count, max_attempts, next_run_at, locked_by, locked_until, last_error_code, last_error_message, last_internal_error_detail, last_attempted_at, completed_at, created_at, updated_at
 `
 
@@ -461,6 +464,9 @@ type MarkSettlementRecoveryJobDeadParams struct {
 	LastInternalErrorDetail pgtype.Text
 	CompletedAt             pgtype.Timestamptz
 	ID                      int64
+	LockedBy                pgtype.Text
+	LockedUntil             pgtype.Timestamptz
+	AttemptCount            int32
 }
 
 // MarkSettlementRecoveryJobDead 将 running recovery job 标记为 dead，等待后台人工处理。
@@ -471,6 +477,9 @@ func (q *Queries) MarkSettlementRecoveryJobDead(ctx context.Context, arg MarkSet
 		arg.LastInternalErrorDetail,
 		arg.CompletedAt,
 		arg.ID,
+		arg.LockedBy,
+		arg.LockedUntil,
+		arg.AttemptCount,
 	)
 	var i SettlementRecoveryJob
 	err := row.Scan(
@@ -530,6 +539,9 @@ SET
     updated_at = $5
 WHERE settlement_recovery_jobs.id = $6
   AND settlement_recovery_jobs.status = 'running'
+  AND settlement_recovery_jobs.locked_by = $7
+  AND settlement_recovery_jobs.locked_until = $8
+  AND settlement_recovery_jobs.attempt_count = $9
   AND settlement_recovery_jobs.attempt_count < settlement_recovery_jobs.max_attempts
 RETURNING id, user_id, request_record_id, attempt_id, reservation_id, response_model_id, model_id, provider_id, channel_id, upstream_response_model, usage_prompt_tokens, usage_completion_tokens, usage_total_tokens, usage_cached_tokens, usage_reasoning_tokens, usage_source, price_id, currency, pricing_unit, input_price, output_price, cached_input_price, reasoning_output_price, formula_version, estimated_amount, authorized_amount, status, attempt_count, max_attempts, next_run_at, locked_by, locked_until, last_error_code, last_error_message, last_internal_error_detail, last_attempted_at, completed_at, created_at, updated_at
 `
@@ -541,6 +553,9 @@ type MarkSettlementRecoveryJobRetryParams struct {
 	LastInternalErrorDetail pgtype.Text
 	UpdatedAt               pgtype.Timestamptz
 	ID                      int64
+	LockedBy                pgtype.Text
+	LockedUntil             pgtype.Timestamptz
+	AttemptCount            int32
 }
 
 // MarkSettlementRecoveryJobRetry 将 running recovery job 退回 pending 并设置下次重试时间。
@@ -552,6 +567,9 @@ func (q *Queries) MarkSettlementRecoveryJobRetry(ctx context.Context, arg MarkSe
 		arg.LastInternalErrorDetail,
 		arg.UpdatedAt,
 		arg.ID,
+		arg.LockedBy,
+		arg.LockedUntil,
+		arg.AttemptCount,
 	)
 	var i SettlementRecoveryJob
 	err := row.Scan(

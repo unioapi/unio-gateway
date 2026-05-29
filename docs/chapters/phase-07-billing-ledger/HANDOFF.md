@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-阶段 7 尚未完成，不应进入阶段 8。
+阶段 7 已收口，可开始阶段 8。
 
 当前阶段主线已经完成：
 
@@ -19,6 +19,7 @@
 9. `prices` enabled 生效窗口重叠约束。
 10. 全服务目录结构改造。
 11. settlement recovery worker：上游成功且有可靠 usage 后，首次 settlement 失败由持久化 job 和 worker 幂等重试收口。
+12. stream 写出后错误观测：SSE 已开始后，HTTP handler 会写出 OpenAI-compatible data-only error chunk，并且不写 `[DONE]`。
 
 当前剩余 P0 阻断项：
 
@@ -223,20 +224,9 @@ GAP-7-014：部分余额授权与平台差额核销。
 
 ## 仍需收口
 
-下一步处理阶段 7 / 阶段 8 交界的 stream 写出后错误观测。
+阶段 7 当前无剩余收口项。
 
-必须先复核：
-
-```text
-GAP-7-006
-```
-
-业务语义：
-
-```text
-SSE 已写出后不能再返回 OpenAI-compatible JSON error。
-后续需要通过 stream error event、request 状态和 observability 指标让中断原因可追踪。
-```
+后续阶段 8 可继续增强 stream observability、metrics、日志和项目级 SSE Writer，但不再阻塞阶段 7。
 
 ## 当前关键文件
 

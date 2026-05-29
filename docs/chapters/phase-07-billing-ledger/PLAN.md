@@ -42,7 +42,7 @@ ledger entry
 <a id="task-7-02-request-attempt-record"></a>
 ### TASK-7.02 Request record 与 attempt record
 
-状态：partial
+状态：done
 
 范围：
 
@@ -61,13 +61,13 @@ ledger entry
 <a id="task-7-03-usage-record"></a>
 ### TASK-7.03 Usage record
 
-状态：partial
+状态：done
 
 范围：
 
 1. 记录 prompt/completion/total token。
 2. 记录 cached/reasoning token。
-3. 后续区分非流式 response 与 stream final usage 来源。
+3. 已区分非流式 response 与 stream final usage 来源。
 
 关联 GAP：
 
@@ -77,14 +77,14 @@ ledger entry
 <a id="task-7-04-ledger-debit"></a>
 ### TASK-7.04 Ledger debit
 
-状态：partial
+状态：done
 
 范围：
 
 1. 支持 credit/debit ledger entry。
 2. debit 使用事务更新 user balance。
 3. ledger reservation pre-authorize/capture/release 已完成，并已接入 gateway request-level authorization。
-4. 后续补部分余额授权、差额核销和 settlement 幂等。
+4. 部分余额授权、差额核销和 settlement 幂等已完成。
 
 关联 GAP：
 
@@ -128,7 +128,7 @@ ledger entry
 <a id="task-7-07-stream-settlement"></a>
 ### TASK-7.07 Stream settlement
 
-状态：partial
+状态：done
 
 范围：
 
@@ -136,12 +136,12 @@ ledger entry
 2. 客户端取消但已拿到 final usage 时仍 settlement。
 3. 无 final usage 时不强行估算扣费；已经可能产生上游成本的路径释放用户冻结余额，并记录 `risk_exposure`。
 4. 调用上游前 request-level authorization 已接入。
-5. request/attempt 状态机守卫、settlement 幂等和首次 settlement 失败 recovery 已完成；SSE 写出后错误观测仍由 GAP-7-006 后续收口。
+5. request/attempt 状态机守卫、settlement 幂等、首次 settlement 失败 recovery 和 SSE 写出后 data-only error chunk 已完成。
 
 关联 GAP：
 
 - [GAP-7-002](../../production/TODO_REGISTER.md#gap-7-002)
-- [GAP-7-006](../../production/TODO_REGISTER.md#gap-7-006)
+- [GAP-7-006](../../production/TODO_REGISTER.md#gap-7-006) 已关闭
 - [GAP-7-011](../../production/TODO_REGISTER.md#gap-7-011)
 
 

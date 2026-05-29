@@ -66,7 +66,8 @@ func (h *chatCompletionsHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 		})
 		if err != nil {
 			if streamStarted {
-				// TODO(阶段7/production): [GAP-7-006] SSE 写出后无法再返回 OpenAI-compatible JSON error，客户端只能看到中断 stream；公开生产前；保留 request 状态和 final usage settlement 作为账务事实，并在后续错误事件/观测能力中暴露中断原因。
+				// SSE 已经开始后不能再返回普通 JSON error，只能尽力写出 data-only error chunk。
+				writeChatStreamError(w, req, err)
 				return
 			}
 
@@ -299,4 +300,30 @@ func writeChatValidationError(w http.ResponseWriter, validationErr *chatValidati
 		"invalid_request_error",
 		stringPtr(validationErr.param),
 	)
+}
+
+// writeChatStreamError 在 SSE 已开始后写出 OpenAI-compatible data-only error chunk。
+func writeChatStreamError(w http.ResponseWriter, req ChatCompletionRequest, err error) {
+	resp := mapChatServiceError(
+		req,
+		err,
+		"stream_error",
+		"stream chat completion failed",
+	)
+
+	body := httpx.ErrorResponse{
+		Error: httpx.ErrorBody{
+			Message: resp.message,
+			Type:    resp.errorType,
+			Param:   resp.param,
+			Code:    resp.code,
+		},
+	}
+
+	payload, marshalErr := json.Marshal(body)
+	if marshalErr != nil {
+		return
+	}
+
+	_ = httpx.WriteSSE(w, payload)
 }

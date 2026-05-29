@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/ThankCat/unio-api/internal/bootstrap"
 	"github.com/ThankCat/unio-api/internal/platform/config"
@@ -25,7 +24,7 @@ func main() {
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.Log.Level}))
 
-	startupCtx, startupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	startupCtx, startupCancel := context.WithTimeout(context.Background(), cfg.Worker.StartupTimeout)
 	defer startupCancel()
 
 	pgPool, err := store.OpenPostgres(startupCtx, cfg.DB)

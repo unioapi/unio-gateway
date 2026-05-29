@@ -4,12 +4,19 @@ import (
 	"github.com/ThankCat/unio-api/internal/core/billing"
 	"github.com/ThankCat/unio-api/internal/core/ledger"
 	"github.com/ThankCat/unio-api/internal/core/requestlog"
+	"github.com/ThankCat/unio-api/internal/platform/config"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
 	"github.com/ThankCat/unio-api/internal/service/gateway"
 )
 
 // NewChatGateway 创建当前 server 进程使用的 chat gateway service。
-func NewChatGateway(db gateway.ChatTxBeginner, queries *sqlc.Queries, router gateway.ChatRouter, registry gateway.AdapterRegistry) *gateway.ChatCompletionService {
+func NewChatGateway(
+	db gateway.ChatTxBeginner,
+	queries *sqlc.Queries,
+	router gateway.ChatRouter,
+	registry gateway.AdapterRegistry,
+	workerConfig config.WorkerConfig,
+) *gateway.ChatCompletionService {
 	requestLogStore := requestlog.NewStore(queries)
 	ledgerService := ledger.NewService(db, queries)
 	chatSettlementService := gateway.NewChatSettlementService(
@@ -18,10 +25,14 @@ func NewChatGateway(db gateway.ChatTxBeginner, queries *sqlc.Queries, router gat
 		billing.Service{},
 		ledgerService,
 	)
-	chatSettlementRecoveryStore := gateway.NewChatSettlementRecoveryStore(queries)
+	chatSettlementRecoveryStore := gateway.NewChatSettlementRecoveryStore(
+		queries,
+		workerConfig.SettlementRecoveryInitialDelay,
+	)
 	chatSettlementExecutor := gateway.NewRecoverableChatSettlementExecutor(
 		chatSettlementService,
 		chatSettlementRecoveryStore,
+		workerConfig.SettlementRecoverySettleTimeout,
 	)
 	chatAuthorizationServer := gateway.NewChatAuthorizationService(
 		queries,

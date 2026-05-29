@@ -23,7 +23,9 @@ type fakeSettlementRecoveryJobStore struct {
 	claimArgs     []sqlc.ClaimNextSettlementRecoveryJobParams
 	succeededArgs []sqlc.MarkSettlementRecoveryJobSucceededParams
 	retryArgs     []sqlc.MarkSettlementRecoveryJobRetryParams
+	retryErr      error
 	deadArgs      []sqlc.MarkSettlementRecoveryJobDeadParams
+	deadErr       error
 	exhaustedArgs []sqlc.MarkExhaustedSettlementRecoveryJobDeadParams
 }
 
@@ -45,11 +47,17 @@ func (s *fakeSettlementRecoveryJobStore) MarkSettlementRecoveryJobSucceeded(ctx 
 
 func (s *fakeSettlementRecoveryJobStore) MarkSettlementRecoveryJobRetry(ctx context.Context, arg sqlc.MarkSettlementRecoveryJobRetryParams) (sqlc.SettlementRecoveryJob, error) {
 	s.retryArgs = append(s.retryArgs, arg)
+	if s.retryErr != nil {
+		return sqlc.SettlementRecoveryJob{}, s.retryErr
+	}
 	return sqlc.SettlementRecoveryJob{ID: arg.ID, Status: "pending"}, nil
 }
 
 func (s *fakeSettlementRecoveryJobStore) MarkSettlementRecoveryJobDead(ctx context.Context, arg sqlc.MarkSettlementRecoveryJobDeadParams) (sqlc.SettlementRecoveryJob, error) {
 	s.deadArgs = append(s.deadArgs, arg)
+	if s.deadErr != nil {
+		return sqlc.SettlementRecoveryJob{}, s.deadErr
+	}
 	return sqlc.SettlementRecoveryJob{ID: arg.ID, Status: "dead"}, nil
 }
 
@@ -131,6 +139,12 @@ func TestSettlementRecoveryWorkerRetriesRecoverableFailure(t *testing.T) {
 	if len(store.retryArgs) != 1 || store.retryArgs[0].ID != 20 {
 		t.Fatalf("expected job 20 to be marked retry, got %#v", store.retryArgs)
 	}
+	if store.retryArgs[0].LockedBy.String != "worker-a" || store.retryArgs[0].AttemptCount != 2 {
+		t.Fatalf("expected retry to use current worker lock facts, got locked_by=%#v attempt_count=%d", store.retryArgs[0].LockedBy, store.retryArgs[0].AttemptCount)
+	}
+	if !store.retryArgs[0].LockedUntil.Valid {
+		t.Fatalf("expected retry to include locked_until, got %#v", store.retryArgs[0].LockedUntil)
+	}
 	if store.retryArgs[0].LastErrorCode.String != string(failure.CodeGatewayChatSettlementFailed) {
 		t.Fatalf("expected failure code, got %#v", store.retryArgs[0].LastErrorCode)
 	}
@@ -155,6 +169,12 @@ func TestSettlementRecoveryWorkerMarksDeadOnFinalFailure(t *testing.T) {
 	}
 	if len(store.deadArgs) != 1 || store.deadArgs[0].ID != 30 {
 		t.Fatalf("expected job 30 to be marked dead, got %#v", store.deadArgs)
+	}
+	if store.deadArgs[0].LockedBy.String != "worker-a" || store.deadArgs[0].AttemptCount != 3 {
+		t.Fatalf("expected dead mark to use current worker lock facts, got locked_by=%#v attempt_count=%d", store.deadArgs[0].LockedBy, store.deadArgs[0].AttemptCount)
+	}
+	if !store.deadArgs[0].LockedUntil.Valid {
+		t.Fatalf("expected dead mark to include locked_until, got %#v", store.deadArgs[0].LockedUntil)
 	}
 	if store.deadArgs[0].LastErrorCode.String != string(failure.CodeGatewayChatSettlementFailed) {
 		t.Fatalf("expected fallback failure code, got %#v", store.deadArgs[0].LastErrorCode)
@@ -191,6 +211,52 @@ func TestSettlementRecoveryWorkerMarksExhaustedJobDeadBeforeClaim(t *testing.T) 
 	}
 	if len(recoverer.jobs) != 0 {
 		t.Fatalf("expected recoverer not to run for exhausted job, got %d calls", len(recoverer.jobs))
+	}
+}
+
+func TestSettlementRecoveryWorkerIgnoresRetryWhenLockOwnershipWasLost(t *testing.T) {
+	store := &fakeSettlementRecoveryJobStore{
+		claimJob: recoveryJob(60, 2, 4),
+		retryErr: pgx.ErrNoRows,
+	}
+	worker := NewSettlementRecoveryWorker(store, &fakeSettlementRecoveryRecoverer{err: errors.New("stale worker failure")}, "worker-a", time.Second)
+
+	worked, err := worker.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce returned err: %v", err)
+	}
+	if !worked {
+		t.Fatal("expected stale retry conflict to still count as processed work")
+	}
+	if len(store.retryArgs) != 1 {
+		t.Fatalf("expected one retry attempt, got %d", len(store.retryArgs))
+	}
+}
+
+func TestSettlementRecoveryWorkerIgnoresDeadMarkWhenLockOwnershipWasLost(t *testing.T) {
+	store := &fakeSettlementRecoveryJobStore{
+		claimJob: recoveryJob(70, 3, 3),
+		deadErr:  pgx.ErrNoRows,
+	}
+	worker := NewSettlementRecoveryWorker(store, &fakeSettlementRecoveryRecoverer{err: errors.New("stale final failure")}, "worker-a", time.Second)
+
+	worked, err := worker.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce returned err: %v", err)
+	}
+	if !worked {
+		t.Fatal("expected stale dead conflict to still count as processed work")
+	}
+	if len(store.deadArgs) != 1 {
+		t.Fatalf("expected one dead mark attempt, got %d", len(store.deadArgs))
+	}
+}
+
+func TestSettlementRecoveryWorkerRecoveryTimeoutKeepsLockMargin(t *testing.T) {
+	worker := NewSettlementRecoveryWorker(&fakeSettlementRecoveryJobStore{}, &fakeSettlementRecoveryRecoverer{}, "worker-a", 30*time.Second)
+
+	if got := worker.recoveryTimeout(); got != 25*time.Second {
+		t.Fatalf("expected recovery timeout %v, got %v", 25*time.Second, got)
 	}
 }
 

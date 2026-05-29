@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/ThankCat/unio-api/internal/core/requestlog"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
@@ -58,7 +59,7 @@ func TestRecoverableChatSettlementExecutorCreatesJobBeforeSettlementAndMarksSucc
 			}
 		},
 	}
-	executor := NewRecoverableChatSettlementExecutor(settlement, recorder)
+	executor := NewRecoverableChatSettlementExecutor(settlement, recorder, time.Second)
 
 	params := ChatSettlementParams{RequestRecord: requestlog.RequestRecord{ID: 10}}
 	if err := executor.SettleSuccessfulChat(context.Background(), params); err != nil {
@@ -80,7 +81,7 @@ func TestRecoverableChatSettlementExecutorSchedulesRecoveryOnSettlementFailure(t
 	settlementErr := errors.New("settlement commit failed")
 	recorder := &fakeChatSettlementRecoveryRecorder{job: sqlc.SettlementRecoveryJob{ID: 88}}
 	settlement := &recordingChatSettlementExecutor{err: settlementErr}
-	executor := NewRecoverableChatSettlementExecutor(settlement, recorder)
+	executor := NewRecoverableChatSettlementExecutor(settlement, recorder, time.Second)
 
 	err := executor.SettleSuccessfulChat(context.Background(), ChatSettlementParams{RequestRecord: requestlog.RequestRecord{ID: 20}})
 	if !IsChatSettlementRecoveryScheduled(err) {
@@ -98,7 +99,7 @@ func TestRecoverableChatSettlementExecutorDoesNotSettleWhenRecoveryJobCreateFail
 	createErr := errors.New("insert recovery job failed")
 	recorder := &fakeChatSettlementRecoveryRecorder{createErr: createErr}
 	settlement := &recordingChatSettlementExecutor{}
-	executor := NewRecoverableChatSettlementExecutor(settlement, recorder)
+	executor := NewRecoverableChatSettlementExecutor(settlement, recorder, time.Second)
 
 	err := executor.SettleSuccessfulChat(context.Background(), ChatSettlementParams{RequestRecord: requestlog.RequestRecord{ID: 30}})
 	if !errors.Is(err, createErr) {

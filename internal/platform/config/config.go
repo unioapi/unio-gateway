@@ -18,6 +18,7 @@ type Config struct {
 	DB        DBConfig
 	Redis     RedisConfig
 	RateLimit RateLimitConfig
+	Worker    WorkerConfig
 }
 
 // HTTPConfig 保存 HTTP server 监听配置。
@@ -64,6 +65,15 @@ type RateLimitConfig struct {
 	DefaultLimit  int64
 	DefaultWindow time.Duration
 	FailurePolicy string
+}
+
+// WorkerConfig 保存后台 worker 调度与 recovery 参数。
+type WorkerConfig struct {
+	StartupTimeout                  time.Duration
+	RunnerIdleInterval              time.Duration
+	SettlementRecoveryLockTTL       time.Duration
+	SettlementRecoveryInitialDelay  time.Duration
+	SettlementRecoverySettleTimeout time.Duration
 }
 
 // Load 从环境变量加载配置，并对需要解析的字段做启动期校验。
@@ -173,6 +183,31 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	workerRunnerIdleInterval, err := getEnvDuration("WORKER_RUNNER_IDLE_INTERVAL", time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+
+	workerStartupTimeout, err := getEnvDuration("WORKER_STARTUP_TIMEOUT", 5*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+
+	workerSettlementRecoveryLockTTL, err := getEnvDuration("WORKER_SETTLEMENT_RECOVERY_LOCK_TTL", 30*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+
+	workerSettlementRecoveryInitialDelay, err := getEnvDuration("WORKER_SETTLEMENT_RECOVERY_INITIAL_DELAY", 30*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+
+	workerSettlementRecoverySettleTimeout, err := getEnvDuration("WORKER_SETTLEMENT_RECOVERY_SETTLE_TIMEOUT", 10*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+
 	return Config{
 		HTTP: HTTPConfig{
 			Addr:            getEnv("HTTP_ADDR", ":8520"),
@@ -209,6 +244,13 @@ func Load() (Config, error) {
 			DefaultLimit:  rateLimitDefaultLimit,
 			DefaultWindow: rateLimitDefaultWindow,
 			FailurePolicy: rateLimitFailurePolicy,
+		},
+		Worker: WorkerConfig{
+			StartupTimeout:                  workerStartupTimeout,
+			RunnerIdleInterval:              workerRunnerIdleInterval,
+			SettlementRecoveryLockTTL:       workerSettlementRecoveryLockTTL,
+			SettlementRecoveryInitialDelay:  workerSettlementRecoveryInitialDelay,
+			SettlementRecoverySettleTimeout: workerSettlementRecoverySettleTimeout,
 		},
 	}, nil
 }

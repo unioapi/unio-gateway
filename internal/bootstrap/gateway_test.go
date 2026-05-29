@@ -6,6 +6,7 @@ import (
 
 	"github.com/ThankCat/unio-api/internal/core/adapter"
 	"github.com/ThankCat/unio-api/internal/core/routing"
+	"github.com/ThankCat/unio-api/internal/platform/config"
 	"github.com/ThankCat/unio-api/internal/platform/store/sqlc"
 	"github.com/jackc/pgx/v5"
 )
@@ -42,6 +43,7 @@ func TestNewChatGatewayBuildsService(t *testing.T) {
 		&sqlc.Queries{},
 		fakeChatGatewayRouter{},
 		fakeChatGatewayRegistry{},
+		config.WorkerConfig{},
 	)
 	if service == nil {
 		t.Fatal("expected chat gateway service")

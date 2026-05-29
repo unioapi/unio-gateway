@@ -163,6 +163,9 @@ SET
     updated_at = sqlc.arg(updated_at)
 WHERE settlement_recovery_jobs.id = sqlc.arg(id)
   AND settlement_recovery_jobs.status = 'running'
+  AND settlement_recovery_jobs.locked_by = sqlc.arg(locked_by)
+  AND settlement_recovery_jobs.locked_until = sqlc.arg(locked_until)
+  AND settlement_recovery_jobs.attempt_count = sqlc.arg(attempt_count)
   AND settlement_recovery_jobs.attempt_count < settlement_recovery_jobs.max_attempts
 RETURNING *;
 
@@ -180,6 +183,9 @@ SET
     updated_at = sqlc.arg(completed_at)
 WHERE settlement_recovery_jobs.id = sqlc.arg(id)
   AND settlement_recovery_jobs.status = 'running'
+  AND settlement_recovery_jobs.locked_by = sqlc.arg(locked_by)
+  AND settlement_recovery_jobs.locked_until = sqlc.arg(locked_until)
+  AND settlement_recovery_jobs.attempt_count = sqlc.arg(attempt_count)
 RETURNING *;
 
 -- name: MarkExhaustedSettlementRecoveryJobDead :one

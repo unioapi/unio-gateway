@@ -170,6 +170,9 @@ func TestSettlementRecoveryJobCreateClaimRetryAndSucceed(t *testing.T) {
 
 	retried, err := queries.MarkSettlementRecoveryJobRetry(ctx, sqlc.MarkSettlementRecoveryJobRetryParams{
 		ID:                      claimed.ID,
+		LockedBy:                claimed.LockedBy,
+		LockedUntil:             claimed.LockedUntil,
+		AttemptCount:            claimed.AttemptCount,
 		NextRunAt:               timestamptz(time.Now().Add(time.Second)),
 		LastErrorCode:           pgtype.Text{String: "gateway_chat_settlement_failed", Valid: true},
 		LastErrorMessage:        pgtype.Text{String: "Settlement recovery failed.", Valid: true},
@@ -200,6 +203,103 @@ func TestSettlementRecoveryJobCreateClaimRetryAndSucceed(t *testing.T) {
 	}
 	if again.Status != "succeeded" || !again.CompletedAt.Valid {
 		t.Fatalf("expected idempotent succeeded job, got status=%q completed_at=%#v", again.Status, again.CompletedAt)
+	}
+}
+
+func TestSettlementRecoveryJobRejectsStaleWorkerStateUpdate(t *testing.T) {
+	ctx, tx, queries, cleanup := newModelChannelTestTx(t)
+	defer cleanup()
+
+	fixture := createSettlementRecoveryFixture(t, ctx, tx, queries)
+	created, err := queries.CreateSettlementRecoveryJob(ctx, settlementRecoveryJobParams(fixture, time.Now().Add(-time.Second)))
+	if err != nil {
+		t.Fatalf("create settlement recovery job: %v", err)
+	}
+
+	claimedA, err := queries.ClaimNextSettlementRecoveryJob(ctx, sqlc.ClaimNextSettlementRecoveryJobParams{
+		LockedBy:    pgtype.Text{String: "worker-a", Valid: true},
+		LockedUntil: timestamptz(time.Now().Add(time.Minute)),
+		NowAt:       timestamptz(time.Now()),
+	})
+	if err != nil {
+		t.Fatalf("claim recovery job by worker-a: %v", err)
+	}
+
+	_, err = tx.Exec(ctx, `
+		UPDATE settlement_recovery_jobs
+		SET locked_until = now() - interval '1 second',
+		    updated_at = now()
+		WHERE id = $1
+	`, claimedA.ID)
+	if err != nil {
+		t.Fatalf("expire worker-a lock: %v", err)
+	}
+
+	claimedB, err := queries.ClaimNextSettlementRecoveryJob(ctx, sqlc.ClaimNextSettlementRecoveryJobParams{
+		LockedBy:    pgtype.Text{String: "worker-b", Valid: true},
+		LockedUntil: timestamptz(time.Now().Add(time.Minute)),
+		NowAt:       timestamptz(time.Now()),
+	})
+	if err != nil {
+		t.Fatalf("claim recovery job by worker-b: %v", err)
+	}
+	if claimedB.ID != claimedA.ID || claimedB.AttemptCount != claimedA.AttemptCount+1 {
+		t.Fatalf("expected worker-b to reclaim same job with incremented attempt, got id=%d attempt=%d", claimedB.ID, claimedB.AttemptCount)
+	}
+
+	_, err = queries.MarkSettlementRecoveryJobRetry(ctx, sqlc.MarkSettlementRecoveryJobRetryParams{
+		ID:                      claimedA.ID,
+		LockedBy:                claimedA.LockedBy,
+		LockedUntil:             claimedA.LockedUntil,
+		AttemptCount:            claimedA.AttemptCount,
+		NextRunAt:               timestamptz(time.Now().Add(time.Second)),
+		LastErrorCode:           pgtype.Text{String: "gateway_chat_settlement_failed", Valid: true},
+		LastErrorMessage:        pgtype.Text{String: "Settlement recovery failed.", Valid: true},
+		LastInternalErrorDetail: pgtype.Text{String: "stale retry", Valid: true},
+		UpdatedAt:               timestamptz(time.Now()),
+	})
+	if !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("expected stale worker retry to be rejected, got %v", err)
+	}
+
+	_, err = queries.MarkSettlementRecoveryJobDead(ctx, sqlc.MarkSettlementRecoveryJobDeadParams{
+		ID:                      claimedA.ID,
+		LockedBy:                claimedA.LockedBy,
+		LockedUntil:             claimedA.LockedUntil,
+		AttemptCount:            claimedA.AttemptCount,
+		LastErrorCode:           pgtype.Text{String: "gateway_chat_settlement_failed", Valid: true},
+		LastErrorMessage:        pgtype.Text{String: "Settlement recovery failed.", Valid: true},
+		LastInternalErrorDetail: pgtype.Text{String: "stale dead", Valid: true},
+		CompletedAt:             timestamptz(time.Now()),
+	})
+	if !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("expected stale worker dead mark to be rejected, got %v", err)
+	}
+
+	current, err := queries.GetSettlementRecoveryJobByRequest(ctx, created.RequestRecordID)
+	if err != nil {
+		t.Fatalf("get current recovery job: %v", err)
+	}
+	if current.Status != "running" || !current.LockedBy.Valid || current.LockedBy.String != "worker-b" {
+		t.Fatalf("expected worker-b lock to remain, got status=%q locked_by=%#v", current.Status, current.LockedBy)
+	}
+	if current.AttemptCount != claimedB.AttemptCount {
+		t.Fatalf("expected attempt_count %d, got %d", claimedB.AttemptCount, current.AttemptCount)
+	}
+
+	_, err = queries.MarkSettlementRecoveryJobRetry(ctx, sqlc.MarkSettlementRecoveryJobRetryParams{
+		ID:                      claimedB.ID,
+		LockedBy:                claimedB.LockedBy,
+		LockedUntil:             claimedB.LockedUntil,
+		AttemptCount:            claimedB.AttemptCount,
+		NextRunAt:               timestamptz(time.Now().Add(time.Second)),
+		LastErrorCode:           pgtype.Text{String: "gateway_chat_settlement_failed", Valid: true},
+		LastErrorMessage:        pgtype.Text{String: "Settlement recovery failed.", Valid: true},
+		LastInternalErrorDetail: pgtype.Text{String: "worker-b retry", Valid: true},
+		UpdatedAt:               timestamptz(time.Now()),
+	})
+	if err != nil {
+		t.Fatalf("expected current worker retry to succeed: %v", err)
 	}
 }
 

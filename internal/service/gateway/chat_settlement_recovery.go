@@ -39,41 +39,53 @@ type ChatSettlementRecoveryStore struct {
 }
 
 // NewChatSettlementRecoveryStore 创建 settlement recovery job store。
-func NewChatSettlementRecoveryStore(queries *sqlc.Queries) *ChatSettlementRecoveryStore {
+func NewChatSettlementRecoveryStore(queries *sqlc.Queries, nextRunDelay time.Duration) *ChatSettlementRecoveryStore {
 	if queries == nil {
 		panic("gateway: chat settlement recovery queries is required")
+	}
+	if nextRunDelay <= 0 {
+		nextRunDelay = defaultSettlementRecoveryDelay
 	}
 
 	return &ChatSettlementRecoveryStore{
 		queries:      queries,
-		nextRunDelay: defaultSettlementRecoveryDelay,
+		nextRunDelay: nextRunDelay,
 	}
 }
 
 // RecoverableChatSettlementExecutor 在真实 settlement 前先写 recovery job。
 type RecoverableChatSettlementExecutor struct {
-	settlement ChatSettlementExecutor
-	recovery   ChatSettlementRecoveryRecorder
+	settlement        ChatSettlementExecutor
+	recovery          ChatSettlementRecoveryRecorder
+	settlementTimeout time.Duration
 }
 
 // NewRecoverableChatSettlementExecutor 创建带 recovery job 保护的 settlement executor。
-func NewRecoverableChatSettlementExecutor(settlement ChatSettlementExecutor, recovery ChatSettlementRecoveryRecorder) *RecoverableChatSettlementExecutor {
+func NewRecoverableChatSettlementExecutor(
+	settlement ChatSettlementExecutor,
+	recovery ChatSettlementRecoveryRecorder,
+	settlementTimeout time.Duration,
+) *RecoverableChatSettlementExecutor {
 	if settlement == nil {
 		panic("gateway: chat settlement executor is required")
 	}
 	if recovery == nil {
 		panic("gateway: chat settlement recovery recorder is required")
 	}
+	if settlementTimeout <= 0 {
+		settlementTimeout = defaultSettlementRecoveryTimeout
+	}
 
 	return &RecoverableChatSettlementExecutor{
-		settlement: settlement,
-		recovery:   recovery,
+		settlement:        settlement,
+		recovery:          recovery,
+		settlementTimeout: settlementTimeout,
 	}
 }
 
 // SettleSuccessfulChat 先持久化 recovery job，再执行真实 settlement。
 func (e *RecoverableChatSettlementExecutor) SettleSuccessfulChat(ctx context.Context, params ChatSettlementParams) error {
-	settlementCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), defaultSettlementRecoveryTimeout)
+	settlementCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), e.settlementTimeout)
 	defer cancel()
 
 	job, err := e.recovery.CreatePendingChatSettlementRecoveryJob(settlementCtx, params)

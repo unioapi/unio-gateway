@@ -1233,7 +1233,7 @@ func TestRouterV1ChatCompletionStreamMapsInsufficientQuotaBeforeFirstChunk(t *te
 	}
 }
 
-func TestRouterV1ChatCompletionStreamDoesNotWriteJSONErrorAfterChunkStarted(t *testing.T) {
+func TestRouterV1ChatCompletionStreamWritesSSEErrorAfterChunkStarted(t *testing.T) {
 	service := &fakeChatCompletionService{
 		streamResp: []ChatCompletionStreamResponse{
 			{
@@ -1294,8 +1294,16 @@ func TestRouterV1ChatCompletionStreamDoesNotWriteJSONErrorAfterChunkStarted(t *t
 		t.Fatalf("expected body to contain %q, got %q", "mock response", gotBody)
 	}
 
-	if strings.Contains(gotBody, "stream_chat_completion_error") {
-		t.Fatalf("expected body not to contain %q, got %q", "stream_chat_completion_error", gotBody)
+	if !strings.Contains(gotBody, `"error":`) {
+		t.Fatalf("expected body to contain stream error payload, got %q", gotBody)
+	}
+
+	if !strings.Contains(gotBody, `"code":"stream_error"`) {
+		t.Fatalf("expected body to contain stream error code, got %q", gotBody)
+	}
+
+	if !strings.Contains(gotBody, `"type":"api_error"`) {
+		t.Fatalf("expected body to contain stream error type, got %q", gotBody)
 	}
 
 	if strings.Contains(gotBody, "data: [DONE]") {

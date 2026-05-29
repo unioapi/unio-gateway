@@ -161,7 +161,7 @@ go test ./internal/platform/httpx ./internal/app/gatewayapi
 <a id="task-4-05-sse-write-error"></a>
 ### TASK-4.05 SSE 写出后的错误语义
 
-状态：partial
+状态：done
 
 目标：
 
@@ -174,20 +174,15 @@ go test ./internal/platform/httpx ./internal/app/gatewayapi
 1. stream handler 已使用 SSE。
 2. gateway 已记录 request/attempt 状态。
 3. 有 final usage 时能作为账务事实 settlement。
-
-当前欠账：
-
-1. 写出后 adapter error 只能表现为 stream 中断。
-2. 客户端无法从 JSON body 得到标准错误。
-3. 后续需要依赖日志、request record、metrics 和可能的 SSE error event 做排障。
+4. 写出后错误会尽力返回 OpenAI-compatible data-only SSE error chunk。
+5. 写出后错误不会返回普通 JSON error，也不会写出 `[DONE]`。
 
 计划实现：
 
 1. 写出前错误继续返回 OpenAI-compatible JSON error。
-2. 写出后错误只更新 request/attempt 状态。
-3. 阶段 8 接入 metrics/logs 后暴露 stream 中断原因。
-4. 不做跨 channel fallback，因为已有 bytes 写给客户端。
+2. 写出后错误返回 data-only SSE error chunk，并保留 request/attempt 状态事实。
+3. 不做跨 channel fallback，因为已有 bytes 写给客户端。
 
 关联 GAP：
 
-- [GAP-7-006](../../production/TODO_REGISTER.md#gap-7-006)
+- [GAP-7-006](../../production/TODO_REGISTER.md#gap-7-006) 已关闭
